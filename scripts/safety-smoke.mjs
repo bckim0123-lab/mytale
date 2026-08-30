@@ -23,7 +23,7 @@ const cases = [
       message: '오늘 어떤 모험을 할까?',
       history: [],
       persona,
-      age: '6–9세',
+      age: '4–6세',
     },
     expect: (value) =>
       value.status === 200 &&

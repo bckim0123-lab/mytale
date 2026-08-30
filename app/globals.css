@@ -392,18 +392,53 @@ header {
   box-shadow: 0 15px 45px #3e4e4614;
   margin-bottom: 22px;
 }
-.guardian-card > label {
+.child-profile-fields {
+  display: grid;
+  gap: 11px;
+}
+.child-profile-fields label {
   display: grid;
   grid-template-columns: 1fr 145px;
   align-items: center;
   gap: 16px;
   font-weight: 800;
 }
+.child-profile-fields label > span {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+.child-profile-fields label small {
+  flex-basis: 100%;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+}
+.child-profile-fields label i {
+  padding: 2px 6px;
+  border-radius: 99px;
+  background: #edf6f1;
+  color: var(--green);
+  font-size: 9px;
+  font-style: normal;
+}
 .guardian-card select {
   padding: 10px 13px;
   border: 1px solid var(--line);
   border-radius: 11px;
   background: white;
+}
+.profile-principle {
+  margin: -2px 0 0;
+  padding: 9px 11px;
+  border-radius: 11px;
+  background: #fff9df;
+  color: #77662a;
+  font-size: 11px;
+  font-weight: 750;
+  line-height: 1.5;
 }
 .consent {
   border-top: 1px dashed var(--line);
@@ -655,6 +690,35 @@ header {
   color: var(--muted);
   font-size: 13px;
 }
+.profile-context {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: -4px 0 14px;
+}
+.profile-context > span {
+  padding: 6px 9px;
+  border-radius: 99px;
+  background: #edf7f2;
+  color: #386c5a;
+  font-size: 11px;
+  font-weight: 750;
+}
+.profile-context > button {
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  color: var(--green);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 850;
+  cursor: pointer;
+}
+.profile-context svg {
+  width: 14px;
+}
 .style-preview-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -720,6 +784,50 @@ header {
 .direction-fields input:focus {
   border-color: var(--green);
   box-shadow: 0 0 0 4px #2f7b6318;
+}
+.taste-pickers {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-top: 15px;
+}
+.taste-pickers fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.taste-pickers legend {
+  color: #52625c;
+  font-size: 12px;
+  font-weight: 850;
+}
+.taste-pickers fieldset > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 8px;
+}
+.taste-pickers button {
+  min-height: 37px;
+  padding: 7px 10px;
+  border: 1px solid #dedbd3;
+  border-radius: 12px;
+  background: white;
+  color: #58665f;
+  font-size: 11px;
+  font-weight: 750;
+  cursor: pointer;
+}
+.taste-pickers button[aria-pressed='true'] {
+  border-color: var(--green);
+  background: #eaf7f1;
+  color: var(--green);
+  box-shadow: 0 0 0 2px #2f7b6312;
+}
+.taste-pickers button i {
+  font-family: 'Apple Color Emoji', 'Segoe UI Emoji', sans-serif;
+  font-style: normal;
 }
 .color-picker {
   min-width: 0;
@@ -1830,6 +1938,9 @@ header {
   .direction-fields {
     grid-template-columns: 1fr;
   }
+  .taste-pickers {
+    grid-template-columns: 1fr;
+  }
   .candidates {
     grid-template-columns: 1fr;
   }
@@ -1958,8 +2069,12 @@ header {
   .guardian-card {
     padding: 17px;
   }
-  .guardian-card > label {
-    grid-template-columns: 1fr 120px;
+  .child-profile-fields label {
+    grid-template-columns: 1fr;
+    gap: 7px;
+  }
+  .child-profile-fields select {
+    width: 100%;
   }
   .drop {
     min-height: 250px;
@@ -2000,6 +2115,12 @@ header {
   .direction-heading h3 {
     font-size: 17px;
   }
+  .profile-context {
+    flex-wrap: wrap;
+  }
+  .profile-context > button {
+    margin-left: 0;
+  }
   .style-preview-grid {
     margin-right: -16px;
   }
@@ -2009,6 +2130,14 @@ header {
     padding-bottom: 5px;
   }
   .color-picker button {
+    flex: none;
+  }
+  .taste-pickers fieldset > div {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 5px;
+  }
+  .taste-pickers button {
     flex: none;
   }
   .transform-proof {

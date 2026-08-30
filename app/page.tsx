@@ -76,6 +76,26 @@ const colorChoices = [
   { name: '라일락', value: '포근한 라일락색', color: '#c7b5df' },
 ];
 const focusChoices = ['삐뚤빼뚤한 선', '독특한 모양', '표정', '대표 색과 무늬'];
+const ageChoices = ['4–6세', '7–9세', '10–12세'] as const;
+const genderChoices = [
+  '선택하지 않음',
+  '여자아이',
+  '남자아이',
+  '아이의 자기표현 존중',
+] as const;
+const moodChoices = [
+  { icon: '☁️', name: '포근하고 다정한' },
+  { icon: '⚡', name: '활발하고 씩씩한' },
+  { icon: '✨', name: '반짝이고 신비한' },
+  { icon: '😄', name: '장난스럽고 유쾌한' },
+] as const;
+const worldChoices = [
+  { icon: '🌿', name: '동물과 자연' },
+  { icon: '🪄', name: '마법과 동화' },
+  { icon: '🚀', name: '로봇과 우주' },
+  { icon: '🏕️', name: '탐험과 모험' },
+  { icon: '🎵', name: '음악과 춤' },
+] as const;
 
 async function readJson<T>(response: Response): Promise<T | null> {
   if (!response.headers.get('content-type')?.includes('application/json'))
@@ -376,6 +396,15 @@ export default function Home() {
   const [favoriteColor, setFavoriteColor] = useState(colorChoices[0].value);
   const [preserveFocus, setPreserveFocus] = useState(focusChoices[0]);
   const [characterWish, setCharacterWish] = useState('');
+  const [childGender, setChildGender] = useState<
+    (typeof genderChoices)[number]
+  >(genderChoices[0]);
+  const [characterMood, setCharacterMood] = useState<
+    (typeof moodChoices)[number]['name']
+  >(moodChoices[0].name);
+  const [favoriteWorld, setFavoriteWorld] = useState<
+    (typeof worldChoices)[number]['name']
+  >(worldChoices[0].name);
   const [cameraOpen, setCameraOpen] = useState(false);
   const [cameraError, setCameraError] = useState('');
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>(
@@ -386,7 +415,7 @@ export default function Home() {
   const [theme, setTheme] = useState(0);
   const [page, setPage] = useState(0);
   const duration = '8–12분';
-  const [age, setAge] = useState('6–9세');
+  const [age, setAge] = useState<(typeof ageChoices)[number]>('7–9세');
   const [photoConsent, setPhotoConsent] = useState(false);
   const [guardianVerified, setGuardianVerified] = useState(false);
   const [previousStep, setPreviousStep] = useState<Step>('welcome');
@@ -569,6 +598,10 @@ export default function Home() {
     form.append('favoriteColor', favoriteColor);
     form.append('preserveFocus', preserveFocus);
     form.append('characterWish', characterWish.trim());
+    form.append('age', age);
+    form.append('childGender', childGender);
+    form.append('characterMood', characterMood);
+    form.append('favoriteWorld', favoriteWorld);
     if (index === 2) {
       const referenceResponse = await fetch('/style-plush-3d-v1.webp');
       if (referenceResponse.ok) {
@@ -753,6 +786,9 @@ export default function Home() {
     setFavoriteColor(colorChoices[0].value);
     setPreserveFocus(focusChoices[0]);
     setCharacterWish('');
+    setChildGender(genderChoices[0]);
+    setCharacterMood(moodChoices[0].name);
+    setFavoriteWorld(worldChoices[0].name);
     setCameraError('');
     setFacingMode('environment');
     setPick(0);
@@ -773,7 +809,7 @@ export default function Home() {
       },
     ]);
     setPersona(defaultPersona);
-    setAge('6–9세');
+    setAge('7–9세');
     setPhotoConsent(false);
     setGuardianVerified(false);
     setPreviousStep('welcome');
@@ -904,13 +940,46 @@ export default function Home() {
             않습니다.
           </p>
           <div className="guardian-card">
-            <label>
-              아이 연령대{' '}
-              <select value={age} onChange={(e) => setAge(e.target.value)}>
-                <option>6–9세</option>
-                <option>10–12세</option>
-              </select>
-            </label>
+            <div className="child-profile-fields">
+              <label>
+                <span>
+                  아이 연령대
+                  <small>표현의 단순함과 이야기 말투를 맞춰요</small>
+                </span>
+                <select
+                  value={age}
+                  onChange={(event) =>
+                    setAge(event.target.value as (typeof ageChoices)[number])
+                  }
+                >
+                  {ageChoices.map((choice) => (
+                    <option key={choice}>{choice}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>
+                  성별 참고 <i>선택</i>
+                  <small>직접 고른 취향보다 우선하지 않아요</small>
+                </span>
+                <select
+                  value={childGender}
+                  onChange={(event) =>
+                    setChildGender(
+                      event.target.value as (typeof genderChoices)[number],
+                    )
+                  }
+                >
+                  {genderChoices.map((choice) => (
+                    <option key={choice}>{choice}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <p className="profile-principle">
+              성별로 색·성격을 단정하지 않고, 아이가 직접 고른 취향을 가장 먼저
+              반영해요.
+            </p>
             <div className="session-length">
               <span>
                 <b>모험 시간</b>
@@ -935,8 +1004,8 @@ export default function Home() {
               <span>
                 <b>우리의 약속</b>
                 <br />
-                위치 정보는 요청하지 않고, 원본 그림과 대화는 이 서비스의
-                데이터베이스에 저장하지 않아요.
+                위치 정보는 요청하지 않고, 연령·성별 참고·취향·원본 그림과
+                대화는 이 서비스의 데이터베이스에 저장하지 않아요.
               </span>
             </aside>
           </div>
@@ -1069,6 +1138,17 @@ export default function Home() {
                     <p>작은 취향을 알려 주면 세 가지 모습에 함께 반영해요.</p>
                   </div>
                 </div>
+                <div className="profile-context">
+                  <span>
+                    <b>{age}</b> 맞춤
+                  </span>
+                  {childGender !== genderChoices[0] && (
+                    <span>{childGender} 참고</span>
+                  )}
+                  <button type="button" onClick={() => setStep('guardian')}>
+                    <Settings /> 프로필 수정
+                  </button>
+                </div>
                 <div
                   className="style-preview-grid"
                   aria-label="생성 스타일 3종"
@@ -1104,6 +1184,38 @@ export default function Home() {
                       placeholder="예: 별 모양 귀를 가진 포근한 친구"
                     />
                   </label>
+                </div>
+                <div className="taste-pickers">
+                  <fieldset>
+                    <legend>친구의 분위기</legend>
+                    <div>
+                      {moodChoices.map((choice) => (
+                        <button
+                          type="button"
+                          key={choice.name}
+                          aria-pressed={characterMood === choice.name}
+                          onClick={() => setCharacterMood(choice.name)}
+                        >
+                          <i>{choice.icon}</i> {choice.name}
+                        </button>
+                      ))}
+                    </div>
+                  </fieldset>
+                  <fieldset>
+                    <legend>좋아하는 세계</legend>
+                    <div>
+                      {worldChoices.map((choice) => (
+                        <button
+                          type="button"
+                          key={choice.name}
+                          aria-pressed={favoriteWorld === choice.name}
+                          onClick={() => setFavoriteWorld(choice.name)}
+                        >
+                          <i>{choice.icon}</i> {choice.name}
+                        </button>
+                      ))}
+                    </div>
+                  </fieldset>
                 </div>
                 <fieldset className="color-picker">
                   <legend>
@@ -1177,6 +1289,16 @@ export default function Home() {
             </article>
           </div>
           <div className="preference-summary" aria-label="반영한 캐릭터 취향">
+            <span>{age} 맞춤</span>
+            {childGender !== genderChoices[0] && (
+              <span>{childGender} 참고</span>
+            )}
+            <span>
+              <Star /> {characterMood}
+            </span>
+            <span>
+              <Compass /> {favoriteWorld}
+            </span>
             <span>
               <Palette /> {favoriteColor}
             </span>
