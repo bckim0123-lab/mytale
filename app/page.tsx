@@ -3,6 +3,13 @@
 
 import { useEffect, useRef, useState } from 'react';
 import {
+  adventureStories,
+  traitMeta,
+  type AdventureChoice,
+  type AdventureDecision,
+  type AdventureTrait,
+} from './adventures';
+import {
   ArrowLeft,
   BookOpen,
   Camera,
@@ -115,84 +122,6 @@ function apiErrorMessage(response: Response, fallback?: string) {
     return 'AI 작업실 연결이 잠시 불안정해요. 잠시 뒤 다시 시도해 주세요.';
   return '캐릭터 변환을 완료하지 못했어요. 그림을 확인하고 다시 시도해 주세요.';
 }
-const scenes = [
-  [
-    '1장 · 반짝이는 초대장',
-    '달빛 숲에서 편지가 왔어요!',
-    '별가루가 묻은 편지에는 “잃어버린 달빛 조각을 찾아 주세요”라고 적혀 있었어요.',
-    [
-      '별빛 지도를 펼쳐 본다',
-      '숲속 친구에게 물어본다',
-      '용감하게 발자국을 따라간다',
-    ],
-  ],
-  [
-    '2장 · 속삭이는 갈림길',
-    '세 갈래 길이 나타났어요',
-    '왼쪽에서는 새들이 노래하고, 오른쪽에서는 작은 빛이 깜빡였어요.',
-    [
-      '새들의 노래를 따라간다',
-      '깜빡이는 빛을 살펴본다',
-      '둥근 발자국을 따라간다',
-    ],
-  ],
-  [
-    '3장 · 작은 실수',
-    '앗, 다리가 흔들려요!',
-    '괜찮아요. 다시 천천히 방법을 찾아보면 돼요.',
-    [
-      '손을 꼭 잡고 천천히 간다',
-      '튼튼한 나뭇가지를 찾는다',
-      '별빛으로 다리를 비춘다',
-    ],
-  ],
-  [
-    '4장 · 함께라면 할 수 있어',
-    '구름 거인이 길을 막았어요',
-    '구름 거인은 외로워서 길을 막고 있었어요. 마음을 알아주자 살며시 미소 지었어요.',
-    [
-      '함께 노래하자고 한다',
-      '재미있는 이야기를 들려준다',
-      '따뜻한 별빛을 선물한다',
-    ],
-  ],
-  [
-    '5장 · 달빛이 돌아온 밤',
-    '달빛 숲이 다시 반짝여요!',
-    '힘을 합쳐 달빛 조각을 제자리에 놓았어요. 숲의 친구들이 집으로 가는 길을 밝혀 주었답니다.',
-    ['모험을 동화책으로 만들기'],
-  ],
-] as const;
-const adventureThemes = [
-  {
-    id: 'moon',
-    icon: '🌙',
-    title: '달빛 숲의 잃어버린 조각',
-    desc: '반짝이는 숲을 구하는 따뜻한 협동 모험',
-    color: 'forest',
-  },
-  {
-    id: 'ocean',
-    icon: '🐚',
-    title: '노래를 잃은 산호 마을',
-    desc: '바닷속 친구들과 비밀 노래를 되찾는 탐험',
-    color: 'ocean',
-  },
-  {
-    id: 'cloud',
-    icon: '☁️',
-    title: '구름섬의 거꾸로 비',
-    desc: '하늘을 거슬러 오르는 빗방울의 수수께끼',
-    color: 'cloud',
-  },
-  {
-    id: 'space',
-    icon: '🚀',
-    title: '별씨앗 우체국',
-    desc: '잠든 별들에게 빛나는 편지를 배달하는 여행',
-    color: 'space',
-  },
-] as const;
 const defaultPersona = {
   name: '별콩이',
   likes: '반짝이는 별',
@@ -200,140 +129,6 @@ const defaultPersona = {
   traits: '용감하고 다정함',
   quirk: '놀라면 비눗방울이 나옴',
 };
-const extraScenarios = [
-  [
-    [
-      '1장 · 고요한 바다',
-      '산호 마을의 노래가 사라졌어요',
-      '조개 종이 울리지 않자 물고기 친구들이 길을 잃었어요.',
-      [
-        '반짝 비늘을 따라간다',
-        '조개에게 귀를 기울인다',
-        '친구들과 새 리듬을 만든다',
-      ],
-    ],
-    [
-      '2장 · 거품 동굴',
-      '노래 조각이 거품 속에 숨어요',
-      '톡톡 터지는 거품마다 다른 음이 들려요.',
-      [
-        '낮은 음부터 맞춘다',
-        '몸으로 리듬을 표현한다',
-        '능력으로 거품을 비춘다',
-      ],
-    ],
-    [
-      '3장 · 엉킨 해초',
-      '해초 미로가 길을 바꿨어요',
-      '틀린 길도 새로운 발견이 될 수 있어요.',
-      [
-        '물고기에게 도움을 청한다',
-        '해초의 색 순서를 기억한다',
-        '함께 손을 잡고 간다',
-      ],
-    ],
-    [
-      '4장 · 외로운 고래',
-      '마지막 음은 고래가 간직했어요',
-      '고래는 자기 목소리가 너무 크다고 걱정했어요.',
-      [
-        '큰 목소리도 멋지다고 말한다',
-        '함께 천천히 노래한다',
-        '작은 악기를 선물한다',
-      ],
-    ],
-    [
-      '5장 · 바다의 합창',
-      '산호 마을이 다시 노래해요!',
-      '서로 다른 목소리가 모여 세상에 하나뿐인 노래가 되었어요.',
-      ['우리의 바다 모험을 책으로 만든다'],
-    ],
-  ],
-  [
-    [
-      '1장 · 위로 내리는 비',
-      '빗방울이 하늘로 올라가요!',
-      '구름섬의 비가 거꾸로 흐르며 별을 간질이고 있었어요.',
-      ['빗방울을 따라 점프한다', '바람 지도를 펼친다', '구름 새에게 물어본다'],
-    ],
-    [
-      '2장 · 솜사탕 바람길',
-      '바람 문이 빙글빙글 돌아요',
-      '서로 다른 방향의 바람을 같은 박자로 맞춰야 해요.',
-      [
-        '손뼉으로 박자를 만든다',
-        '친구와 동시에 버튼을 누른다',
-        '능력으로 길을 표시한다',
-      ],
-    ],
-    [
-      '3장 · 번개 실수',
-      '앗, 작은 번개가 튀었어요',
-      '실수로 구름이 깜짝 놀랐지만 천천히 달래면 괜찮아요.',
-      ['미안하다고 말한다', '빗방울로 구름을 간질인다', '따뜻한 노래를 부른다'],
-    ],
-    [
-      '4장 · 잠든 무지개',
-      '무지개의 일곱 색을 깨워요',
-      '각 색깔은 좋아하는 칭찬을 들으면 눈을 떠요.',
-      ['멋진 점을 찾아 말한다', '색마다 별명을 지어 준다', '다 함께 춤을 춘다'],
-    ],
-    [
-      '5장 · 포근한 소나기',
-      '비가 제 길을 찾았어요!',
-      '구름섬에 포근한 비가 내리고 커다란 무지개가 생겼어요.',
-      ['구름섬 모험을 책으로 만든다'],
-    ],
-  ],
-  [
-    [
-      '1장 · 반짝 우편함',
-      '잠든 별들에게 편지가 왔어요',
-      '별씨앗 우체국의 지도에 세 개의 불빛이 깜빡였어요.',
-      [
-        '가장 가까운 별부터 간다',
-        '편지의 향기를 맡아 본다',
-        '로켓에 재미있는 이름을 붙인다',
-      ],
-    ],
-    [
-      '2장 · 재채기 행성',
-      '행성이 재채기로 빙글 돌아요',
-      '간지러운 우주 먼지를 치워야 착륙할 수 있어요.',
-      [
-        '부드러운 솔로 쓸어 준다',
-        '재채기 박자를 센다',
-        '능력으로 먼지를 모은다',
-      ],
-    ],
-    [
-      '3장 · 길 잃은 혜성',
-      '혜성이 집 방향을 잊었어요',
-      '서두르지 않고 별자리를 하나씩 찾으면 돼요.',
-      [
-        '북쪽 별에게 물어본다',
-        '지나온 길을 그림으로 남긴다',
-        '혜성과 나란히 날아간다',
-      ],
-    ],
-    [
-      '4장 · 까만 구멍의 수수께끼',
-      '블랙홀이 편지를 삼켰어요',
-      '사실 블랙홀은 자기에게 온 편지가 없어 외로웠대요.',
-      [
-        '새 편지를 함께 쓴다',
-        '재미있는 그림을 선물한다',
-        '모두의 답장을 약속한다',
-      ],
-    ],
-    [
-      '5장 · 별씨앗 축제',
-      '우주에 새 별이 피어났어요!',
-      '배달한 편지마다 작은 별씨앗이 되어 밤하늘을 밝혔어요.',
-      ['우주 배달 모험을 책으로 만든다'],
-    ],
-  ],
-] as const;
 function Logo() {
   return (
     <span className="logo">
@@ -419,7 +214,10 @@ export default function Home() {
   const [photoConsent, setPhotoConsent] = useState(false);
   const [guardianVerified, setGuardianVerified] = useState(false);
   const [previousStep, setPreviousStep] = useState<Step>('welcome');
-  const [adventureChoices, setAdventureChoices] = useState<string[]>([]);
+  const [adventureTrail, setAdventureTrail] = useState<AdventureDecision[]>([]);
+  const [choiceResult, setChoiceResult] = useState<AdventureDecision | null>(
+    null,
+  );
   const [storybook, setStorybook] = useState<string[][] | null>(null);
   const [storybookImage, setStorybookImage] = useState<string | null>(null);
   const [storybookTheme, setStorybookTheme] = useState(0);
@@ -503,7 +301,8 @@ export default function Home() {
         setScene(0);
         setTheme(0);
         setPage(0);
-        setAdventureChoices([]);
+        setAdventureTrail([]);
+        setChoiceResult(null);
         setStorybook(null);
         setStorybookImage(null);
         setStorybookTheme(0);
@@ -586,7 +385,8 @@ export default function Home() {
     );
   };
   const chosenImage = generated[pick] || image;
-  const activeScenes = theme === 0 ? scenes : extraScenarios[theme - 1];
+  const activeAdventure = adventureStories[theme] || adventureStories[0];
+  const activeScenes = activeAdventure.scenes;
   const requestVariant = async (
     blob: Blob,
     index: number,
@@ -741,39 +541,92 @@ export default function Home() {
       setChatting(false);
     }
   };
-  const buildStoryPages = (choices: string[]) => [
-    [
-      '표지',
-      `${persona.name}와 ${adventureThemes[theme].title}`,
-      '우리의 선택이 담긴 오늘의 모험',
-    ],
-    [
-      '친구 소개',
-      `안녕, 나는 ${persona.name}야!`,
-      `${persona.traits} 친구예요. ${persona.ability} 능력이 있고, ${persona.quirk}.`,
-    ],
-    ...activeScenes.map((item, index) => [
-      item[0],
-      item[1],
-      choices[index]
-        ? `${item[2]} 우리는 “${choices[index]}” 방법을 골랐어요.`
-        : item[2],
-    ]),
-  ];
-  const chooseAdventureAction = (choice: string) => {
-    const next = [...adventureChoices];
-    next[scene] = choice;
-    setAdventureChoices(next);
-    if (scene < 4) setScene(scene + 1);
-    else {
-      setStorybook(buildStoryPages(next));
-      setStorybookImage(chosenImage);
-      setStorybookTheme(theme);
-      setPage(0);
-      setStep('book');
-    }
+  const getDominantTrait = (trail: AdventureDecision[]): AdventureTrait => {
+    const score: Record<AdventureTrait, number> = {
+      kindness: 0,
+      curiosity: 0,
+      courage: 0,
+      creativity: 0,
+    };
+    trail.forEach((decision) => {
+      score[decision.trait] += 1;
+    });
+    return (Object.keys(score) as AdventureTrait[]).reduce((winner, item) =>
+      score[item] >= score[winner] ? item : winner,
+    );
   };
-  const storyPages = storybook || buildStoryPages(adventureChoices);
+  const buildStoryPages = (trail: AdventureDecision[]) => {
+    const dominantTrait = getDominantTrait(trail);
+    const clues = trail.map((decision) => decision.clue).join(' · ');
+    return [
+      [
+        '표지',
+        `${persona.name}와 ${activeAdventure.title}`,
+        `${age} 모험가의 선택으로 완성된 단 하나의 이야기`,
+      ],
+      [
+        '친구 소개',
+        `안녕, 나는 ${persona.name}야!`,
+        `${persona.traits} 친구예요. ${persona.ability} 능력이 있고, ${persona.quirk}. 오늘은 우리 둘이 이야기의 길을 직접 골랐어요.`,
+      ],
+      ...activeScenes.map((item, index) => {
+        const decision = trail[index];
+        return [
+          item.chapter,
+          item.title,
+          decision
+            ? `${item.body} 우리는 “${decision.label}” 방법을 골랐어요. ${decision.result} 그리고 ‘${decision.clue}’ 단서를 얻었답니다.`
+            : item.body,
+        ];
+      }),
+      [
+        '우리만의 결말',
+        `${traitMeta[dominantTrait].icon} ${traitMeta[dominantTrait].label}이 만든 마지막 장`,
+        `${activeAdventure.endings[dominantTrait]} 우리가 모은 단서는 ${clues || '아직 비어 있어요'}예요. ${persona.name}와 함께 ‘${activeAdventure.reward}’도 얻었답니다!`,
+      ],
+    ];
+  };
+  const chooseAdventureAction = (choice: AdventureChoice) => {
+    const decision: AdventureDecision = {
+      ...choice,
+      chapter: activeScenes[scene].chapter,
+      sceneTitle: activeScenes[scene].title,
+    };
+    const next = [...adventureTrail];
+    next[scene] = decision;
+    setAdventureTrail(next);
+    setChoiceResult(decision);
+  };
+  const continueAdventure = () => {
+    if (!choiceResult) return;
+    if (scene < activeScenes.length - 1) {
+      setScene(scene + 1);
+      setChoiceResult(null);
+      return;
+    }
+    setStorybook(buildStoryPages(adventureTrail));
+    setStorybookImage(chosenImage);
+    setStorybookTheme(theme);
+    setPage(0);
+    setChoiceResult(null);
+    setStep('book');
+  };
+  const storyPages = storybook || buildStoryPages(adventureTrail);
+  const currentScene = activeScenes[Math.max(0, scene)];
+  const previousDecision = scene > 0 ? adventureTrail[scene - 1] : null;
+  const currentEcho = previousDecision
+    ? currentScene.echoes?.[previousDecision.trait]
+    : null;
+  const recommendedAdventureId =
+    favoriteWorld === '로봇과 우주'
+      ? 'space'
+      : favoriteWorld === '동물과 자연'
+        ? 'garden'
+        : favoriteWorld === '음악과 춤'
+          ? 'ocean'
+          : favoriteWorld === '마법과 동화'
+            ? 'candy'
+            : 'dino';
   const reset = () => {
     generationRequest.current?.abort();
     chatRequest.current?.abort();
@@ -795,7 +648,8 @@ export default function Home() {
     setScene(0);
     setTheme(0);
     setPage(0);
-    setAdventureChoices([]);
+    setAdventureTrail([]);
+    setChoiceResult(null);
     setStorybook(null);
     setStorybookImage(null);
     setStorybookTheme(0);
@@ -1482,6 +1336,8 @@ export default function Home() {
                 secondary
                 onClick={() => {
                   setScene(-1);
+                  setAdventureTrail([]);
+                  setChoiceResult(null);
                   setStep('adventure');
                 }}
               >
@@ -1566,30 +1422,42 @@ export default function Home() {
             <span className="badge">
               <Compass /> 오늘의 모험을 골라요
             </span>
-            <h2>어디로 떠나 볼까요?</h2>
+            <h2>오늘은 어떤 이야기의 주인공이 될까요?</h2>
             <p>
-              5개의 장면과 명확한 끝이 있어요. 고른 행동은 마지막 동화책에
-              남아요.
+              8개의 세계에서 고른 행동이 다음 장면과 마지막 결말을 바꿔요.
+              단서를 모아 우리만의 동화책을 완성해 보세요.
             </p>
             <img
               className="adventure-worlds"
-              src="/adventure-worlds-v2.webp"
-              alt="달빛 숲, 산호 마을, 구름섬, 별씨앗 우체국이 이어진 동화 지도"
+              src="/adventure-worlds-v4.webp"
+              alt="달빛 숲, 산호 마을, 구름섬, 별 우체국, 공룡 도서관, 디저트 왕국, 북극광 열차, 엄지 정원 도시가 이어진 동화 지도"
             />
+            <div className="adventure-filter-note">
+              <Sparkles /> {age} · {favoriteWorld} 취향을 바탕으로 추천했어요
+            </div>
             <div className="theme-grid">
-              {adventureThemes.map((item, i) => (
+              {adventureStories.map((item, i) => (
                 <button
                   key={item.id}
-                  className={item.color}
+                  className={`${item.color} ${
+                    item.id === recommendedAdventureId ? 'recommended' : ''
+                  }`}
                   onClick={() => {
                     setTheme(i);
                     setScene(0);
-                    setAdventureChoices([]);
+                    setAdventureTrail([]);
+                    setChoiceResult(null);
+                    setStorybook(null);
                   }}
                 >
                   <i>{item.icon}</i>
                   <span>
-                    <b>{item.title}</b>
+                    <b>
+                      {item.title}
+                      {item.id === recommendedAdventureId && (
+                        <em>내 취향 추천</em>
+                      )}
+                    </b>
                     <small>{item.desc}</small>
                   </span>
                   <ChevronRight />
@@ -1603,51 +1471,121 @@ export default function Home() {
         ) : (
           <section className="adventure">
             <div className="adventure-meta">
-              <b>{adventureThemes[theme].title}</b>
-              <span>
-                {scene + 1} / 5 장면 · 약 {duration}
-              </span>
+              <div>
+                <b>{activeAdventure.title}</b>
+                <span>
+                  {scene + 1} / {activeScenes.length} 장면 · {age} 맞춤 · 약{' '}
+                  {duration}
+                </span>
+              </div>
+              <button
+                onClick={() => {
+                  setScene(-1);
+                  setAdventureTrail([]);
+                  setChoiceResult(null);
+                }}
+              >
+                <Compass /> 다른 모험
+              </button>
+            </div>
+            <div className="adventure-trail" aria-label="모험 단서 모음">
+              {activeScenes.map((item, index) => {
+                const decision = adventureTrail[index];
+                return (
+                  <span
+                    key={item.chapter}
+                    className={`${index === scene ? 'current' : ''} ${
+                      decision ? 'collected' : ''
+                    }`}
+                  >
+                    <i>
+                      {decision ? traitMeta[decision.trait].icon : index + 1}
+                    </i>
+                    {decision ? decision.clue : `${index + 1}장`}
+                  </span>
+                );
+              })}
             </div>
             <div
-              className={`scene s${scene} theme-${adventureThemes[theme].color}`}
+              className={`scene s${scene} theme-${activeAdventure.color} path-${
+                choiceResult?.trait || previousDecision?.trait || 'start'
+              } ${choiceResult ? 'scene-resolved' : ''}`}
             >
-              <i className="moon">{adventureThemes[theme].icon}</i>
+              <i className="moon">{activeAdventure.icon}</i>
               <i className="stars">✦　·　✧</i>
+              <i className="scene-spark spark-one">✦</i>
+              <i className="scene-spark spark-two">·</i>
               <div className="scene-friend">
                 <Friend image={chosenImage} />
               </div>
               <article>
-                <span>{activeScenes[scene][0]}</span>
-                <h2>{activeScenes[scene][1]}</h2>
-                <p>{activeScenes[scene][2]}</p>
-                {scene > 0 && adventureChoices[scene - 1] && (
-                  <strong className="choice-echo">
-                    “{adventureChoices[scene - 1]}” 선택 덕분에 이 길이
-                    열렸어요.
+                <span>{currentScene.chapter}</span>
+                <h2>{currentScene.title}</h2>
+                <p>{currentScene.body}</p>
+                {currentEcho && !choiceResult && (
+                  <strong
+                    className={`choice-echo path-${previousDecision?.trait}`}
+                  >
+                    {traitMeta[previousDecision!.trait].icon}{' '}
+                    {previousDecision!.label} 선택이 만든 변화: {currentEcho}
                   </strong>
                 )}
               </article>
             </div>
             <div className="choice-card">
-              <div className="says">
-                <Volume2 /> “
-                {scene === 4
-                  ? '우리가 해냈어! 오늘의 모험을 책으로 남기자.'
-                  : '좋은 생각이야! 어떤 방법으로 해 볼까?'}
-                ”
-              </div>
-              <div className="choices">
-                {activeScenes[scene][3].map((x, i) => (
-                  <button key={x} onClick={() => chooseAdventureAction(x)}>
-                    <i>{['✦', '♥', '↗'][i] || '✦'}</i>
-                    {x}
-                    <ChevronRight />
-                  </button>
-                ))}
-              </div>
-              <small className="story-event">
-                <Sparkles /> 지금 고른 행동이 동화책에 기록돼요
-              </small>
+              {choiceResult ? (
+                <div className={`choice-result path-${choiceResult.trait}`}>
+                  <div className="result-icon">
+                    {traitMeta[choiceResult.trait].icon}
+                  </div>
+                  <span>
+                    {traitMeta[choiceResult.trait].label}이 반짝였어요
+                  </span>
+                  <h3>{choiceResult.result}</h3>
+                  <p>
+                    단서 획득 <b>{choiceResult.clue}</b>
+                  </p>
+                  <Button onClick={continueAdventure}>
+                    {scene === activeScenes.length - 1 ? (
+                      <>
+                        <BookOpen /> 우리만의 결말 보기 <ChevronRight />
+                      </>
+                    ) : (
+                      <>
+                        다음 장면에서 변화 확인하기 <ChevronRight />
+                      </>
+                    )}
+                  </Button>
+                </div>
+              ) : (
+                <>
+                  <div className="says">
+                    <Volume2 /> “
+                    {scene === activeScenes.length - 1
+                      ? '마지막 선택이 우리 모험의 결말을 바꿀 거야!'
+                      : '어떤 방법을 고를까? 다음 장면이 달라질 거야!'}
+                    ”
+                  </div>
+                  <div className="choices">
+                    {currentScene.choices.map((choice) => (
+                      <button
+                        key={choice.label}
+                        className={`path-${choice.trait}`}
+                        onClick={() => chooseAdventureAction(choice)}
+                      >
+                        <i>{traitMeta[choice.trait].icon}</i>
+                        <span>{choice.label}</span>
+                        <small>{traitMeta[choice.trait].label}</small>
+                        <ChevronRight />
+                      </button>
+                    ))}
+                  </div>
+                  <small className="story-event">
+                    <Sparkles /> 선택의 결과와 단서가 다음 장면과 동화책에
+                    이어져요
+                  </small>
+                </>
+              )}
             </div>
           </section>
         ))}
@@ -1672,10 +1610,10 @@ export default function Home() {
             <article>
               <small>{storyPages[page][0]}</small>
               <div
-                className={`book-art theme-${adventureThemes[storybook ? storybookTheme : theme].color}`}
+                className={`book-art theme-${adventureStories[storybook ? storybookTheme : theme].color}`}
               >
                 <i>
-                  {adventureThemes[storybook ? storybookTheme : theme].icon}
+                  {adventureStories[storybook ? storybookTheme : theme].icon}
                 </i>
                 <Friend image={storybookImage || chosenImage} />
               </div>
@@ -1741,7 +1679,7 @@ export default function Home() {
                 <button onClick={() => setStep('character')}>보기</button>
               </article>
             )}
-            {adventureChoices.length >= 5 && (
+            {adventureTrail.length >= activeScenes.length && (
               <article>
                 <i>▤</i>
                 <span>
@@ -1767,10 +1705,10 @@ export default function Home() {
           <div className="summary">
             <b>현재 세션</b>
             <span>
-              완료한 장면<strong>{Math.max(0, adventureChoices.length)}</strong>
+              완료한 장면<strong>{Math.max(0, adventureTrail.length)}</strong>
             </span>
             <span>
-              이야기 선택<strong>{adventureChoices.length}</strong>
+              이야기 선택<strong>{adventureTrail.length}</strong>
             </span>
             <span>
               모험 길이<strong>{duration}</strong>
