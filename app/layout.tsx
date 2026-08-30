@@ -13,6 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
+  metadataBase: new URL('https://drawing-friend.bckim0123.chatgpt.site'),
   title: '그림친구 — 내 그림이 살아나는 모험',
   description: '아이의 그림이 안전한 이야기 친구가 되어 함께 모험하고 동화책으로 남는 창작 서비스',
   openGraph: {
