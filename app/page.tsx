@@ -9,20 +9,25 @@ import {
   Check,
   ChevronRight,
   Compass,
+  Heart,
   ImagePlus,
   LoaderCircle,
   LockKeyhole,
   MessageCircle,
+  Palette,
+  RefreshCw,
   RotateCcw,
   Send,
   Settings,
   ShieldCheck,
   Sparkles,
   Star,
+  SwitchCamera,
   Trash2,
   Upload,
   Volume2,
   WandSparkles,
+  X,
 } from 'lucide-react';
 
 type Step =
@@ -42,6 +47,35 @@ const flow: { id: Step; label: string }[] = [
   { id: 'book', label: '동화책' },
 ];
 const characterStyleCount = 3;
+const characterStyles = [
+  {
+    name: '동화 그림친구',
+    detail: '내 선을 살린 색연필·과슈 2D',
+    preview: '/style-storybook-v1.webp',
+  },
+  {
+    name: '말랑 스티커친구',
+    detail: '도톰하고 포근한 2.5D 스티커',
+    preview: '/style-puffy-v1.webp',
+  },
+  {
+    name: '보송 3D 친구',
+    detail: '샘플 감성의 고급 플러시 3D',
+    preview: '/style-plush-3d-v1.webp',
+  },
+] as const;
+const colorChoices = [
+  {
+    name: '원본 색 그대로',
+    value: '원본 색을 가장 많이 유지',
+    color: '#f5ead5',
+  },
+  { name: '복숭아', value: '따뜻한 복숭아색', color: '#f6aa91' },
+  { name: '민트', value: '부드러운 민트색', color: '#a9d8c3' },
+  { name: '하늘', value: '맑은 하늘색', color: '#9ecde4' },
+  { name: '라일락', value: '포근한 라일락색', color: '#c7b5df' },
+];
+const focusChoices = ['삐뚤빼뚤한 선', '독특한 모양', '표정', '대표 색과 무늬'];
 
 async function readJson<T>(response: Response): Promise<T | null> {
   if (!response.headers.get('content-type')?.includes('application/json'))
@@ -337,7 +371,16 @@ export default function Home() {
   const [image, setImage] = useState<string | null>(null);
   const [generated, setGenerated] = useState<string[]>([]);
   const [generating, setGenerating] = useState(false);
+  const [regenerating, setRegenerating] = useState(false);
   const [generationNote, setGenerationNote] = useState('');
+  const [favoriteColor, setFavoriteColor] = useState(colorChoices[0].value);
+  const [preserveFocus, setPreserveFocus] = useState(focusChoices[0]);
+  const [characterWish, setCharacterWish] = useState('');
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [cameraError, setCameraError] = useState('');
+  const [facingMode, setFacingMode] = useState<'environment' | 'user'>(
+    'environment',
+  );
   const [pick, setPick] = useState(0);
   const [scene, setScene] = useState(0);
   const [theme, setTheme] = useState(0);
@@ -366,6 +409,9 @@ export default function Home() {
   const [chatError, setChatError] = useState('');
   const input = useRef<HTMLInputElement>(null);
   const cameraInput = useRef<HTMLInputElement>(null);
+  const video = useRef<HTMLVideoElement>(null);
+  const cameraStream = useRef<MediaStream | null>(null);
+  const cameraRequest = useRef(0);
   const messagesEnd = useRef<HTMLDivElement>(null);
   const generationRequest = useRef<AbortController | null>(null);
   const chatRequest = useRef<AbortController | null>(null);
@@ -373,6 +419,32 @@ export default function Home() {
   useEffect(() => {
     messagesEnd.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages, chatting]);
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, [step]);
+  useEffect(() => {
+    if (cameraOpen && video.current && cameraStream.current) {
+      video.current.srcObject = cameraStream.current;
+      void video.current.play().catch(() => undefined);
+    }
+  }, [cameraOpen, facingMode]);
+  useEffect(() => {
+    if (step !== 'upload' && cameraStream.current) {
+      cameraRequest.current += 1;
+      cameraStream.current.getTracks().forEach((track) => track.stop());
+      cameraStream.current = null;
+      queueMicrotask(() => setCameraOpen(false));
+    } else if (step !== 'upload') {
+      cameraRequest.current += 1;
+      queueMicrotask(() => setCameraOpen(false));
+    }
+  }, [step]);
+  useEffect(
+    () => () => {
+      cameraStream.current?.getTracks().forEach((track) => track.stop());
+    },
+    [],
+  );
   const load = (file?: File) => {
     if (!file) return;
     generationRequest.current?.abort();
@@ -422,8 +494,102 @@ export default function Home() {
     };
     reader.readAsDataURL(file);
   };
+  const closeCamera = () => {
+    cameraRequest.current += 1;
+    cameraStream.current?.getTracks().forEach((track) => track.stop());
+    cameraStream.current = null;
+    if (video.current) video.current.srcObject = null;
+    setCameraOpen(false);
+  };
+  const openCamera = async (mode: 'environment' | 'user' = facingMode) => {
+    setCameraError('');
+    if (!navigator.mediaDevices?.getUserMedia) {
+      cameraInput.current?.click();
+      return;
+    }
+    const requestId = cameraRequest.current + 1;
+    cameraRequest.current = requestId;
+    cameraStream.current?.getTracks().forEach((track) => track.stop());
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: {
+          facingMode: { ideal: mode },
+          width: { ideal: 1280 },
+          height: { ideal: 1280 },
+        },
+      });
+      if (requestId !== cameraRequest.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      cameraStream.current = stream;
+      setFacingMode(mode);
+      setCameraOpen(true);
+    } catch {
+      if (requestId !== cameraRequest.current) return;
+      setCameraOpen(false);
+      setCameraError(
+        '카메라를 열 수 없어요. 권한을 허용하거나 사진 파일을 골라 주세요.',
+      );
+    }
+  };
+  const flipCamera = async () => {
+    const next = facingMode === 'environment' ? 'user' : 'environment';
+    await openCamera(next);
+  };
+  const captureCamera = () => {
+    if (!video.current?.videoWidth || !video.current.videoHeight) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = video.current.videoWidth;
+    canvas.height = video.current.videoHeight;
+    const context = canvas.getContext('2d');
+    if (!context) return;
+    context.drawImage(video.current, 0, 0, canvas.width, canvas.height);
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) return;
+        load(new File([blob], 'camera-drawing.jpg', { type: 'image/jpeg' }));
+        closeCamera();
+      },
+      'image/jpeg',
+      0.9,
+    );
+  };
   const chosenImage = generated[pick] || image;
   const activeScenes = theme === 0 ? scenes : extraScenarios[theme - 1];
+  const requestVariant = async (
+    blob: Blob,
+    index: number,
+    signal?: AbortSignal,
+  ) => {
+    const form = new FormData();
+    form.append('drawing', blob, 'drawing.jpg');
+    form.append('styleIndex', String(index));
+    form.append('favoriteColor', favoriteColor);
+    form.append('preserveFocus', preserveFocus);
+    form.append('characterWish', characterWish.trim());
+    if (index === 2) {
+      const referenceResponse = await fetch('/style-plush-3d-v1.webp');
+      if (referenceResponse.ok) {
+        const reference = await referenceResponse.blob();
+        form.append(
+          'styleReference',
+          reference,
+          'cute-3d-style-reference.webp',
+        );
+      }
+    }
+    const response = await fetch('/api/character', {
+      method: 'POST',
+      body: form,
+      signal,
+    });
+    const data = await readJson<{ image?: string; error?: string }>(response);
+    if (!response.ok || !data?.image)
+      throw new Error(apiErrorMessage(response, data?.error));
+    return { index, image: data.image };
+  };
   const generateCharacter = async () => {
     if (!image || generating) return;
     generationRequest.current?.abort();
@@ -433,22 +599,7 @@ export default function Home() {
     try {
       const blob = await fetch(image).then((r) => r.blob());
       const variants = Array.from({ length: characterStyleCount }, (_, index) =>
-        (async () => {
-          const form = new FormData();
-          form.append('drawing', blob, 'drawing.jpg');
-          form.append('styleIndex', String(index));
-          const response = await fetch('/api/character', {
-            method: 'POST',
-            body: form,
-            signal: generationRequest.current?.signal,
-          });
-          const data = await readJson<{ image?: string; error?: string }>(
-            response,
-          );
-          if (!response.ok || !data?.image)
-            throw new Error(apiErrorMessage(response, data?.error));
-          return { index, image: data.image };
-        })(),
+        requestVariant(blob, index, generationRequest.current?.signal),
       );
       const settled = await Promise.allSettled(variants);
       const images = Array.from<string>({ length: characterStyleCount }).fill(
@@ -484,6 +635,40 @@ export default function Home() {
       );
     } finally {
       setGenerating(false);
+    }
+  };
+  const regenerateSelected = async () => {
+    if (!image || regenerating || generating) return;
+    generationRequest.current?.abort();
+    generationRequest.current = new AbortController();
+    setRegenerating(true);
+    setGenerationNote(
+      `${characterStyles[pick].name}을 더 귀엽게 다시 만들고 있어요…`,
+    );
+    try {
+      const blob = await fetch(image).then((response) => response.blob());
+      const result = await requestVariant(
+        blob,
+        pick,
+        generationRequest.current.signal,
+      );
+      setGenerated((previous) =>
+        previous.map((item, index) =>
+          index === result.index ? result.image : item,
+        ),
+      );
+      setGenerationNote(
+        `${characterStyles[pick].name}을 취향에 맞춰 새로 완성했어요!`,
+      );
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') return;
+      setGenerationNote(
+        error instanceof Error
+          ? error.message
+          : '이 모습을 다시 만들지 못했어요. 잠시 뒤 시도해 주세요.',
+      );
+    } finally {
+      setRegenerating(false);
     }
   };
   const sendChat = async () => {
@@ -559,9 +744,17 @@ export default function Home() {
   const reset = () => {
     generationRequest.current?.abort();
     chatRequest.current?.abort();
+    closeCamera();
     setImage(null);
     setGenerated([]);
+    setGenerating(false);
+    setRegenerating(false);
     setGenerationNote('');
+    setFavoriteColor(colorChoices[0].value);
+    setPreserveFocus(focusChoices[0]);
+    setCharacterWish('');
+    setCameraError('');
+    setFacingMode('environment');
     setPick(0);
     setScene(0);
     setTheme(0);
@@ -647,12 +840,13 @@ export default function Home() {
             <h1>
               내가 그린 그림이
               <br />
-              <em>AI 이야기 친구</em>가 돼요
+              <span>
+                <em>AI 이야기 친구</em>가 돼요
+              </span>
             </h1>
             <p>
-              그림의 색과 삐뚤빼뚤한 선을 살려 캐릭터로 만들고,
-              <br />
-              함께 고른 모험을 현재 세션에서 동화책으로 만나 봐요.
+              사진·그림·카메라로 보여 주고 취향을 고르면, <br />
+              내 그림을 닮은 2D·스티커·보송 3D 친구가 태어나요.
             </p>
             <div className="welcome-action">
               <Button onClick={() => setStep('guardian')}>
@@ -761,8 +955,8 @@ export default function Home() {
       {step === 'upload' && (
         <section className="center upload">
           <span className="badge">첫 번째 마법</span>
-          <h2>그림을 보여 주세요!</h2>
-          <p>종이의 네 모서리가 잘 보이게, 밝은 곳에서 찍어 주세요.</p>
+          <h2>내 그림을 보여 주세요!</h2>
+          <p>파일로 올리거나 카메라를 열어 화면을 보며 찍을 수 있어요.</p>
           <input
             ref={input}
             hidden
@@ -778,47 +972,164 @@ export default function Home() {
             capture="environment"
             onChange={(e) => load(e.target.files?.[0])}
           />
-          <button
-            type="button"
-            aria-label="그림 파일 선택"
-            className={`drop ${image ? 'filled' : ''}`}
-            onClick={() => input.current?.click()}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') input.current?.click();
-            }}
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={(e) => {
-              e.preventDefault();
-              load(e.dataTransfer.files[0]);
-            }}
-          >
-            {image ? (
-              <img src={image} alt="업로드한 아이의 그림" />
-            ) : (
-              <>
-                <span>
-                  <ImagePlus />
-                </span>
-                <b>여기에 그림을 놓아 주세요</b>
-                <small>누르거나 아래 버튼으로 사진을 골라요</small>
-              </>
-            )}
-          </button>
+          {cameraOpen ? (
+            <div className="camera-live">
+              <div className="camera-frame">
+                <video
+                  ref={video}
+                  autoPlay
+                  muted
+                  playsInline
+                  aria-label="실시간 카메라 미리보기"
+                />
+                <span className="camera-guide" aria-hidden="true" />
+                <button
+                  type="button"
+                  className="camera-close"
+                  onClick={closeCamera}
+                  aria-label="카메라 닫기"
+                >
+                  <X />
+                </button>
+              </div>
+              <div className="camera-controls">
+                <button type="button" onClick={() => void flipCamera()}>
+                  <SwitchCamera /> 전환
+                </button>
+                <button
+                  type="button"
+                  className="camera-shutter"
+                  onClick={captureCamera}
+                  aria-label="그림 사진 촬영"
+                >
+                  <span />
+                </button>
+                <button type="button" onClick={closeCamera}>
+                  닫기
+                </button>
+              </div>
+              <small>
+                <LockKeyhole /> 미리보기 영상은 기기 밖으로 전송되지 않아요.
+              </small>
+            </div>
+          ) : (
+            <button
+              type="button"
+              aria-label="그림 파일 선택"
+              className={`drop ${image ? 'filled' : ''}`}
+              onClick={() => input.current?.click()}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') input.current?.click();
+              }}
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => {
+                e.preventDefault();
+                load(e.dataTransfer.files[0]);
+              }}
+            >
+              {image ? (
+                <img src={image} alt="업로드한 아이의 그림" />
+              ) : (
+                <>
+                  <span>
+                    <ImagePlus />
+                  </span>
+                  <b>여기에 그림을 놓아 주세요</b>
+                  <small>사진, 그림 파일 JPG·PNG·WEBP</small>
+                </>
+              )}
+            </button>
+          )}
           <div className="upload-buttons">
             <Button secondary onClick={() => input.current?.click()}>
               <Upload size={19} />{' '}
               {image ? '다른 그림 고르기' : '그림 파일 고르기'}
             </Button>
-            <Button secondary onClick={() => cameraInput.current?.click()}>
-              <Camera size={19} /> 사진 찍기
+            <Button secondary onClick={() => void openCamera()}>
+              <Camera size={19} /> 카메라 열기
             </Button>
           </div>
-          {image && (
-            <strong className="quality">
-              <Check /> 그림을 불러왔어요. 잘리지 않았는지 확인해 주세요.
-            </strong>
+          {cameraError && (
+            <div className="camera-error" role="alert">
+              {cameraError}
+            </div>
           )}
-          <Button disabled={!image || generating} onClick={generateCharacter}>
+          {image && (
+            <>
+              <strong className="quality">
+                <Check /> 그림을 불러왔어요. 잘리지 않았는지 확인해 주세요.
+              </strong>
+              <section className="character-direction">
+                <div className="direction-heading">
+                  <span>
+                    <Heart />
+                  </span>
+                  <div>
+                    <h3>어떤 친구가 태어나면 좋을까요?</h3>
+                    <p>작은 취향을 알려 주면 세 가지 모습에 함께 반영해요.</p>
+                  </div>
+                </div>
+                <div
+                  className="style-preview-grid"
+                  aria-label="생성 스타일 3종"
+                >
+                  {characterStyles.map((style) => (
+                    <article key={style.name}>
+                      <img src={style.preview} alt={`${style.name} 예시`} />
+                      <span>
+                        <b>{style.name}</b>
+                        <small>{style.detail}</small>
+                      </span>
+                    </article>
+                  ))}
+                </div>
+                <div className="direction-fields">
+                  <label>
+                    <span>꼭 살리고 싶은 부분</span>
+                    <select
+                      value={preserveFocus}
+                      onChange={(event) => setPreserveFocus(event.target.value)}
+                    >
+                      {focusChoices.map((choice) => (
+                        <option key={choice}>{choice}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>내가 바라는 친구</span>
+                    <input
+                      maxLength={120}
+                      value={characterWish}
+                      onChange={(event) => setCharacterWish(event.target.value)}
+                      placeholder="예: 별 모양 귀를 가진 포근한 친구"
+                    />
+                  </label>
+                </div>
+                <fieldset className="color-picker">
+                  <legend>
+                    <Palette /> 좋아하는 색
+                  </legend>
+                  <div>
+                    {colorChoices.map((choice) => (
+                      <button
+                        type="button"
+                        key={choice.name}
+                        aria-pressed={favoriteColor === choice.value}
+                        onClick={() => setFavoriteColor(choice.value)}
+                      >
+                        <i style={{ backgroundColor: choice.color }} />
+                        {choice.name}
+                      </button>
+                    ))}
+                  </div>
+                </fieldset>
+              </section>
+            </>
+          )}
+          <Button
+            disabled={!image || generating || regenerating}
+            onClick={generateCharacter}
+          >
             {generating ? (
               <LoaderCircle className="spin" size={19} />
             ) : (
@@ -830,6 +1141,9 @@ export default function Home() {
             <output className="magic-progress" aria-live="polite">
               <i />
               <span>{generationNote}</span>
+              <small>
+                고화질 세 모습을 차례로 만들어요. 최대 2분 걸릴 수 있어요.
+              </small>
             </output>
           )}
           {!generating && generationNote && (
@@ -862,13 +1176,22 @@ export default function Home() {
               <Friend image={generated[pick]} />
             </article>
           </div>
+          <div className="preference-summary" aria-label="반영한 캐릭터 취향">
+            <span>
+              <Palette /> {favoriteColor}
+            </span>
+            <span>
+              <Heart /> {preserveFocus} 살리기
+            </span>
+            {characterWish && <span>“{characterWish}”</span>}
+          </div>
           <h3 className="choose-title">가장 마음에 드는 모습을 골라 주세요</h3>
           <div className="candidates">
-            {['그림 그대로', '말랑 캐릭터', '쪼꼬미 인형'].map((name, i) => (
+            {characterStyles.map((style, i) => (
               <button
                 disabled={!generated[i]}
                 className={pick === i ? 'selected' : ''}
-                key={name}
+                key={style.name}
                 onClick={() => setPick(i)}
               >
                 {pick === i && (
@@ -887,16 +1210,38 @@ export default function Home() {
                     </small>
                   )}
                 </span>
-                <b>{name}</b>
-                <small>
-                  {i === 0
-                    ? '내 선을 가장 많이 살렸어요'
-                    : i === 1
-                      ? '포근하고 둥근 느낌이에요'
-                      : '작은 몸에 표정이 커요'}
-                </small>
+                <b>{style.name}</b>
+                <small>{style.detail}</small>
               </button>
             ))}
+          </div>
+          <div className="regenerate-row">
+            <Button
+              secondary
+              disabled={regenerating || generating || !generated[pick]}
+              onClick={() => void regenerateSelected()}
+            >
+              {regenerating ? (
+                <LoaderCircle className="spin" size={18} />
+              ) : (
+                <RefreshCw size={18} />
+              )}{' '}
+              {regenerating
+                ? '더 귀엽게 다듬는 중…'
+                : `${characterStyles[pick].name} 다시 만들기`}
+            </Button>
+            <button
+              type="button"
+              onClick={() => {
+                setGenerationNote('');
+                setStep('upload');
+              }}
+            >
+              <Settings /> 취향 바꾸기
+            </button>
+            <small>
+              선택한 모습만 새로 만들고 다른 두 모습은 그대로 남겨요.
+            </small>
           </div>
           <div className="persona-card">
             <h3>
