@@ -36,7 +36,7 @@ export async function POST(request: Request) {
       '흰색 또는 투명한 단색 배경, 전신 한 명, 정면 기본 포즈, 친근하고 안전한 어린이 동화책 스타일.',
     ].join(' ');
 
-    const calls = styles.map(async (style) => {
+    const calls = styles.map(async (style, index) => {
       const body = new FormData();
       body.append('model', 'gpt-image-2');
       body.append('image', drawing, drawing.name || 'drawing.png');
@@ -44,22 +44,28 @@ export async function POST(request: Request) {
       body.append('size', '1024x1024');
       body.append('quality', 'medium');
       body.append('output_format', 'png');
-      body.append('input_fidelity', 'high');
 
       const response = await fetch('https://api.openai.com/v1/images/edits', {
         method: 'POST',
         headers: { Authorization: `Bearer ${apiKey}` },
         body,
+        signal: AbortSignal.timeout(110_000),
       });
       const result = await response.json() as { data?: Array<{ b64_json?: string }>; error?: { message?: string } };
       if (!response.ok || !result.data?.[0]?.b64_json) throw new Error(result.error?.message || '캐릭터 생성에 실패했어요.');
-      return `data:image/png;base64,${result.data[0].b64_json}`;
+      return { index, image: `data:image/png;base64,${result.data[0].b64_json}` };
     });
 
-    const images = await Promise.all(calls);
-    return json({ demo: false, images });
+    const settled = await Promise.allSettled(calls);
+    const failures = settled.filter((item): item is PromiseRejectedResult => item.status === 'rejected');
+    if (failures.length) console.error('character-variant-failed', failures.map(item => item.reason instanceof Error ? item.reason.message : 'unknown').join(' | '));
+    const images = new Array<string>(styles.length).fill('');
+    for (const item of settled) if (item.status === 'fulfilled') images[item.value.index] = item.value.image;
+    const successCount = images.filter(Boolean).length;
+    if (!successCount) throw new Error('all character variants failed');
+    return json({ demo: false, images, successCount, message: successCount === 3 ? '그림의 특징을 살린 세 친구가 태어났어요!' : `${successCount}명의 친구가 먼저 태어났어요. 빈 후보는 다시 만들 수 있어요.` });
   } catch (error) {
     console.error('character-generation-failed', error instanceof Error ? error.message : 'unknown');
-    return json({ error: '잠시 마법이 쉬고 있어요. 원본 그림으로 모험을 계속할 수 있어요.' }, 502);
+    return json({ error: '캐릭터 변환을 완료하지 못했어요. 그림을 바꾸거나 잠시 뒤 다시 시도해 주세요.', retryable: true }, 502);
   }
 }
