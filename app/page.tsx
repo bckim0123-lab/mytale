@@ -41,6 +41,26 @@ const flow: { id: Step; label: string }[] = [
   { id: 'adventure', label: '함께 모험' },
   { id: 'book', label: '동화책' },
 ];
+const characterStyleCount = 3;
+
+async function readJson<T>(response: Response): Promise<T | null> {
+  if (!response.headers.get('content-type')?.includes('application/json'))
+    return null;
+  try {
+    return (await response.json()) as T;
+  } catch {
+    return null;
+  }
+}
+
+function apiErrorMessage(response: Response, fallback?: string) {
+  if (fallback) return fallback;
+  if (response.status === 429)
+    return '친구들이 숨을 고르고 있어요. 잠시 쉬었다가 다시 만들어 주세요.';
+  if (response.status >= 500)
+    return 'AI 작업실 연결이 잠시 불안정해요. 잠시 뒤 다시 시도해 주세요.';
+  return '캐릭터 변환을 완료하지 못했어요. 그림을 확인하고 다시 시도해 주세요.';
+}
 const scenes = [
   [
     '1장 · 반짝이는 초대장',
@@ -412,28 +432,51 @@ export default function Home() {
     setGenerationNote('그림의 색과 특별한 모양을 살펴보고 있어요…');
     try {
       const blob = await fetch(image).then((r) => r.blob());
-      const form = new FormData();
-      form.append('drawing', blob, 'drawing.png');
-      const response = await fetch('/api/character', {
-        method: 'POST',
-        body: form,
-        signal: generationRequest.current.signal,
-      });
-      const data = (await response.json()) as {
-        images?: string[];
-        message?: string;
-        error?: string;
-      };
-      const validImages = data.images?.filter(Boolean) || [];
-      if (!response.ok || !validImages.length)
-        throw new Error(data.error || '변환 실패');
-      setGenerated(data.images || []);
-      setPick(Math.max(0, (data.images || []).findIndex(Boolean)));
+      const variants = Array.from({ length: characterStyleCount }, (_, index) =>
+        (async () => {
+          const form = new FormData();
+          form.append('drawing', blob, 'drawing.jpg');
+          form.append('styleIndex', String(index));
+          const response = await fetch('/api/character', {
+            method: 'POST',
+            body: form,
+            signal: generationRequest.current?.signal,
+          });
+          const data = await readJson<{ image?: string; error?: string }>(
+            response,
+          );
+          if (!response.ok || !data?.image)
+            throw new Error(apiErrorMessage(response, data?.error));
+          return { index, image: data.image };
+        })(),
+      );
+      const settled = await Promise.allSettled(variants);
+      const images = Array.from<string>({ length: characterStyleCount }).fill(
+        '',
+      );
+      for (const result of settled)
+        if (result.status === 'fulfilled')
+          images[result.value.index] = result.value.image;
+      const successCount = images.filter(Boolean).length;
+      if (!successCount) {
+        const firstFailure = settled.find(
+          (result): result is PromiseRejectedResult =>
+            result.status === 'rejected',
+        );
+        throw firstFailure?.reason instanceof Error
+          ? firstFailure.reason
+          : new Error('캐릭터 변환을 완료하지 못했어요. 다시 시도해 주세요.');
+      }
+      setGenerated(images);
+      setPick(Math.max(0, images.findIndex(Boolean)));
       setGenerationNote(
-        data.message || '그림의 특징을 살린 친구들이 태어났어요!',
+        successCount === characterStyleCount
+          ? '그림의 특징을 살린 세 친구가 태어났어요!'
+          : `${successCount}개의 모습을 먼저 완성했어요. 마음에 드는 친구를 골라 주세요.`,
       );
       setStep('character');
     } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') return;
       setGenerationNote(
         error instanceof Error
           ? error.message
@@ -465,8 +508,8 @@ export default function Home() {
         }),
         signal: chatRequest.current.signal,
       });
-      const data = (await response.json()) as { text?: string };
-      if (!response.ok) throw new Error('답장을 가져오지 못했어요.');
+      const data = await readJson<{ text?: string }>(response);
+      if (!response.ok || !data) throw new Error('답장을 가져오지 못했어요.');
       setMessages([
         ...next,
         {
@@ -837,7 +880,11 @@ export default function Home() {
                   {generated[i] ? (
                     <Friend image={generated[i]} variant={`v${i}`} />
                   ) : (
-                    <LoaderCircle className="spin" />
+                    <small>
+                      이번에는
+                      <br />
+                      완성하지 못했어요
+                    </small>
                   )}
                 </span>
                 <b>{name}</b>

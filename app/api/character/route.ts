@@ -24,28 +24,14 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    const clientId =
-      request.headers.get('cf-connecting-ip') ||
-      request.headers.get('x-forwarded-for')?.split(',')[0] ||
-      'local';
-    const now = Date.now();
-    const recent = (recentGenerations.get(clientId) || []).filter(
-      (time) => now - time < 15 * 60_000,
-    );
-    if (recent.length >= 3)
-      return json(
-        {
-          error:
-            '잠시 쉬었다가 다시 만들어 주세요. 15분에 세 번까지 만들 수 있어요.',
-          retryable: true,
-        },
-        429,
-      );
     const form = await request.formData();
     const drawing = form.get('drawing');
+    const styleIndex = Number(form.get('styleIndex'));
 
     if (!(drawing instanceof File))
       return json({ error: '그림 파일을 선택해 주세요.' }, 400);
+    if (!Number.isInteger(styleIndex) || !styles[styleIndex])
+      return json({ error: '캐릭터 스타일을 다시 골라 주세요.' }, 400);
     if (!ALLOWED_TYPES.has(drawing.type))
       return json({ error: 'PNG, JPG, WEBP 그림만 사용할 수 있어요.' }, 415);
     if (drawing.size > MAX_IMAGE_BYTES)
@@ -63,6 +49,24 @@ export async function POST(request: Request) {
       String.fromCharCode(...signature.slice(8, 12)) === 'WEBP';
     if (!isPng && !isJpeg && !isWebp)
       return json({ error: '올바른 그림 파일인지 확인해 주세요.' }, 415);
+
+    const clientId =
+      request.headers.get('cf-connecting-ip') ||
+      request.headers.get('x-forwarded-for')?.split(',')[0] ||
+      'local';
+    const now = Date.now();
+    const recent = (recentGenerations.get(clientId) || []).filter(
+      (time) => now - time < 15 * 60_000,
+    );
+    if (recent.length >= 9)
+      return json(
+        {
+          error:
+            '친구들이 숨을 고르고 있어요. 잠시 쉬었다가 다시 만들어 주세요.',
+          retryable: true,
+        },
+        429,
+      );
 
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey)
@@ -87,60 +91,41 @@ export async function POST(request: Request) {
       '흰색 또는 투명한 단색 배경, 전신 한 명, 정면 기본 포즈, 친근하고 안전한 어린이 동화책 스타일.',
     ].join(' ');
 
-    const calls = styles.map(async (style, index) => {
-      const body = new FormData();
-      body.append('model', 'gpt-image-2');
-      body.append('image', drawing, drawing.name || 'drawing.png');
-      body.append('prompt', `${prompt} 변환 스타일: ${style}.`);
-      body.append('size', '1024x1024');
-      body.append('quality', 'medium');
-      body.append('output_format', 'png');
+    const body = new FormData();
+    body.append('model', 'gpt-image-2');
+    body.append('image', drawing, drawing.name || 'drawing.png');
+    body.append('prompt', `${prompt} 변환 스타일: ${styles[styleIndex]}.`);
+    body.append('size', '1024x1024');
+    body.append('quality', 'medium');
+    body.append('output_format', 'webp');
 
-      const response = await fetch('https://api.openai.com/v1/images/edits', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${apiKey}` },
-        body,
-        signal: AbortSignal.any([request.signal, AbortSignal.timeout(90_000)]),
-      });
-      const result = (await response.json()) as {
-        data?: Array<{ b64_json?: string }>;
-        error?: { message?: string };
-      };
-      if (!response.ok || !result.data?.[0]?.b64_json)
-        throw new Error(result.error?.message || '캐릭터 생성에 실패했어요.');
-      return {
-        index,
-        image: `data:image/png;base64,${result.data[0].b64_json}`,
-      };
+    const response = await fetch('https://api.openai.com/v1/images/edits', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}` },
+      body,
+      signal: AbortSignal.any([request.signal, AbortSignal.timeout(90_000)]),
     });
-
-    const settled = await Promise.allSettled(calls);
-    const failures = settled.filter(
-      (item): item is PromiseRejectedResult => item.status === 'rejected',
-    );
-    if (failures.length)
+    const result = (await response.json().catch(() => ({}))) as {
+      data?: Array<{ b64_json?: string }>;
+      error?: { message?: string };
+    };
+    if (!response.ok || !result.data?.[0]?.b64_json) {
       console.error(
         'character-variant-failed',
-        failures
-          .map((item) =>
-            item.reason instanceof Error ? item.reason.message : 'unknown',
-          )
-          .join(' | '),
+        result.error?.message || `OpenAI returned ${response.status}`,
       );
-    const images = Array.from<string>({ length: styles.length }).fill('');
-    for (const item of settled)
-      if (item.status === 'fulfilled')
-        images[item.value.index] = item.value.image;
-    const successCount = images.filter(Boolean).length;
-    if (!successCount) throw new Error('all character variants failed');
+      return json(
+        {
+          error: '이 모습은 완성하지 못했어요. 다른 모습부터 보여 드릴게요.',
+          retryable: true,
+        },
+        502,
+      );
+    }
     return json({
       demo: false,
-      images,
-      successCount,
-      message:
-        successCount === 3
-          ? '서로 다른 세 가지 캐릭터 스타일이 완성됐어요!'
-          : `${successCount}개의 선택 가능한 모습을 먼저 보여드려요.`,
+      index: styleIndex,
+      image: `data:image/webp;base64,${result.data[0].b64_json}`,
     });
   } catch (error) {
     console.error(
