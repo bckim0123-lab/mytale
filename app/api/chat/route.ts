@@ -1,4 +1,5 @@
 type ChatMessage = { role: 'user' | 'assistant'; content: string };
+const CHAT_MODEL = 'gpt-5.6-luna';
 
 const blockedPersonalInfo =
   /(주소|학교|학원|전화번호|핸드폰|이메일|사는\s*곳|집이\s*어디|계좌|카드번호|비밀번호|실제\s*이름|현재\s*위치)|(?:01[016789][\s-]?\d{3,4}[\s-]?\d{4})|(?:[\w.+-]+@[\w.-]+\.[a-z]{2,})|(?:\d{2,4}-\d{3,4}-\d{4})/i;
@@ -117,10 +118,11 @@ export async function POST(request: Request) {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'gpt-5.4-mini',
+        model: CHAT_MODEL,
+        reasoning: { effort: 'low' },
         instructions,
         input: [...history, { role: 'user', content: message }],
-        max_output_tokens: 220,
+        max_output_tokens: 300,
         store: false,
       }),
       signal: AbortSignal.timeout(25_000),

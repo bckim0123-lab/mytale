@@ -33,6 +33,7 @@ import {
   Trash2,
   Upload,
   Volume2,
+  VolumeX,
   WandSparkles,
   X,
 } from 'lucide-react';
@@ -46,6 +47,12 @@ type Step =
   | 'adventure'
   | 'book'
   | 'parent';
+type CharacterQuality = {
+  checked: boolean;
+  score?: number;
+  passed?: boolean | null;
+  polished: boolean;
+};
 const flow: { id: Step; label: string }[] = [
   { id: 'upload', label: '그림 올리기' },
   { id: 'character', label: '친구 만나기' },
@@ -103,6 +110,12 @@ const worldChoices = [
   { icon: '🏕️', name: '탐험과 모험' },
   { icon: '🎵', name: '음악과 춤' },
 ] as const;
+const adventureReactions: Record<AdventureTrait, string> = {
+  kindness: '마음이 몽글몽글해졌어!',
+  curiosity: '숨은 비밀을 찾았어!',
+  courage: '좋아, 내가 먼저 가 볼게!',
+  creativity: '새로운 길이 떠올랐어!',
+};
 
 async function readJson<T>(response: Response): Promise<T | null> {
   if (!response.headers.get('content-type')?.includes('application/json'))
@@ -185,6 +198,9 @@ export default function Home() {
   const [step, setStep] = useState<Step>('welcome');
   const [image, setImage] = useState<string | null>(null);
   const [generated, setGenerated] = useState<string[]>([]);
+  const [generatedQuality, setGeneratedQuality] = useState<
+    Array<CharacterQuality | null>
+  >([]);
   const [generating, setGenerating] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
   const [generationNote, setGenerationNote] = useState('');
@@ -218,6 +234,10 @@ export default function Home() {
   const [choiceResult, setChoiceResult] = useState<AdventureDecision | null>(
     null,
   );
+  const [adventureScore, setAdventureScore] = useState(0);
+  const [adventureCombo, setAdventureCombo] = useState(0);
+  const [lastPoints, setLastPoints] = useState(0);
+  const [soundOn, setSoundOn] = useState(true);
   const [storybook, setStorybook] = useState<string[][] | null>(null);
   const [storybookImage, setStorybookImage] = useState<string | null>(null);
   const [storybookTheme, setStorybookTheme] = useState(0);
@@ -296,6 +316,7 @@ export default function Home() {
         // Re-encoding keeps uploads light and strips camera metadata before transmission.
         setImage(canvas.toDataURL('image/jpeg', 0.88));
         setGenerated([]);
+        setGeneratedQuality([]);
         setGenerationNote('');
         setPick(0);
         setScene(0);
@@ -303,6 +324,9 @@ export default function Home() {
         setPage(0);
         setAdventureTrail([]);
         setChoiceResult(null);
+        setAdventureScore(0);
+        setAdventureCombo(0);
+        setLastPoints(0);
         setStorybook(null);
         setStorybookImage(null);
         setStorybookTheme(0);
@@ -418,10 +442,14 @@ export default function Home() {
       body: form,
       signal,
     });
-    const data = await readJson<{ image?: string; error?: string }>(response);
+    const data = await readJson<{
+      image?: string;
+      error?: string;
+      quality?: CharacterQuality;
+    }>(response);
     if (!response.ok || !data?.image)
       throw new Error(apiErrorMessage(response, data?.error));
-    return { index, image: data.image };
+    return { index, image: data.image, quality: data.quality || null };
   };
   const generateCharacter = async () => {
     if (!image || generating) return;
@@ -438,9 +466,14 @@ export default function Home() {
       const images = Array.from<string>({ length: characterStyleCount }).fill(
         '',
       );
+      const qualities = Array.from<CharacterQuality | null>({
+        length: characterStyleCount,
+      }).fill(null);
       for (const result of settled)
-        if (result.status === 'fulfilled')
+        if (result.status === 'fulfilled') {
           images[result.value.index] = result.value.image;
+          qualities[result.value.index] = result.value.quality;
+        }
       const successCount = images.filter(Boolean).length;
       if (!successCount) {
         const firstFailure = settled.find(
@@ -452,10 +485,11 @@ export default function Home() {
           : new Error('캐릭터 변환을 완료하지 못했어요. 다시 시도해 주세요.');
       }
       setGenerated(images);
+      setGeneratedQuality(qualities);
       setPick(Math.max(0, images.findIndex(Boolean)));
       setGenerationNote(
         successCount === characterStyleCount
-          ? '그림의 특징을 살린 세 친구가 태어났어요!'
+          ? '그림의 특징을 살리고 귀여움 검수까지 마친 세 친구가 태어났어요!'
           : `${successCount}개의 모습을 먼저 완성했어요. 마음에 드는 친구를 골라 주세요.`,
       );
       setStep('character');
@@ -490,6 +524,11 @@ export default function Home() {
           index === result.index ? result.image : item,
         ),
       );
+      setGeneratedQuality((previous) => {
+        const next = [...previous];
+        next[result.index] = result.quality;
+        return next;
+      });
       setGenerationNote(
         `${characterStyles[pick].name}을 취향에 맞춰 새로 완성했어요!`,
       );
@@ -586,6 +625,53 @@ export default function Home() {
       ],
     ];
   };
+  const resetAdventureGame = () => {
+    setAdventureScore(0);
+    setAdventureCombo(0);
+    setLastPoints(0);
+  };
+  const playAdventureChime = (trait: AdventureTrait) => {
+    if (!soundOn) return;
+    try {
+      const AudioContextClass =
+        window.AudioContext ||
+        (
+          window as typeof window & {
+            webkitAudioContext?: typeof AudioContext;
+          }
+        ).webkitAudioContext;
+      if (!AudioContextClass) return;
+      const audioContext = new AudioContextClass();
+      const start = audioContext.currentTime;
+      const baseFrequency: Record<AdventureTrait, number> = {
+        kindness: 523.25,
+        curiosity: 659.25,
+        courage: 440,
+        creativity: 783.99,
+      };
+      [1, 1.26, 1.5].forEach((ratio, index) => {
+        const oscillator = audioContext.createOscillator();
+        const gain = audioContext.createGain();
+        oscillator.type = index === 2 ? 'sine' : 'triangle';
+        oscillator.frequency.value = baseFrequency[trait] * ratio;
+        gain.gain.setValueAtTime(0.0001, start + index * 0.06);
+        gain.gain.exponentialRampToValueAtTime(
+          0.075,
+          start + index * 0.06 + 0.018,
+        );
+        gain.gain.exponentialRampToValueAtTime(
+          0.0001,
+          start + index * 0.06 + 0.24,
+        );
+        oscillator.connect(gain).connect(audioContext.destination);
+        oscillator.start(start + index * 0.06);
+        oscillator.stop(start + index * 0.06 + 0.25);
+      });
+      window.setTimeout(() => void audioContext.close(), 520);
+    } catch {
+      // Some mobile browsers only allow audio after additional interaction.
+    }
+  };
   const chooseAdventureAction = (choice: AdventureChoice) => {
     const decision: AdventureDecision = {
       ...choice,
@@ -596,6 +682,12 @@ export default function Home() {
     next[scene] = decision;
     setAdventureTrail(next);
     setChoiceResult(decision);
+    const points = 100 + scene * 25 + adventureCombo * 15;
+    setLastPoints(points);
+    setAdventureScore((current) => current + points);
+    setAdventureCombo((current) => current + 1);
+    playAdventureChime(choice.trait);
+    navigator.vibrate?.(choice.trait === 'courage' ? [35, 25, 45] : 28);
   };
   const continueAdventure = () => {
     if (!choiceResult) return;
@@ -617,6 +709,7 @@ export default function Home() {
   const currentEcho = previousDecision
     ? currentScene.echoes?.[previousDecision.trait]
     : null;
+  const activeReactionTrait = choiceResult?.trait || previousDecision?.trait;
   const recommendedAdventureId =
     favoriteWorld === '로봇과 우주'
       ? 'space'
@@ -633,6 +726,7 @@ export default function Home() {
     closeCamera();
     setImage(null);
     setGenerated([]);
+    setGeneratedQuality([]);
     setGenerating(false);
     setRegenerating(false);
     setGenerationNote('');
@@ -650,6 +744,7 @@ export default function Home() {
     setPage(0);
     setAdventureTrail([]);
     setChoiceResult(null);
+    resetAdventureGame();
     setStorybook(null);
     setStorybookImage(null);
     setStorybookTheme(0);
@@ -1188,6 +1283,13 @@ export default function Home() {
                 </span>
                 <b>{style.name}</b>
                 <small>{style.detail}</small>
+                {generatedQuality[i]?.checked && (
+                  <strong className="cute-pass">
+                    <Heart fill="currentColor" /> 귀여움 검수{' '}
+                    {generatedQuality[i]?.score ?? '완료'}점
+                    {generatedQuality[i]?.polished && <em>자동 보정</em>}
+                  </strong>
+                )}
               </button>
             ))}
           </div>
@@ -1338,6 +1440,7 @@ export default function Home() {
                   setScene(-1);
                   setAdventureTrail([]);
                   setChoiceResult(null);
+                  resetAdventureGame();
                   setStep('adventure');
                 }}
               >
@@ -1425,7 +1528,8 @@ export default function Home() {
             <h2>오늘은 어떤 이야기의 주인공이 될까요?</h2>
             <p>
               8개의 세계에서 고른 행동이 다음 장면과 마지막 결말을 바꿔요.
-              단서를 모아 우리만의 동화책을 완성해 보세요.
+              친구가 뛰고 돌며 반응하고 배경도 바뀌어요. 단서를 모아 우리만의
+              동화책을 완성해 보세요.
             </p>
             <img
               className="adventure-worlds"
@@ -1447,6 +1551,7 @@ export default function Home() {
                     setScene(0);
                     setAdventureTrail([]);
                     setChoiceResult(null);
+                    resetAdventureGame();
                     setStorybook(null);
                   }}
                 >
@@ -1483,9 +1588,29 @@ export default function Home() {
                   setScene(-1);
                   setAdventureTrail([]);
                   setChoiceResult(null);
+                  resetAdventureGame();
                 }}
               >
                 <Compass /> 다른 모험
+              </button>
+            </div>
+            <div className="game-hud" aria-label="모험 게임 정보">
+              <span>
+                <Star fill="currentColor" /> 반짝 점수
+                <b>{adventureScore.toLocaleString('ko-KR')}</b>
+              </span>
+              <span>
+                <Sparkles /> 연속 선택
+                <b>{adventureCombo} 콤보</b>
+              </span>
+              <button
+                type="button"
+                aria-pressed={soundOn}
+                aria-label={soundOn ? '효과음 끄기' : '효과음 켜기'}
+                onClick={() => setSoundOn((current) => !current)}
+              >
+                {soundOn ? <Volume2 /> : <VolumeX />}
+                {soundOn ? '효과음 켜짐' : '효과음 꺼짐'}
               </button>
             </div>
             <div className="adventure-trail" aria-label="모험 단서 모음">
@@ -1511,12 +1636,33 @@ export default function Home() {
                 choiceResult?.trait || previousDecision?.trait || 'start'
               } ${choiceResult ? 'scene-resolved' : ''}`}
             >
+              <div
+                className={`world-backdrop stage-${scene}`}
+                aria-hidden="true"
+              />
               <i className="moon">{activeAdventure.icon}</i>
               <i className="stars">✦　·　✧</i>
               <i className="scene-spark spark-one">✦</i>
               <i className="scene-spark spark-two">·</i>
-              <div className="scene-friend">
+              <div className="game-particles" aria-hidden="true">
+                <i>✦</i>
+                <i>●</i>
+                <i>✧</i>
+                <i>●</i>
+              </div>
+              <div
+                key={`${theme}-${scene}-${choiceResult?.trait || 'enter'}`}
+                className={`scene-friend game-friend reaction-${
+                  activeReactionTrait || 'start'
+                } ${choiceResult ? 'reacting' : 'entering'}`}
+              >
+                {activeReactionTrait && (
+                  <output className="reaction-bubble">
+                    {adventureReactions[activeReactionTrait]}
+                  </output>
+                )}
                 <Friend image={chosenImage} />
+                {choiceResult && <i className="reaction-burst">✦</i>}
               </div>
               <article>
                 <span>{currentScene.chapter}</span>
@@ -1545,6 +1691,9 @@ export default function Home() {
                   <p>
                     단서 획득 <b>{choiceResult.clue}</b>
                   </p>
+                  <strong className="score-pop">
+                    <Star fill="currentColor" /> +{lastPoints} 반짝
+                  </strong>
                   <Button onClick={continueAdventure}>
                     {scene === activeScenes.length - 1 ? (
                       <>
