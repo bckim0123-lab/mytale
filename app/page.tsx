@@ -7,6 +7,7 @@ import {
   traitMeta,
   type AdventureChoice,
   type AdventureDecision,
+  type AdventureStory,
   type AdventureTrait,
 } from './adventures';
 import {
@@ -22,6 +23,9 @@ import {
   LockKeyhole,
   MessageCircle,
   Palette,
+  Pause,
+  Play,
+  Printer,
   RefreshCw,
   RotateCcw,
   Send,
@@ -53,6 +57,17 @@ type CharacterQuality = {
   passed?: boolean | null;
   polished: boolean;
 };
+type StoryPage = {
+  kind: 'cover' | 'intro' | 'scene' | 'ending';
+  eyebrow: string;
+  title: string;
+  body: string;
+  quote?: string;
+  clue?: string;
+  trait?: AdventureTrait;
+  sceneIndex?: number;
+};
+type BookDirection = 'next' | 'previous';
 const flow: { id: Step; label: string }[] = [
   { id: 'upload', label: '그림 올리기' },
   { id: 'character', label: '친구 만나기' },
@@ -172,6 +187,72 @@ function Friend({
     </div>
   );
 }
+function StorySpread({
+  storyPage,
+  adventure,
+  image,
+  pageNumber,
+  totalPages,
+  direction,
+}: {
+  storyPage: StoryPage;
+  adventure: AdventureStory;
+  image?: string | null;
+  pageNumber: number;
+  totalPages: number;
+  direction?: BookDirection;
+}) {
+  const sceneIndex = storyPage.sceneIndex ?? 0;
+  const trait = storyPage.trait || 'kindness';
+  return (
+    <article
+      className={`storybook-spread page-${storyPage.kind} trait-${trait} ${
+        direction ? `turn-${direction}` : ''
+      }`}
+      aria-label={`${storyPage.eyebrow}: ${storyPage.title}`}
+    >
+      <div className="story-illustration">
+        <div
+          className={`story-world stage-${sceneIndex}`}
+          aria-hidden="true"
+        />
+        <span className="story-emblem" aria-hidden="true">
+          {adventure.icon}
+        </span>
+        <i className="storybook-spark spark-a" aria-hidden="true">
+          ✦
+        </i>
+        <i className="storybook-spark spark-b" aria-hidden="true">
+          ·
+        </i>
+        <div className="story-character">
+          <Friend image={image} />
+        </div>
+        {storyPage.clue && (
+          <span className="clue-sticker">
+            <i>{traitMeta[trait].icon}</i>
+            <b>{storyPage.clue}</b>
+          </span>
+        )}
+      </div>
+      <div className="story-copy">
+        {storyPage.kind === 'cover' && (
+          <span className="cover-label">우리 가족 창작 동화</span>
+        )}
+        <small>{storyPage.eyebrow}</small>
+        <h3>{storyPage.title}</h3>
+        <p>{storyPage.body}</p>
+        {storyPage.quote && <blockquote>“{storyPage.quote}”</blockquote>}
+        <footer>
+          <span>그림친구 동화책</span>
+          <b>
+            {pageNumber} / {totalPages}
+          </b>
+        </footer>
+      </div>
+    </article>
+  );
+}
 function Button({
   children,
   onClick,
@@ -238,9 +319,11 @@ export default function Home() {
   const [adventureCombo, setAdventureCombo] = useState(0);
   const [lastPoints, setLastPoints] = useState(0);
   const [soundOn, setSoundOn] = useState(true);
-  const [storybook, setStorybook] = useState<string[][] | null>(null);
+  const [storybook, setStorybook] = useState<StoryPage[] | null>(null);
   const [storybookImage, setStorybookImage] = useState<string | null>(null);
   const [storybookTheme, setStorybookTheme] = useState(0);
+  const [bookDirection, setBookDirection] = useState<BookDirection>('next');
+  const [readingAloud, setReadingAloud] = useState(false);
   const [persona, setPersona] = useState(defaultPersona);
   const [messages, setMessages] = useState<
     Array<{ role: 'user' | 'assistant'; content: string }>
@@ -268,6 +351,10 @@ export default function Home() {
   }, [messages, chatting]);
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (step !== 'book' && 'speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      queueMicrotask(() => setReadingAloud(false));
+    }
   }, [step]);
   useEffect(() => {
     if (cameraOpen && video.current && cameraStream.current) {
@@ -330,6 +417,8 @@ export default function Home() {
         setStorybook(null);
         setStorybookImage(null);
         setStorybookTheme(0);
+        setBookDirection('next');
+        setReadingAloud(false);
         setPersona(defaultPersona);
         setMessages([
           {
@@ -594,35 +683,58 @@ export default function Home() {
       score[item] >= score[winner] ? item : winner,
     );
   };
-  const buildStoryPages = (trail: AdventureDecision[]) => {
+  const buildStoryPages = (trail: AdventureDecision[]): StoryPage[] => {
     const dominantTrait = getDominantTrait(trail);
     const clues = trail.map((decision) => decision.clue).join(' · ');
     return [
-      [
-        '표지',
-        `${persona.name}와 ${activeAdventure.title}`,
-        `${age} 모험가의 선택으로 완성된 단 하나의 이야기`,
-      ],
-      [
-        '친구 소개',
-        `안녕, 나는 ${persona.name}야!`,
-        `${persona.traits} 친구예요. ${persona.ability} 능력이 있고, ${persona.quirk}. 오늘은 우리 둘이 이야기의 길을 직접 골랐어요.`,
-      ],
+      {
+        kind: 'cover',
+        eyebrow: '표지',
+        title: `${persona.name}와 ${activeAdventure.title}`,
+        body: `${age} 모험가의 다섯 번의 선택으로 완성된, 세상에 단 하나뿐인 이야기`,
+        quote: `${persona.name}와 함께라면 어디든 이야기의 문이 열려요!`,
+        trait: dominantTrait,
+        sceneIndex: 0,
+      },
+      {
+        kind: 'intro',
+        eyebrow: '등장인물',
+        title: `안녕, 나는 ${persona.name}야!`,
+        body: `${persona.name}는 ${persona.traits} 친구예요. ${persona.ability} 능력을 가졌고, ${persona.quirk}. 어느 날, 우리 앞으로 아주 특별한 초대장이 날아왔어요.`,
+        quote: `오늘의 길은 네가 골라 줘. 나는 네 곁에서 함께 갈게!`,
+        trait: trail[0]?.trait || dominantTrait,
+        sceneIndex: 0,
+      },
       ...activeScenes.map((item, index) => {
         const decision = trail[index];
-        return [
-          item.chapter,
-          item.title,
-          decision
-            ? `${item.body} 우리는 “${decision.label}” 방법을 골랐어요. ${decision.result} 그리고 ‘${decision.clue}’ 단서를 얻었답니다.`
-            : item.body,
-        ];
+        const previous = index > 0 ? trail[index - 1] : null;
+        const echo = previous ? item.echoes?.[previous.trait] : null;
+        const bridge = echo ? `그때, ${echo}` : '';
+        return {
+          kind: 'scene' as const,
+          eyebrow: item.chapter,
+          title: item.title,
+          body: decision
+            ? `${item.body} ${bridge} 우리는 잠시 눈을 마주보고 ‘${decision.label}’ 방법을 골랐어요. ${decision.result}`
+            : `${item.body} ${bridge}`,
+          quote: decision
+            ? `${adventureReactions[decision.trait]} 이제 ${decision.clue}도 우리 편이야.`
+            : `${persona.name}와 함께 다음 길을 찾아볼까요?`,
+          clue: decision?.clue,
+          trait: decision?.trait || previous?.trait || dominantTrait,
+          sceneIndex: index,
+        };
       }),
-      [
-        '우리만의 결말',
-        `${traitMeta[dominantTrait].icon} ${traitMeta[dominantTrait].label}이 만든 마지막 장`,
-        `${activeAdventure.endings[dominantTrait]} 우리가 모은 단서는 ${clues || '아직 비어 있어요'}예요. ${persona.name}와 함께 ‘${activeAdventure.reward}’도 얻었답니다!`,
-      ],
+      {
+        kind: 'ending',
+        eyebrow: '그리고 오래오래 행복하게',
+        title: `${traitMeta[dominantTrait].icon} ${traitMeta[dominantTrait].label}이 만든 마지막 장`,
+        body: `${activeAdventure.endings[dominantTrait]} 우리가 모은 ${clues || '반짝이는 마음'}이 모두 이어지자, 이야기 하늘에 커다란 별자리가 떠올랐어요. ${persona.name}와 나는 ‘${activeAdventure.reward}’을 품에 안고 웃으며 집으로 돌아왔답니다.`,
+        quote: `이 이야기는 끝이 아니야. 다음 모험도 우리 선택으로 만들어 보자!`,
+        clue: activeAdventure.reward,
+        trait: dominantTrait,
+        sceneIndex: activeScenes.length - 1,
+      },
     ];
   };
   const resetAdventureGame = () => {
@@ -700,10 +812,46 @@ export default function Home() {
     setStorybookImage(chosenImage);
     setStorybookTheme(theme);
     setPage(0);
+    setBookDirection('next');
+    setReadingAloud(false);
     setChoiceResult(null);
     setStep('book');
   };
   const storyPages = storybook || buildStoryPages(adventureTrail);
+  const bookAdventure =
+    adventureStories[storybook ? storybookTheme : theme] || adventureStories[0];
+  const currentStoryPage =
+    storyPages[Math.min(page, Math.max(0, storyPages.length - 1))];
+  const moveBookPage = (nextPage: number) => {
+    const safePage = Math.max(0, Math.min(nextPage, storyPages.length - 1));
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+    setReadingAloud(false);
+    setBookDirection(safePage >= page ? 'next' : 'previous');
+    setPage(safePage);
+  };
+  const toggleReadAloud = () => {
+    if (!currentStoryPage || !('speechSynthesis' in window)) return;
+    window.speechSynthesis.cancel();
+    if (readingAloud) {
+      setReadingAloud(false);
+      return;
+    }
+    const utterance = new SpeechSynthesisUtterance(
+      `${currentStoryPage.title}. ${currentStoryPage.body}. ${
+        currentStoryPage.quote || ''
+      }`,
+    );
+    utterance.lang = 'ko-KR';
+    utterance.rate = age === '4–6세' ? 0.78 : age === '7–9세' ? 0.86 : 0.94;
+    const koreanVoice = window.speechSynthesis
+      .getVoices()
+      .find((voice) => voice.lang.toLowerCase().startsWith('ko'));
+    if (koreanVoice) utterance.voice = koreanVoice;
+    utterance.onend = () => setReadingAloud(false);
+    utterance.onerror = () => setReadingAloud(false);
+    setReadingAloud(true);
+    window.speechSynthesis.speak(utterance);
+  };
   const currentScene = activeScenes[Math.max(0, scene)];
   const previousDecision = scene > 0 ? adventureTrail[scene - 1] : null;
   const currentEcho = previousDecision
@@ -748,6 +896,8 @@ export default function Home() {
     setStorybook(null);
     setStorybookImage(null);
     setStorybookTheme(0);
+    setBookDirection('next');
+    setReadingAloud(false);
     setChatError('');
     setChatInput('');
     setMessages([
@@ -1694,10 +1844,21 @@ export default function Home() {
                   <strong className="score-pop">
                     <Star fill="currentColor" /> +{lastPoints} 반짝
                   </strong>
+                  <div className="storybook-preview">
+                    <BookOpen />
+                    <span>
+                      <b>동화책에 이렇게 남았어요</b>
+                      <q>
+                        우리는 ‘{choiceResult.label}’ 방법을 골랐어요.{' '}
+                        {choiceResult.result}
+                      </q>
+                    </span>
+                  </div>
                   <Button onClick={continueAdventure}>
                     {scene === activeScenes.length - 1 ? (
                       <>
-                        <BookOpen /> 우리만의 결말 보기 <ChevronRight />
+                        <BookOpen /> 표지를 열고 우리 동화 읽기{' '}
+                        <ChevronRight />
                       </>
                     ) : (
                       <>
@@ -1743,58 +1904,103 @@ export default function Home() {
         <section className="book">
           <div className="book-title">
             <span className="badge">
-              <BookOpen /> 모험 완성!
+              <BookOpen /> 세상에 한 권뿐인 동화
             </span>
-            <h2>우리의 선택이 동화책이 됐어요</h2>
-            <p>{persona.name}의 설정과 모험에서 고른 행동만 담았어요.</p>
+            <h2>우리의 선택이 진짜 동화책이 됐어요</h2>
+            <p>
+              장면마다 고른 행동과 모은 단서가 그대로 이어지는 우리만의
+              이야기예요.
+            </p>
+            <div className="book-achievement" aria-label="완성한 모험 기록">
+              <span>
+                <Star fill="currentColor" />
+                <b>{adventureScore.toLocaleString('ko-KR')}</b> 반짝
+              </span>
+              <span>
+                <Sparkles />
+                <b>{adventureTrail.length}</b>개 선택
+              </span>
+              <span>
+                <BookOpen />
+                <b>{bookAdventure.reward}</b>
+              </span>
+            </div>
           </div>
-          <div className="book-shell">
+          <div className="book-toolbar" aria-label="동화책 도구">
             <button
-              aria-label="이전 페이지"
-              disabled={page === 0}
-              onClick={() => setPage(page - 1)}
+              type="button"
+              className={readingAloud ? 'reading' : ''}
+              aria-pressed={readingAloud}
+              onClick={toggleReadAloud}
             >
-              <ArrowLeft />
+              {readingAloud ? <Pause /> : <Play />}
+              {readingAloud ? '낭독 멈추기' : '이 페이지 읽어 주기'}
             </button>
-            <article>
-              <small>{storyPages[page][0]}</small>
-              <div
-                className={`book-art theme-${adventureStories[storybook ? storybookTheme : theme].color}`}
+            <button type="button" onClick={() => window.print()}>
+              <Printer /> 인쇄·PDF로 간직하기
+            </button>
+          </div>
+          <div className={`storybook-stage theme-${bookAdventure.color}`}>
+            <div className="storybook-shell">
+              <button
+                className="page-arrow previous"
+                aria-label="이전 페이지"
+                disabled={page === 0}
+                onClick={() => moveBookPage(page - 1)}
               >
-                <i>
-                  {adventureStories[storybook ? storybookTheme : theme].icon}
-                </i>
-                <Friend image={storybookImage || chosenImage} />
-              </div>
-              <h3>{storyPages[page][1]}</h3>
-              <p>{storyPages[page][2]}</p>
-              <b>
-                {page + 1} / {storyPages.length}
-              </b>
-            </article>
-            <button
-              aria-label="다음 페이지"
-              disabled={page === storyPages.length - 1}
-              onClick={() => setPage(page + 1)}
-            >
-              <ChevronRight />
-            </button>
+                <ArrowLeft />
+              </button>
+              <StorySpread
+                key={`${page}-${bookDirection}`}
+                storyPage={currentStoryPage}
+                adventure={bookAdventure}
+                image={storybookImage || chosenImage}
+                pageNumber={page + 1}
+                totalPages={storyPages.length}
+                direction={bookDirection}
+              />
+              <button
+                className="page-arrow next"
+                aria-label="다음 페이지"
+                disabled={page === storyPages.length - 1}
+                onClick={() => moveBookPage(page + 1)}
+              >
+                <ChevronRight />
+              </button>
+            </div>
+          </div>
+          <div className="page-caption" aria-live="polite">
+            <span>{currentStoryPage.eyebrow}</span>
+            <b>{currentStoryPage.title}</b>
           </div>
           <div className="dots">
-            {storyPages.map((_, i) => (
+            {storyPages.map((storyPage, i) => (
               <button
-                aria-label={`${i + 1}페이지로 이동`}
+                aria-label={`${i + 1}페이지 ${storyPage.title}로 이동`}
                 aria-current={i === page ? 'page' : undefined}
                 className={i === page ? 'on' : ''}
-                key={i}
-                onClick={() => setPage(i)}
+                key={`${storyPage.kind}-${i}`}
+                onClick={() => moveBookPage(i)}
               />
             ))}
           </div>
           <div className="book-buttons">
-            <Button secondary onClick={() => setPage(0)}>
+            <Button secondary onClick={() => moveBookPage(0)}>
               <RotateCcw /> 처음부터 읽기
             </Button>
+            <button
+              className="button secondary"
+              onClick={() => {
+                setScene(0);
+                setAdventureTrail([]);
+                setChoiceResult(null);
+                resetAdventureGame();
+                setStorybook(null);
+                setStep('adventure');
+              }}
+            >
+              <Compass /> 같은 세계 다시 모험하기
+            </button>
             <Button
               onClick={() => {
                 setPreviousStep('book');
@@ -1803,6 +2009,21 @@ export default function Home() {
             >
               <ShieldCheck /> 보호자에게 보여주기
             </Button>
+          </div>
+          <div
+            className={`print-book theme-${bookAdventure.color}`}
+            aria-hidden="true"
+          >
+            {storyPages.map((storyPage, index) => (
+              <StorySpread
+                key={`print-${storyPage.kind}-${index}`}
+                storyPage={storyPage}
+                adventure={bookAdventure}
+                image={storybookImage || chosenImage}
+                pageNumber={index + 1}
+                totalPages={storyPages.length}
+              />
+            ))}
           </div>
         </section>
       )}
@@ -1832,7 +2053,7 @@ export default function Home() {
               <article>
                 <i>▤</i>
                 <span>
-                  <b>{storyPages[0][1]}</b>
+                  <b>{storyPages[0].title}</b>
                   <small>동화책 1권 · {storyPages.length}페이지</small>
                 </span>
                 <button onClick={() => setStep('book')}>읽기</button>
