@@ -971,6 +971,36 @@ header {
   border-color: var(--green);
   box-shadow: 0 0 0 4px #2f7b631a;
 }
+.candidates > button.status-generating,
+.candidates > button.status-queued {
+  border-color: #b9d8cb;
+  background: linear-gradient(145deg, #fffef9, #eef8f3);
+}
+.candidates > button.status-error {
+  border-color: #eab4a7;
+  background: linear-gradient(145deg, #fffefb, #fff2ed);
+}
+.priority-badge {
+  position: absolute;
+  z-index: 3;
+  top: 10px;
+  left: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 9px;
+  border-radius: 999px;
+  background: #2f7b63;
+  color: white;
+  box-shadow: 0 7px 18px #214c3d2e;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 900;
+}
+.priority-badge svg {
+  width: 12px;
+  height: 12px;
+}
 .candidates > button > span {
   height: 205px;
   border-radius: 17px;
@@ -997,6 +1027,27 @@ header {
 .candidates small {
   margin-top: 4px;
   color: var(--muted);
+}
+.candidates .candidate-status {
+  width: min(170px, 78%);
+  min-height: 74px;
+  margin: 0;
+  padding: 13px;
+  border: 1px dashed #a9cdbf;
+  border-radius: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: #426f60;
+  background: #ffffffb8;
+  line-height: 1.45;
+  text-align: center;
+  font-weight: 850;
+}
+.candidates .status-error .candidate-status {
+  border-color: #e0a798;
+  color: #9f4a39;
 }
 .cute-pass {
   width: fit-content;
@@ -1174,7 +1225,7 @@ header {
   color: var(--muted);
 }
 .candidates > button:disabled {
-  opacity: 0.45;
+  opacity: 0.78;
   cursor: not-allowed;
 }
 .persona-card {

@@ -60,10 +60,14 @@ function allowedPreference(
   return allowed.has(cleaned) ? cleaned : fallback;
 }
 
-function json(body: unknown, status = 200) {
+function json(
+  body: unknown,
+  status = 200,
+  headers: Record<string, string> = {},
+) {
   return Response.json(body, {
     status,
-    headers: { 'Cache-Control': 'no-store' },
+    headers: { 'Cache-Control': 'no-store', ...headers },
   });
 }
 
@@ -691,7 +695,8 @@ export async function POST(request: Request) {
         {
           error:
             '3D 스타일 기준 이미지를 안전하게 확인하지 못했어요. 화면을 새로고침한 뒤 다시 시도해 주세요.',
-          retryable: true,
+          code: 'invalid_style_reference',
+          retryable: false,
         },
         400,
       );
@@ -724,9 +729,16 @@ export async function POST(request: Request) {
         {
           error:
             '친구들이 숨을 고르고 있어요. 잠시 쉬었다가 다시 만들어 주세요.',
-          retryable: true,
+          code: 'rate_limited',
+          retryable: false,
+          retryAfterMs: Math.max(1000, recent[0] + 15 * 60_000 - now),
         },
         429,
+        {
+          'Retry-After': String(
+            Math.max(1, Math.ceil((recent[0] + 15 * 60_000 - now) / 1000)),
+          ),
+        },
       );
 
     const apiKey = process.env.OPENAI_API_KEY;
@@ -735,7 +747,8 @@ export async function POST(request: Request) {
         {
           error:
             '지금은 AI 캐릭터 만들기를 준비 중이에요. 잠시 뒤 다시 시도해 주세요.',
-          retryable: true,
+          code: 'service_unconfigured',
+          retryable: false,
         },
         503,
       );
@@ -815,9 +828,11 @@ export async function POST(request: Request) {
       return json(
         {
           error: '이 모습은 완성하지 못했어요. 다른 모습부터 보여 드릴게요.',
+          code: 'upstream_busy',
           retryable: true,
         },
         502,
+        { 'Retry-After': '2' },
       );
     }
     generationStage = 'audit-alpha';
@@ -843,7 +858,8 @@ export async function POST(request: Request) {
         {
           error:
             '캐릭터 배경을 깨끗하게 분리하지 못해 보여 주지 않았어요. 다시 만들면 새 모습으로 시도할게요.',
-          retryable: true,
+          code: 'alpha_failed',
+          retryable: false,
           ...(process.env.NODE_ENV !== 'production'
             ? {
                 audit: alpha,
@@ -881,7 +897,8 @@ export async function POST(request: Request) {
         {
           error:
             '귀여움 품질 검사를 끝내지 못해 이 모습은 보여 주지 않았어요. 다시 만들면 안전하게 새 모습으로 시도할게요.',
-          retryable: true,
+          code: 'quality_review_failed',
+          retryable: false,
         },
         502,
       );
@@ -968,7 +985,8 @@ export async function POST(request: Request) {
         {
           error:
             '이 모습은 귀여움 품질 기준을 통과하지 못해 보여 주지 않았어요. 다시 만들면 새 모습으로 시도할게요.',
-          retryable: true,
+          code: 'quality_failed',
+          retryable: false,
           ...(process.env.NODE_ENV !== 'production'
             ? {
                 quality: review,
@@ -1013,13 +1031,19 @@ export async function POST(request: Request) {
       generationStage,
       error instanceof Error ? error.message : 'unknown',
     );
+    const deadlineExceeded =
+      !request.signal.aborted &&
+      (error instanceof DOMException ||
+        (error instanceof Error && /timeout|timed out/i.test(error.message)));
     return json(
       {
         error:
           '캐릭터 변환을 완료하지 못했어요. 그림을 바꾸거나 잠시 뒤 다시 시도해 주세요.',
+        code: deadlineExceeded ? 'deadline_exceeded' : 'generation_failed',
         retryable: true,
       },
       502,
+      { 'Retry-After': '2' },
     );
   }
 }

@@ -67,6 +67,37 @@ type CharacterQuality = {
   transparent?: boolean;
   transparentRatio?: number;
 };
+type GenerationStatus = 'idle' | 'queued' | 'generating' | 'ready' | 'error';
+type CharacterErrorPayload = {
+  error?: string;
+  code?: string;
+  retryable?: boolean;
+  retryAfterMs?: number;
+};
+
+class CharacterRequestError extends Error {
+  status: number;
+  code?: string;
+  retryable: boolean;
+  retryAfterMs?: number;
+
+  constructor(
+    message: string,
+    options: {
+      status: number;
+      code?: string;
+      retryable: boolean;
+      retryAfterMs?: number;
+    },
+  ) {
+    super(message);
+    this.name = 'CharacterRequestError';
+    this.status = options.status;
+    this.code = options.code;
+    this.retryable = options.retryable;
+    this.retryAfterMs = options.retryAfterMs;
+  }
+}
 type AdventurePhase =
   | 'entering'
   | 'idle'
@@ -101,6 +132,7 @@ const flow: { id: Step; label: string }[] = [
   { id: 'book', label: '동화책' },
 ];
 const characterStyleCount = 3;
+const characterGenerationOrder = [2, 1, 0] as const;
 const characterStyles = [
   {
     name: '동화 그림친구',
@@ -177,6 +209,24 @@ async function readJson<T>(response: Response): Promise<T | null> {
   } catch {
     return null;
   }
+}
+
+function waitForRetry(ms: number, signal?: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException('Aborted', 'AbortError'));
+      return;
+    }
+    const timer = window.setTimeout(resolve, ms);
+    signal?.addEventListener(
+      'abort',
+      () => {
+        window.clearTimeout(timer);
+        reject(new DOMException('Aborted', 'AbortError'));
+      },
+      { once: true },
+    );
+  });
 }
 
 function apiErrorMessage(response: Response, fallback?: string) {
@@ -326,9 +376,13 @@ export default function Home() {
   const [generatedQuality, setGeneratedQuality] = useState<
     Array<CharacterQuality | null>
   >([]);
+  const [generationStatuses, setGenerationStatuses] = useState<
+    GenerationStatus[]
+  >([]);
   const [generating, setGenerating] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
   const [generationNote, setGenerationNote] = useState('');
+  const [generationFailed, setGenerationFailed] = useState(false);
   const [favoriteColor, setFavoriteColor] = useState(colorChoices[0].value);
   const [preserveFocus, setPreserveFocus] = useState(focusChoices[0]);
   const [characterWish, setCharacterWish] = useState('');
@@ -401,6 +455,8 @@ export default function Home() {
   const cameraRequest = useRef(0);
   const messagesEnd = useRef<HTMLDivElement>(null);
   const generationRequest = useRef<AbortController | null>(null);
+  const generationRun = useRef(0);
+  const styleReferenceBlob = useRef<Blob | null>(null);
   const chatRequest = useRef<AbortController | null>(null);
   const stageNode = useRef<HTMLDivElement>(null);
   const birthStageNode = useRef<HTMLElement>(null);
@@ -504,7 +560,10 @@ export default function Home() {
   const load = (file?: File) => {
     if (!file) return;
     generationRequest.current?.abort();
+    generationRun.current += 1;
     chatRequest.current?.abort();
+    setGenerating(false);
+    setRegenerating(false);
     const reader = new FileReader();
     reader.onload = () => {
       const source = new Image();
@@ -526,7 +585,9 @@ export default function Home() {
         setImage(canvas.toDataURL('image/jpeg', 0.88));
         setGenerated([]);
         setGeneratedQuality([]);
+        setGenerationStatuses([]);
         setGenerationNote('');
+        setGenerationFailed(false);
         setPick(0);
         setScene(0);
         setTheme(0);
@@ -640,148 +701,261 @@ export default function Home() {
     form.append('favoriteWorld', favoriteWorld);
     if (highQuality) form.append('qualityTier', 'high');
     if (index === 2) {
-      const referenceResponse = await fetch('/style-plush-3d-v2.png');
-      if (referenceResponse.ok) {
-        const reference = await referenceResponse.blob();
-        form.append('styleReference', reference, 'cute-3d-style-reference.png');
+      let reference = styleReferenceBlob.current;
+      if (!reference) {
+        const referenceResponse = await fetch('/style-plush-3d-v2.png', {
+          signal,
+        });
+        if (referenceResponse.ok) {
+          reference = await referenceResponse.blob();
+          styleReferenceBlob.current = reference;
+        }
       }
+      if (reference)
+        form.append('styleReference', reference, 'cute-3d-style-reference.png');
     }
     const response = await fetch('/api/character', {
       method: 'POST',
       body: form,
       signal,
     });
-    const data = await readJson<{
-      image?: string;
-      error?: string;
-      quality?: CharacterQuality;
-    }>(response);
-    if (!response.ok || !data?.image)
-      throw new Error(apiErrorMessage(response, data?.error));
+    const data = await readJson<
+      CharacterErrorPayload & {
+        image?: string;
+        quality?: CharacterQuality;
+      }
+    >(response);
+    if (!response.ok || !data?.image) {
+      const retryAfterSeconds = Number(response.headers.get('retry-after'));
+      throw new CharacterRequestError(apiErrorMessage(response, data?.error), {
+        status: response.status,
+        code: data?.code,
+        retryable:
+          data?.retryable ?? [429, 502, 503, 504].includes(response.status),
+        retryAfterMs:
+          data?.retryAfterMs ??
+          (Number.isFinite(retryAfterSeconds)
+            ? retryAfterSeconds * 1000
+            : undefined),
+      });
+    }
     return { index, image: data.image, quality: data.quality || null };
+  };
+  const requestVariantWithRetry = async (
+    blob: Blob,
+    index: number,
+    signal?: AbortSignal,
+    highQuality = false,
+    allowRetry = true,
+    onRetry?: () => void,
+  ) => {
+    try {
+      return await requestVariant(blob, index, signal, highQuality);
+    } catch (error) {
+      if (
+        !(error instanceof CharacterRequestError) ||
+        !error.retryable ||
+        !allowRetry ||
+        signal?.aborted
+      )
+        throw error;
+      onRetry?.();
+      setGenerationNote(
+        `${characterStyles[index].name}이 오는 길이 잠깐 붐벼요. 한 번만 다시 연결하고 있어요…`,
+      );
+      await waitForRetry(
+        Math.min(8000, Math.max(1400, error.retryAfterMs || 1800)),
+        signal,
+      );
+      return requestVariant(blob, index, signal, highQuality);
+    }
   };
   const generateCharacter = async () => {
     if (!image || generating) return;
     generationRequest.current?.abort();
     generationRequest.current = new AbortController();
+    const runId = ++generationRun.current;
+    const signal = generationRequest.current.signal;
     setGenerating(true);
-    setGenerationNote('그림의 색과 특별한 모양을 살펴보고 있어요…');
+    setGenerationFailed(false);
+    setGenerationNote('가장 포근한 보송 3D 친구를 먼저 만들고 있어요…');
     try {
       const blob = await fetch(image).then((r) => r.blob());
-      setGenerated(Array.from({ length: characterStyleCount }, () => ''));
-      setGeneratedQuality(
-        Array.from<CharacterQuality | null>({
-          length: characterStyleCount,
-        }).fill(null),
-      );
-      let revealedFirst = false;
-      const variants = Array.from({ length: characterStyleCount }, (_, index) =>
-        requestVariant(blob, index, generationRequest.current?.signal).then(
-          (result) => {
-            setGenerated((previous) => {
-              const next = [...previous];
-              next[result.index] = result.image;
-              return next;
-            });
-            setGeneratedQuality((previous) => {
-              const next = [...previous];
-              next[result.index] = result.quality;
-              return next;
-            });
-            if (!revealedFirst) {
-              revealedFirst = true;
-              setPick(result.index);
-              setGenerationNote(
-                '첫 친구가 도착했어요! 다른 모습도 품질 검사를 마치는 대로 옆에 나타나요.',
-              );
-              setStep((current) =>
-                current === 'upload' ? 'character' : current,
-              );
-            }
-            return result;
-          },
-        ),
-      );
-      const settled = await Promise.allSettled(variants);
-      const images = Array.from<string>({ length: characterStyleCount }).fill(
-        '',
-      );
-      const qualities = Array.from<CharacterQuality | null>({
+      let images = Array.from<string>({ length: characterStyleCount }).fill('');
+      let qualities = Array.from<CharacterQuality | null>({
         length: characterStyleCount,
       }).fill(null);
-      for (const result of settled)
-        if (result.status === 'fulfilled') {
-          images[result.value.index] = result.value.image;
-          qualities[result.value.index] = result.value.quality;
-        }
-      const successCount = images.filter(Boolean).length;
-      if (!successCount) {
-        const firstFailure = settled.find(
-          (result): result is PromiseRejectedResult =>
-            result.status === 'rejected',
-        );
-        throw firstFailure?.reason instanceof Error
-          ? firstFailure.reason
-          : new Error('캐릭터 변환을 완료하지 못했어요. 다시 시도해 주세요.');
-      }
+      let statuses = Array.from<GenerationStatus>({
+        length: characterStyleCount,
+      }).fill('queued');
       setGenerated(images);
       setGeneratedQuality(qualities);
+      setGenerationStatuses(statuses);
+      let revealedFirst = false;
+      let firstFailure: unknown;
+      let automaticRetryAvailable = true;
+      for (const [queueIndex, index] of characterGenerationOrder.entries()) {
+        if (signal.aborted || runId !== generationRun.current)
+          throw new DOMException('Aborted', 'AbortError');
+        statuses = statuses.map((status, itemIndex) =>
+          itemIndex === index ? 'generating' : status,
+        );
+        setGenerationStatuses(statuses);
+        setGenerationNote(
+          queueIndex === 0
+            ? '가장 포근한 보송 3D 친구를 먼저 만들고 있어요…'
+            : `첫 친구와 인사하는 동안 ${characterStyles[index].name}도 한 명씩 태어나고 있어요 · ${images.filter(Boolean).length}/3 완성`,
+        );
+        try {
+          const result = await requestVariantWithRetry(
+            blob,
+            index,
+            signal,
+            false,
+            revealedFirst && automaticRetryAvailable,
+            () => {
+              automaticRetryAvailable = false;
+            },
+          );
+          if (runId !== generationRun.current)
+            throw new DOMException('Aborted', 'AbortError');
+          images = images.map((item, itemIndex) =>
+            itemIndex === result.index ? result.image : item,
+          );
+          qualities = qualities.map((item, itemIndex) =>
+            itemIndex === result.index ? result.quality : item,
+          );
+          statuses = statuses.map((status, itemIndex) =>
+            itemIndex === result.index ? 'ready' : status,
+          );
+          setGenerated(images);
+          setGeneratedQuality(qualities);
+          setGenerationStatuses(statuses);
+          if (!revealedFirst) {
+            revealedFirst = true;
+            setPick(result.index);
+            setGenerationNote(
+              `${characterStyles[result.index].name}이 먼저 도착했어요! 지금 톡 눌러 인사해 보세요.`,
+            );
+            setStep((current) =>
+              current === 'upload' ? 'character' : current,
+            );
+          }
+        } catch (error) {
+          if (error instanceof DOMException && error.name === 'AbortError')
+            throw error;
+          firstFailure ??= error;
+          statuses = statuses.map((status, itemIndex) =>
+            itemIndex === index ? 'error' : status,
+          );
+          setGenerationStatuses(statuses);
+        }
+      }
+      const successCount = images.filter(Boolean).length;
+      if (!successCount) {
+        throw firstFailure instanceof Error
+          ? firstFailure
+          : new Error('캐릭터 변환을 완료하지 못했어요. 다시 시도해 주세요.');
+      }
       setGenerationNote(
         successCount === characterStyleCount
           ? '그림의 특징을 살리고 귀여움 검수까지 마친 세 친구가 태어났어요!'
-          : `${successCount}개의 모습을 먼저 완성했어요. 마음에 드는 친구를 골라 주세요.`,
+          : `${successCount}개의 모습을 완성했어요. 길을 잃은 모습은 카드를 눌러 다시 부를 수 있어요.`,
       );
       setStep((current) => (current === 'upload' ? 'character' : current));
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return;
+      if (runId !== generationRun.current) return;
+      setGenerationFailed(true);
       setGenerationNote(
         error instanceof Error
           ? error.message
           : '캐릭터 변환에 실패했어요. 다시 시도해 주세요.',
       );
     } finally {
-      setGenerating(false);
+      if (runId === generationRun.current) setGenerating(false);
     }
   };
-  const regenerateSelected = async () => {
+  const regenerateVariant = async (index: number, highQuality = false) => {
     if (!image || regenerating || generating) return;
     generationRequest.current?.abort();
     generationRequest.current = new AbortController();
+    const runId = ++generationRun.current;
     setRegenerating(true);
+    setGenerationFailed(false);
+    setGenerationStatuses((previous) => {
+      const next = Array.from<GenerationStatus>({
+        length: characterStyleCount,
+      }).map((_, itemIndex) => previous[itemIndex] || 'idle');
+      next[index] = 'generating';
+      return next;
+    });
     setGenerationNote(
-      `${characterStyles[pick].name}을 더 귀엽게 다시 만들고 있어요…`,
+      `${characterStyles[index].name}을 ${highQuality ? '더 귀엽고 선명하게' : '다시'} 만들고 있어요…`,
     );
     try {
       const blob = await fetch(image).then((response) => response.blob());
-      const result = await requestVariant(
+      const result = await requestVariantWithRetry(
         blob,
-        pick,
+        index,
         generationRequest.current.signal,
-        true,
+        highQuality,
       );
-      setGenerated((previous) =>
-        previous.map((item, index) =>
-          index === result.index ? result.image : item,
-        ),
-      );
+      if (runId !== generationRun.current) return;
+      setGenerated((previous) => {
+        const next = Array.from<string>({ length: characterStyleCount }).map(
+          (_, itemIndex) => previous[itemIndex] || '',
+        );
+        next[result.index] = result.image;
+        return next;
+      });
       setGeneratedQuality((previous) => {
-        const next = [...previous];
+        const next = Array.from<CharacterQuality | null>({
+          length: characterStyleCount,
+        }).map((_, itemIndex) => previous[itemIndex] || null);
         next[result.index] = result.quality;
         return next;
       });
+      setGenerationStatuses((previous) => {
+        const next = Array.from<GenerationStatus>({
+          length: characterStyleCount,
+        }).map((_, itemIndex) => previous[itemIndex] || 'idle');
+        next[result.index] = 'ready';
+        return next;
+      });
+      setPick(result.index);
       setGenerationNote(
-        `${characterStyles[pick].name}을 취향에 맞춰 새로 완성했어요!`,
+        `${characterStyles[index].name}을 취향에 맞춰 새로 완성했어요!`,
       );
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return;
+      if (runId !== generationRun.current) return;
+      setGenerationStatuses((previous) => {
+        const next = Array.from<GenerationStatus>({
+          length: characterStyleCount,
+        }).map((_, itemIndex) => previous[itemIndex] || 'idle');
+        next[index] = 'error';
+        return next;
+      });
       setGenerationNote(
         error instanceof Error
           ? error.message
           : '이 모습을 다시 만들지 못했어요. 잠시 뒤 시도해 주세요.',
       );
     } finally {
-      setRegenerating(false);
+      if (runId === generationRun.current) setRegenerating(false);
     }
+  };
+  const regenerateSelected = () => regenerateVariant(pick, true);
+  const stopCharacterGeneration = () => {
+    if (!generating && !regenerating) return;
+    generationRequest.current?.abort();
+    generationRun.current += 1;
+    setGenerating(false);
+    setRegenerating(false);
+    setGenerationStatuses((previous) =>
+      previous.map((status) => (status === 'ready' ? status : 'idle')),
+    );
   };
   const sendChat = async () => {
     const text = chatInput.trim();
@@ -1333,14 +1507,17 @@ export default function Home() {
             : 'dino';
   const reset = () => {
     generationRequest.current?.abort();
+    generationRun.current += 1;
     chatRequest.current?.abort();
     closeCamera();
     setImage(null);
     setGenerated([]);
     setGeneratedQuality([]);
+    setGenerationStatuses([]);
     setGenerating(false);
     setRegenerating(false);
     setGenerationNote('');
+    setGenerationFailed(false);
     setFavoriteColor(colorChoices[0].value);
     setPreserveFocus(focusChoices[0]);
     setCharacterWish('');
@@ -1818,11 +1995,12 @@ export default function Home() {
               <i />
               <span>{generationNote}</span>
               <small>
-                고화질 세 모습을 동시에 만들어요. 최대 3분 걸릴 수 있어요.
+                3D 친구가 도착하면 바로 만나요. 다른 모습은 뒤에서 한 명씩
+                차례로 만들어요.
               </small>
             </output>
           )}
-          {!generating && generationNote && (
+          {!generating && generationFailed && generationNote && (
             <div className="generation-error" role="alert">
               {generationNote}
             </div>
@@ -1838,7 +2016,9 @@ export default function Home() {
         <section className="center characters">
           <span className="badge">짜잔! 그림친구가 태어났어요</span>
           <h2>원본과 나란히 보며 골라요</h2>
-          <p>{generationNote}</p>
+          <p aria-live="polite" aria-atomic="true">
+            {generationNote}
+          </p>
           <div className="transform-proof">
             <article className="source-drawing">
               <small>아이의 원본 그림</small>
@@ -1902,46 +2082,72 @@ export default function Home() {
           </div>
           <h3 className="choose-title">가장 마음에 드는 모습을 골라 주세요</h3>
           <div className="candidates">
-            {characterStyles.map((style, i) => (
-              <button
-                disabled={!generated[i]}
-                className={pick === i ? 'selected' : ''}
-                key={style.name}
-                onClick={() => setPick(i)}
-              >
-                {pick === i && (
-                  <i className="check">
-                    <Check />
-                  </i>
-                )}
-                <span>
-                  {generated[i] ? (
-                    <Friend image={generated[i]} variant={`v${i}`} />
-                  ) : (
-                    <small>
-                      {generating ? '친구가' : '이번에는'}
-                      <br />
-                      {generating ? '오는 중…' : '완성하지 못했어요'}
-                    </small>
+            {characterGenerationOrder.map((i) => {
+              const style = characterStyles[i];
+              const status = generationStatuses[i] || 'idle';
+              const waitingForCurrent =
+                !generated[i] && (generating || regenerating);
+              return (
+                <button
+                  type="button"
+                  disabled={waitingForCurrent}
+                  className={`${pick === i && generated[i] ? 'selected' : ''} status-${status}`}
+                  key={style.name}
+                  aria-label={
+                    generated[i]
+                      ? `${style.name} 선택하기`
+                      : `${style.name}만 다시 만들기`
+                  }
+                  onClick={() =>
+                    generated[i] ? setPick(i) : void regenerateVariant(i, false)
+                  }
+                >
+                  {i === 2 && (
+                    <em className="priority-badge">
+                      <Sparkles /> 3D 추천 · 먼저 완성
+                    </em>
                   )}
-                </span>
-                <b>{style.name}</b>
-                <small>{style.detail}</small>
-                {generatedQuality[i]?.transparent && (
-                  <strong className="alpha-pass">
-                    <Check /> 진짜 투명 배경 검증
-                  </strong>
-                )}
-                {generatedQuality[i]?.checked &&
-                  generatedQuality[i]?.passed && (
-                    <strong className="cute-pass">
-                      <Heart fill="currentColor" /> 귀여움 검수{' '}
-                      {generatedQuality[i]?.score ?? '완료'}점
-                      {generatedQuality[i]?.polished && <em>자동 보정</em>}
+                  {pick === i && generated[i] && (
+                    <i className="check">
+                      <Check />
+                    </i>
+                  )}
+                  <span>
+                    {generated[i] ? (
+                      <Friend image={generated[i]} variant={`v${i}`} />
+                    ) : (
+                      <small className="candidate-status">
+                        {status === 'generating' && (
+                          <LoaderCircle className="spin" size={20} />
+                        )}
+                        {status === 'queued'
+                          ? '다음 차례를 기다리고 있어요'
+                          : status === 'generating'
+                            ? '지금 태어나는 중…'
+                            : status === 'error'
+                              ? '잠깐 길을 잃었어요 · 톡 눌러 다시 부르기'
+                              : '톡 눌러 이 모습 만들기'}
+                      </small>
+                    )}
+                  </span>
+                  <b>{style.name}</b>
+                  <small>{style.detail}</small>
+                  {generatedQuality[i]?.transparent && (
+                    <strong className="alpha-pass">
+                      <Check /> 진짜 투명 배경 검증
                     </strong>
                   )}
-              </button>
-            ))}
+                  {generatedQuality[i]?.checked &&
+                    generatedQuality[i]?.passed && (
+                      <strong className="cute-pass">
+                        <Heart fill="currentColor" /> 귀여움 검수{' '}
+                        {generatedQuality[i]?.score ?? '완료'}점
+                        {generatedQuality[i]?.polished && <em>자동 보정</em>}
+                      </strong>
+                    )}
+                </button>
+              );
+            })}
           </div>
           <div className="regenerate-row">
             <Button
@@ -1961,7 +2167,9 @@ export default function Home() {
             <button
               type="button"
               onClick={() => {
+                stopCharacterGeneration();
                 setGenerationNote('');
+                setGenerationFailed(false);
                 setStep('upload');
               }}
             >
@@ -2033,6 +2241,7 @@ export default function Home() {
           </div>
           <Button
             onClick={() => {
+              stopCharacterGeneration();
               setMessages([
                 {
                   role: 'assistant',

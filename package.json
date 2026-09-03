@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit",
     "test:safety": "node scripts/safety-smoke.mjs",
     "test:adventure": "node scripts/adventure-smoke.mjs",
-    "quality": "npm run typecheck && npm run build && npm run test:safety && npm run test:adventure",
+    "test:generation": "node scripts/generation-smoke.mjs",
+    "quality": "npm run typecheck && npm run build && npm run test:safety && npm run test:adventure && npm run test:generation",
     "start": "wrangler dev --config dist/server/wrangler.json",
     "lint": "oxlint",
     "format": "oxfmt"
