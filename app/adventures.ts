@@ -226,6 +226,12 @@ export const adventureStories: AdventureStory[] = [
             '용기의 달북',
             'courage',
           ),
+          c(
+            '모은 단서로 새 달빛을 만든다',
+            '지도와 노래와 별빛이 합쳐져 세상에 없던 달빛 모양이 태어났어요.',
+            '상상의 달빛 조각',
+            'creativity',
+          ),
         ],
       },
     ],

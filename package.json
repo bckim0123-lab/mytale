@@ -11,7 +11,8 @@
     "build:vercel": "vite build",
     "typecheck": "tsc --noEmit",
     "test:safety": "node scripts/safety-smoke.mjs",
-    "quality": "npm run typecheck && npm run build && npm run test:safety",
+    "test:adventure": "node scripts/adventure-smoke.mjs",
+    "quality": "npm run typecheck && npm run build && npm run test:safety && npm run test:adventure",
     "start": "wrangler dev --config dist/server/wrangler.json",
     "lint": "oxlint",
     "format": "oxfmt"

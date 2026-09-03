@@ -11,6 +11,14 @@ import {
   type AdventureTrait,
 } from './adventures';
 import {
+  clueGlyph,
+  guideGlyph,
+  questOrder,
+  questPositionsForChoice,
+  questTargetCount,
+  sceneQuests,
+} from './adventure-play';
+import {
   ArrowLeft,
   BookOpen,
   Camera,
@@ -59,7 +67,13 @@ type CharacterQuality = {
   transparent?: boolean;
   transparentRatio?: number;
 };
-type AdventurePhase = 'entering' | 'idle' | 'acting' | 'resolved' | 'exiting';
+type AdventurePhase =
+  | 'entering'
+  | 'idle'
+  | 'playing'
+  | 'acting'
+  | 'resolved'
+  | 'exiting';
 type StoryPage = {
   kind: 'cover' | 'intro' | 'scene' | 'ending';
   eyebrow: string;
@@ -71,6 +85,14 @@ type StoryPage = {
   sceneIndex?: number;
 };
 type BookDirection = 'next' | 'previous';
+type SavedStorybook = {
+  id: string;
+  pages: StoryPage[];
+  trail: AdventureDecision[];
+  image: string | null;
+  theme: number;
+  title: string;
+};
 const flow: { id: Step; label: string }[] = [
   { id: 'upload', label: '그림 올리기' },
   { id: 'character', label: '친구 만나기' },
@@ -140,6 +162,12 @@ const adventureActionEffects: Record<AdventureTrait, string> = {
   courage: '무대를 가로질러 달리고 길이 활짝 열려요',
   creativity: '빛의 궤적을 그려 새로운 길을 만들어요',
 };
+const birthReactions = [
+  '“안녕! 나를 톡 누르면 움직일 수 있어!”',
+  '“간질간질! 네 손길이 느껴졌어.”',
+  '“폴짝! 우리 모험을 시작해 볼까?”',
+  '“빙글— 네 그림에서 태어난 게 정말 좋아!”',
+] as const;
 
 async function readJson<T>(response: Response): Promise<T | null> {
   if (!response.headers.get('content-type')?.includes('application/json'))
@@ -333,12 +361,26 @@ export default function Home() {
   );
   const [adventurePhase, setAdventurePhase] =
     useState<AdventurePhase>('entering');
+  const [pendingChoice, setPendingChoice] = useState<AdventureChoice | null>(
+    null,
+  );
+  const [previewTrait, setPreviewTrait] = useState<AdventureTrait | null>(null);
+  const [questHits, setQuestHits] = useState<number[]>([]);
+  const [questWarmth, setQuestWarmth] = useState(0);
+  const [questHintTarget, setQuestHintTarget] = useState<number | null>(null);
+  const [questMessage, setQuestMessage] = useState('');
+  const [showAllYoungChoices, setShowAllYoungChoices] = useState(false);
+  const [actorGesture, setActorGesture] = useState(0);
+  const [actorPetted, setActorPetted] = useState(false);
+  const [birthReaction, setBirthReaction] = useState(0);
   const [soundOn, setSoundOn] = useState(true);
   const [storybook, setStorybook] = useState<StoryPage[] | null>(null);
   const [storybookImage, setStorybookImage] = useState<string | null>(null);
   const [storybookTheme, setStorybookTheme] = useState(0);
   const [bookDirection, setBookDirection] = useState<BookDirection>('next');
   const [readingAloud, setReadingAloud] = useState(false);
+  const [adventureSpeaking, setAdventureSpeaking] = useState(false);
+  const [savedStorybooks, setSavedStorybooks] = useState<SavedStorybook[]>([]);
   const [persona, setPersona] = useState(defaultPersona);
   const [messages, setMessages] = useState<
     Array<{ role: 'user' | 'assistant'; content: string }>
@@ -360,6 +402,16 @@ export default function Home() {
   const messagesEnd = useRef<HTMLDivElement>(null);
   const generationRequest = useRef<AbortController | null>(null);
   const chatRequest = useRef<AbortController | null>(null);
+  const stageNode = useRef<HTMLDivElement>(null);
+  const birthStageNode = useRef<HTMLElement>(null);
+  const parallaxFrame = useRef<number | null>(null);
+  const actionFallbackTimer = useRef<number | null>(null);
+  const questCommitTimer = useRef<number | null>(null);
+  const questHintTimer = useRef<number | null>(null);
+  const questFinishing = useRef(false);
+  const petTimer = useRef<number | null>(null);
+  const transitionTimer = useRef<number | null>(null);
+  const transitionPending = useRef(false);
   const flowIndex = flow.findIndex((x) => x.id === step);
   useEffect(() => {
     messagesEnd.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -370,6 +422,7 @@ export default function Home() {
       window.speechSynthesis.cancel();
       queueMicrotask(() => setReadingAloud(false));
     }
+    if (step !== 'adventure') queueMicrotask(() => setAdventureSpeaking(false));
   }, [step]);
   useEffect(() => {
     if (cameraOpen && video.current && cameraStream.current) {
@@ -400,6 +453,54 @@ export default function Home() {
     const timer = window.setTimeout(() => setAdventurePhase('idle'), 900);
     return () => window.clearTimeout(timer);
   }, [adventurePhase, scene, step]);
+  useEffect(() => {
+    if (step !== 'adventure' || scene < 0) return;
+    queueMicrotask(() => {
+      setPendingChoice(null);
+      setPreviewTrait(null);
+      setQuestHits([]);
+      setQuestWarmth(0);
+      setQuestHintTarget(null);
+      setQuestMessage('');
+      setShowAllYoungChoices(false);
+    });
+  }, [scene, step, theme]);
+  useEffect(() => {
+    if (step !== 'adventure' || scene < 0 || adventurePhase === 'exiting')
+      return;
+    const interval = window.setInterval(
+      () => setActorGesture((current) => (current + 1) % 3),
+      4600,
+    );
+    return () => window.clearInterval(interval);
+  }, [adventurePhase, scene, step]);
+  useEffect(() => {
+    if (adventurePhase !== 'acting') return;
+    const reducedMotion = window.matchMedia(
+      '(prefers-reduced-motion: reduce)',
+    ).matches;
+    actionFallbackTimer.current = window.setTimeout(
+      () => setAdventurePhase('resolved'),
+      reducedMotion ? 220 : 2050,
+    );
+    return () => {
+      if (actionFallbackTimer.current)
+        window.clearTimeout(actionFallbackTimer.current);
+    };
+  }, [adventurePhase]);
+  useEffect(
+    () => () => {
+      if (parallaxFrame.current) cancelAnimationFrame(parallaxFrame.current);
+      if (actionFallbackTimer.current)
+        window.clearTimeout(actionFallbackTimer.current);
+      if (questCommitTimer.current)
+        window.clearTimeout(questCommitTimer.current);
+      if (questHintTimer.current) window.clearTimeout(questHintTimer.current);
+      if (petTimer.current) window.clearTimeout(petTimer.current);
+      if (transitionTimer.current) window.clearTimeout(transitionTimer.current);
+    },
+    [],
+  );
   const load = (file?: File) => {
     if (!file) return;
     generationRequest.current?.abort();
@@ -438,6 +539,8 @@ export default function Home() {
         setStorybookTheme(0);
         setBookDirection('next');
         setReadingAloud(false);
+        setAdventureSpeaking(false);
+        setSavedStorybooks([]);
         setPersona(defaultPersona);
         setMessages([
           {
@@ -788,6 +891,20 @@ export default function Home() {
     ];
   };
   const resetAdventureGame = () => {
+    if (actionFallbackTimer.current)
+      window.clearTimeout(actionFallbackTimer.current);
+    if (questCommitTimer.current) window.clearTimeout(questCommitTimer.current);
+    if (questHintTimer.current) window.clearTimeout(questHintTimer.current);
+    if (transitionTimer.current) window.clearTimeout(transitionTimer.current);
+    transitionPending.current = false;
+    questFinishing.current = false;
+    setPendingChoice(null);
+    setPreviewTrait(null);
+    setQuestHits([]);
+    setQuestWarmth(0);
+    setQuestHintTarget(null);
+    setQuestMessage('');
+    setShowAllYoungChoices(false);
     setAdventurePhase('entering');
   };
   const playAdventureChime = (trait: AdventureTrait) => {
@@ -832,7 +949,106 @@ export default function Home() {
       // Some mobile browsers only allow audio after additional interaction.
     }
   };
-  const chooseAdventureAction = (choice: AdventureChoice) => {
+  const playQuestTone = (stepIndex: number, complete = false) => {
+    if (!soundOn) return;
+    try {
+      const AudioContextClass =
+        window.AudioContext ||
+        (
+          window as typeof window & {
+            webkitAudioContext?: typeof AudioContext;
+          }
+        ).webkitAudioContext;
+      if (!AudioContextClass) return;
+      const audioContext = new AudioContextClass();
+      const start = audioContext.currentTime;
+      const frequencies = complete
+        ? [523.25, 659.25, 783.99]
+        : [329.63 + stepIndex * 42];
+      frequencies.forEach((frequency, index) => {
+        const oscillator = audioContext.createOscillator();
+        const gain = audioContext.createGain();
+        oscillator.type = complete ? 'sine' : 'triangle';
+        oscillator.frequency.value = frequency;
+        gain.gain.setValueAtTime(0.0001, start + index * 0.075);
+        gain.gain.exponentialRampToValueAtTime(
+          complete ? 0.065 : 0.045,
+          start + index * 0.075 + 0.012,
+        );
+        gain.gain.exponentialRampToValueAtTime(
+          0.0001,
+          start + index * 0.075 + 0.22,
+        );
+        oscillator.connect(gain).connect(audioContext.destination);
+        oscillator.start(start + index * 0.075);
+        oscillator.stop(start + index * 0.075 + 0.24);
+      });
+      window.setTimeout(() => void audioContext.close(), 620);
+    } catch {
+      // Audio is a duplicate reward; the visual game remains fully usable.
+    }
+  };
+  const updateStageParallax = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (
+      adventurePhase === 'acting' ||
+      adventurePhase === 'exiting' ||
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    )
+      return;
+    const node = stageNode.current;
+    if (!node) return;
+    const rect = node.getBoundingClientRect();
+    const x = Math.max(
+      -1,
+      Math.min(1, ((event.clientX - rect.left) / rect.width - 0.5) * 2),
+    );
+    const y = Math.max(
+      -1,
+      Math.min(1, ((event.clientY - rect.top) / rect.height - 0.5) * 2),
+    );
+    if (parallaxFrame.current) cancelAnimationFrame(parallaxFrame.current);
+    parallaxFrame.current = requestAnimationFrame(() => {
+      node.style.setProperty('--far-x', `${x * -5}px`);
+      node.style.setProperty('--mid-x', `${x * -11}px`);
+      node.style.setProperty('--near-x', `${x * -18}px`);
+      node.style.setProperty('--parallax-y', `${y * -6}px`);
+      node.style.setProperty('--inverse-parallax-y', `${y * 6}px`);
+      node.style.setProperty('--look-x', `${x * 8}px`);
+      node.style.setProperty('--look-y', `${y * 3}px`);
+      node.style.setProperty('--look-rotate', `${x * 2.4}deg`);
+      node.style.setProperty('--spot-x', `${(x + 1) * 50}%`);
+      node.style.setProperty('--spot-y', `${(y + 1) * 34 + 12}%`);
+    });
+  };
+  const resetStageParallax = () => {
+    const node = stageNode.current;
+    if (!node) return;
+    node.style.setProperty('--far-x', '0px');
+    node.style.setProperty('--mid-x', '0px');
+    node.style.setProperty('--near-x', '0px');
+    node.style.setProperty('--parallax-y', '0px');
+    node.style.setProperty('--inverse-parallax-y', '0px');
+    node.style.setProperty('--look-x', '0px');
+    node.style.setProperty('--look-y', '0px');
+    node.style.setProperty('--look-rotate', '0deg');
+    node.style.setProperty('--spot-x', '62%');
+    node.style.setProperty('--spot-y', '45%');
+  };
+  const touchBirthCharacter = () => {
+    setBirthReaction((current) => current + 1);
+    navigator.vibrate?.(20);
+    playQuestTone(birthReaction % 4, birthReaction % 4 === 3);
+  };
+  const petAdventureCharacter = () => {
+    if (adventurePhase === 'acting' || adventurePhase === 'exiting') return;
+    if (petTimer.current) window.clearTimeout(petTimer.current);
+    setActorPetted(false);
+    requestAnimationFrame(() => setActorPetted(true));
+    navigator.vibrate?.(18);
+    playQuestTone(1);
+    petTimer.current = window.setTimeout(() => setActorPetted(false), 900);
+  };
+  const commitAdventureAction = (choice: AdventureChoice) => {
     const decision: AdventureDecision = {
       ...choice,
       chapter: activeScenes[scene].chapter,
@@ -842,31 +1058,167 @@ export default function Home() {
     next[scene] = decision;
     setAdventureTrail(next);
     setChoiceResult(decision);
+    setPendingChoice(null);
+    setPreviewTrait(null);
     setAdventurePhase('acting');
     playAdventureChime(choice.trait);
     navigator.vibrate?.(choice.trait === 'courage' ? [35, 25, 45] : 28);
-    window.setTimeout(() => setAdventurePhase('resolved'), 1750);
+  };
+  const beginAdventureChoice = (choice: AdventureChoice) => {
+    if (adventurePhase !== 'idle') return;
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+    setAdventureSpeaking(false);
+    questFinishing.current = false;
+    setPendingChoice(choice);
+    setPreviewTrait(choice.trait);
+    setQuestHits([]);
+    setQuestWarmth(0);
+    setQuestHintTarget(null);
+    setQuestMessage(`“${choice.label}” 방법을 직접 움직여 완성해 볼까요?`);
+    setAdventurePhase('playing');
+    playQuestTone(0);
+    navigator.vibrate?.(14);
+  };
+  const finishSceneQuest = (choice: AdventureChoice) => {
+    if (questFinishing.current) return;
+    questFinishing.current = true;
+    setQuestMessage(sceneQuests[scene % sceneQuests.length].success);
+    playQuestTone(4, true);
+    navigator.vibrate?.([22, 35, 22]);
+    questCommitTimer.current = window.setTimeout(
+      () => commitAdventureAction(choice),
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 120 : 620,
+    );
+  };
+  const touchQuestTarget = (targetIndex: number) => {
+    if (
+      !pendingChoice ||
+      adventurePhase !== 'playing' ||
+      questFinishing.current
+    )
+      return;
+    const quest = sceneQuests[scene % sceneQuests.length];
+    const count = questTargetCount(age);
+    if (questHits.includes(targetIndex)) return;
+    const order = questOrder(scene, count, pendingChoice.trait);
+    const ordered = quest.ordered && age !== '4–6세';
+    const expected = order[questHits.length];
+    if (ordered && targetIndex !== expected) {
+      setQuestHintTarget(expected);
+      setQuestMessage('거의 맞았어요! 더 환하게 두근거리는 빛부터 눌러 봐요.');
+      playQuestTone(0);
+      navigator.vibrate?.(10);
+      if (questHintTimer.current) window.clearTimeout(questHintTimer.current);
+      questHintTimer.current = window.setTimeout(
+        () => setQuestHintTarget(null),
+        1100,
+      );
+      return;
+    }
+    const nextHits = [...questHits, targetIndex];
+    setQuestHits(nextHits);
+    setQuestHintTarget(null);
+    setQuestMessage(
+      nextHits.length >= count
+        ? quest.success
+        : `${nextHits.length}개를 깨웠어요. 친구가 빛을 따라 움직여요!`,
+    );
+    playQuestTone(nextHits.length);
+    navigator.vibrate?.(14);
+    if (nextHits.length >= count) finishSceneQuest(pendingChoice);
+  };
+  const warmSceneHeart = (value: number) => {
+    if (
+      !pendingChoice ||
+      adventurePhase !== 'playing' ||
+      questFinishing.current
+    )
+      return;
+    const warmth = Math.max(0, Math.min(100, value));
+    setQuestWarmth(warmth);
+    setQuestMessage(
+      warmth >= 96
+        ? sceneQuests[3].success
+        : `따뜻한 빛이 ${warmth}%만큼 퍼졌어요. 천천히 더 보내 주세요.`,
+    );
+    if (warmth >= 96) {
+      setQuestWarmth(100);
+      finishSceneQuest(pendingChoice);
+    }
+  };
+  const completeQuestWithFriend = () => {
+    if (
+      !pendingChoice ||
+      adventurePhase !== 'playing' ||
+      questFinishing.current
+    )
+      return;
+    const count = questTargetCount(age);
+    if (scene % sceneQuests.length === 3) setQuestWarmth(100);
+    else setQuestHits(questOrder(scene, count, pendingChoice.trait));
+    setQuestMessage(
+      '함께하니 해냈어요! 이제 친구가 선택을 행동으로 보여 줘요.',
+    );
+    finishSceneQuest(pendingChoice);
+  };
+  const cancelPendingChoice = () => {
+    if (questCommitTimer.current) window.clearTimeout(questCommitTimer.current);
+    questFinishing.current = false;
+    setPendingChoice(null);
+    setPreviewTrait(null);
+    setQuestHits([]);
+    setQuestWarmth(0);
+    setQuestHintTarget(null);
+    setQuestMessage('');
+    setAdventurePhase('idle');
+  };
+  const completeActorAction = (event: React.AnimationEvent<HTMLDivElement>) => {
+    if (
+      adventurePhase !== 'acting' ||
+      event.target !== event.currentTarget ||
+      !event.animationName.includes('actor-')
+    )
+      return;
+    if (actionFallbackTimer.current)
+      window.clearTimeout(actionFallbackTimer.current);
+    setAdventurePhase('resolved');
+  };
+  const finishAdventureTransition = () => {
+    if (!transitionPending.current) return;
+    transitionPending.current = false;
+    if (transitionTimer.current) window.clearTimeout(transitionTimer.current);
+    if (scene < activeScenes.length - 1) {
+      setScene((current) => current + 1);
+      setChoiceResult(null);
+      setAdventurePhase('entering');
+      return;
+    }
+    const completedPages = buildStoryPages(adventureTrail);
+    const completedBook: SavedStorybook = {
+      id: `${Date.now()}-${theme}`,
+      pages: completedPages,
+      trail: [...adventureTrail],
+      image: chosenImage,
+      theme,
+      title: completedPages[0]?.title || activeAdventure.title,
+    };
+    setSavedStorybooks((current) => [...current, completedBook].slice(-4));
+    setStorybook(completedPages);
+    setStorybookImage(chosenImage);
+    setStorybookTheme(theme);
+    setPage(0);
+    setBookDirection('next');
+    setReadingAloud(false);
+    setAdventureSpeaking(false);
+    setChoiceResult(null);
+    setAdventurePhase('entering');
+    setStep('book');
   };
   const continueAdventure = () => {
     if (!choiceResult || adventurePhase !== 'resolved') return;
+    transitionPending.current = true;
     setAdventurePhase('exiting');
-    window.setTimeout(() => {
-      if (scene < activeScenes.length - 1) {
-        setScene((current) => current + 1);
-        setChoiceResult(null);
-        setAdventurePhase('entering');
-        return;
-      }
-      setStorybook(buildStoryPages(adventureTrail));
-      setStorybookImage(chosenImage);
-      setStorybookTheme(theme);
-      setPage(0);
-      setBookDirection('next');
-      setReadingAloud(false);
-      setChoiceResult(null);
-      setAdventurePhase('entering');
-      setStep('book');
-    }, 720);
+    transitionTimer.current = window.setTimeout(finishAdventureTransition, 820);
   };
   const storyPages = storybook || buildStoryPages(adventureTrail);
   const bookAdventure =
@@ -908,15 +1260,67 @@ export default function Home() {
   const currentEcho = previousDecision
     ? currentScene.echoes?.[previousDecision.trait]
     : null;
-  const activeReactionTrait = choiceResult?.trait || previousDecision?.trait;
+  const playableSceneIndex = Math.max(0, scene);
+  const currentQuest = sceneQuests[playableSceneIndex % sceneQuests.length];
+  const currentQuestTargetCount = questTargetCount(age);
+  const currentQuestOrder = questOrder(
+    playableSceneIndex,
+    currentQuestTargetCount,
+    pendingChoice?.trait,
+  );
+  const currentQuestPositions = questPositionsForChoice(
+    playableSceneIndex,
+    pendingChoice?.trait,
+  );
+  const currentQuestInstruction =
+    age === '4–6세' ? currentQuest.juniorInstruction : currentQuest.instruction;
+  const questProgress =
+    currentQuest.kind === 'comfort'
+      ? questWarmth / 100
+      : questHits.length / currentQuestTargetCount;
+  const liveTrait =
+    choiceResult?.trait || pendingChoice?.trait || previewTrait || null;
+  const activeReactionTrait =
+    choiceResult?.trait || pendingChoice?.trait || previousDecision?.trait;
   const visibleChoices =
-    age === '4–6세' ? currentScene.choices.slice(0, 2) : currentScene.choices;
+    age === '4–6세' && !showAllYoungChoices
+      ? currentScene.choices.slice(0, 2)
+      : currentScene.choices;
   const collectedClues = adventureTrail.filter(Boolean);
-  const currentStageClue = choiceResult?.clue || previousDecision?.clue;
+  const currentStageClue =
+    choiceResult?.clue || pendingChoice?.label || previousDecision?.clue;
+  const memoryClasses = collectedClues
+    .map((decision) => `memory-${decision.trait}`)
+    .join(' ');
+  const actorJourneyLeft = `${42 + Math.min(1, questProgress) * 14}%`;
+  const birthReactionCopy =
+    birthReactions[birthReaction % birthReactions.length];
   const sceneBody =
     age === '4–6세'
       ? `${currentScene.body.split(/[.!?]/)[0]}!`
       : currentScene.body;
+  const speakAdventureGuide = (text: string) => {
+    if (!('speechSynthesis' in window)) return;
+    window.speechSynthesis.cancel();
+    if (adventureSpeaking) {
+      setAdventureSpeaking(false);
+      return;
+    }
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = 'ko-KR';
+    utterance.rate = age === '4–6세' ? 0.76 : age === '7–9세' ? 0.86 : 0.94;
+    const koreanVoice = window.speechSynthesis
+      .getVoices()
+      .find((voice) => voice.lang.toLowerCase().startsWith('ko'));
+    if (koreanVoice) utterance.voice = koreanVoice;
+    utterance.onend = () => setAdventureSpeaking(false);
+    utterance.onerror = () => setAdventureSpeaking(false);
+    setAdventureSpeaking(true);
+    window.speechSynthesis.speak(utterance);
+  };
+  const sceneGuideText = `${currentScene.title}. ${sceneBody}. ${visibleChoices
+    .map((choice, index) => `${index + 1}번, ${choice.label}`)
+    .join('. ')}`;
   const recommendedAdventureId =
     favoriteWorld === '로봇과 우주'
       ? 'space'
@@ -957,6 +1361,8 @@ export default function Home() {
     setStorybookTheme(0);
     setBookDirection('next');
     setReadingAloud(false);
+    setAdventureSpeaking(false);
+    setSavedStorybooks([]);
     setChatError('');
     setChatInput('');
     setMessages([
@@ -1441,16 +1847,38 @@ export default function Home() {
             <span>
               <WandSparkles /> AI 변환
             </span>
-            <article className="birth-stage">
+            <article className="birth-stage" ref={birthStageNode}>
               <small>
                 <Sparkles /> 배경에서 완전히 꺼낸 살아 있는 친구
               </small>
               <div className="birth-glow" aria-hidden="true" />
               <div className="birth-shadow" aria-hidden="true" />
-              <div className="birth-idle">
-                <Friend image={generated[pick]} variant="birth-sprite" />
-              </div>
-              <output>“안녕! 이제 어디든 함께 갈 수 있어!”</output>
+              <button
+                type="button"
+                className="birth-character-touch"
+                aria-label={`${persona.name}에게 인사하기`}
+                onClick={touchBirthCharacter}
+              >
+                <span
+                  key={birthReaction}
+                  className={`birth-gesture gesture-${birthReaction % 4}`}
+                >
+                  <span className="birth-idle">
+                    <Friend image={generated[pick]} variant="birth-sprite" />
+                  </span>
+                </span>
+              </button>
+              {birthReaction > 0 && (
+                <span className="birth-heart-burst" aria-hidden="true">
+                  <i>♥</i>
+                  <i>✦</i>
+                  <i>♥</i>
+                </span>
+              )}
+              <output>{birthReactionCopy}</output>
+              <span className="birth-touch-hint">
+                <Heart /> 친구를 톡 눌러 인사해 보세요
+              </span>
             </article>
           </div>
           <div className="preference-summary" aria-label="반영한 캐릭터 취향">
@@ -1857,26 +2285,42 @@ export default function Home() {
             </div>
             <div
               className={`cinematic-stage theme-${activeAdventure.color} stage-${scene} phase-${adventurePhase} action-${
-                choiceResult?.trait || 'idle'
-              } path-${choiceResult?.trait || previousDecision?.trait || 'start'} ${
+                choiceResult?.trait || pendingChoice?.trait || 'idle'
+              } preview-${previewTrait || 'none'} path-${
+                choiceResult?.trait ||
+                pendingChoice?.trait ||
+                previousDecision?.trait ||
+                'start'
+              } ${memoryClasses} ${actorPetted ? 'is-petted' : ''} ${
                 activeAdventure.id === 'moon' ? 'moon-world' : ''
               }`}
-              aria-live="polite"
+              ref={stageNode}
+              onPointerMove={updateStageParallax}
+              onPointerLeave={resetStageParallax}
+              style={
+                {
+                  '--actor-left': actorJourneyLeft,
+                } as React.CSSProperties
+              }
             >
               <div className="camera-rig" aria-hidden="true">
-                <div
-                  className="world-backdrop"
-                  style={
-                    activeAdventure.id === 'moon'
-                      ? {
-                          backgroundImage: `url(/moon-forest-scene-${scene + 1}.webp)`,
-                        }
-                      : undefined
-                  }
-                />
-                <div className="world-grade" />
-                <div className="world-change" />
+                <div className="camera-scene">
+                  <div
+                    className="world-backdrop"
+                    style={
+                      activeAdventure.id === 'moon'
+                        ? {
+                            backgroundImage: `url(/moon-forest-scene-${scene + 1}.webp)`,
+                          }
+                        : undefined
+                    }
+                  />
+                  <div className="world-grade" />
+                  <div className="world-change" />
+                </div>
               </div>
+              <div className="depth-light depth-far" aria-hidden="true" />
+              <div className="depth-light depth-mid" aria-hidden="true" />
               <div className="stage-light" aria-hidden="true" />
               <div className="stage-motes" aria-hidden="true">
                 <i>✦</i>
@@ -1885,6 +2329,79 @@ export default function Home() {
                 <i>·</i>
                 <i>✦</i>
               </div>
+              {pendingChoice &&
+                adventurePhase === 'playing' &&
+                currentQuest.kind !== 'comfort' && (
+                  <div
+                    className={`scene-quest-targets quest-${currentQuest.kind}`}
+                    aria-label={currentQuest.title}
+                  >
+                    {Array.from(
+                      { length: currentQuestTargetCount },
+                      (_, targetIndex) => {
+                        const position = currentQuestPositions[targetIndex];
+                        const collected = questHits.includes(targetIndex);
+                        const isNext =
+                          currentQuest.ordered &&
+                          age !== '4–6세' &&
+                          currentQuestOrder[questHits.length] === targetIndex;
+                        return (
+                          <button
+                            type="button"
+                            key={`${currentQuest.id}-${targetIndex}`}
+                            className={`${collected ? 'is-collected' : ''} ${
+                              isNext ? 'is-next' : ''
+                            } ${
+                              questHintTarget === targetIndex ? 'is-hint' : ''
+                            }`}
+                            style={
+                              {
+                                '--target-x': `${position.x}%`,
+                                '--target-y': `${position.y}%`,
+                                '--target-rotate': `${position.rotate}deg`,
+                                '--target-delay': `${targetIndex * -0.34}s`,
+                              } as React.CSSProperties
+                            }
+                            disabled={collected}
+                            aria-label={`${targetIndex + 1}번째 ${currentQuest.eyebrow} 빛`}
+                            onClick={() => touchQuestTarget(targetIndex)}
+                          >
+                            <span>{currentQuest.symbols[targetIndex]}</span>
+                            <i>{collected ? '찾았어!' : targetIndex + 1}</i>
+                          </button>
+                        );
+                      },
+                    )}
+                    {currentQuest.kind === 'bridge' && (
+                      <svg
+                        className="quest-bridge-line"
+                        viewBox="0 0 100 60"
+                        preserveAspectRatio="none"
+                        aria-hidden="true"
+                      >
+                        <path d="M 48 23 C 61 10, 72 18, 79 30 S 88 41, 91 50" />
+                      </svg>
+                    )}
+                  </div>
+                )}
+              {pendingChoice &&
+                adventurePhase === 'playing' &&
+                currentQuest.kind === 'comfort' && (
+                  <div
+                    className="comfort-aura"
+                    style={
+                      {
+                        '--warmth-scale': `${0.74 + questWarmth / 360}`,
+                        '--warmth-glow': `${24 + questWarmth / 2}px`,
+                        '--warmth-opacity': `${0.4 + questWarmth / 170}`,
+                      } as React.CSSProperties
+                    }
+                    aria-hidden="true"
+                  >
+                    <span>♥</span>
+                    <i />
+                  </div>
+                )}
               <article className="stage-story">
                 <span>{currentScene.chapter}</span>
                 <h2>{currentScene.title}</h2>
@@ -1898,32 +2415,90 @@ export default function Home() {
                 )}
               </article>
 
-              <div className="actor-rig">
-                {activeReactionTrait && (
+              <div
+                className={`actor-rig idle-gesture-${actorGesture} ${
+                  actorPetted ? 'is-petted' : ''
+                }`}
+              >
+                {(actorPetted || activeReactionTrait) && (
                   <output className="reaction-bubble">
-                    {adventureReactions[activeReactionTrait]}
+                    {actorPetted
+                      ? '네 손길이 느껴져! 같이 가자!'
+                      : pendingChoice
+                        ? `“${pendingChoice.label}” 방법, 같이 해 보자!`
+                        : activeReactionTrait
+                          ? adventureReactions[activeReactionTrait]
+                          : '안녕! 나를 톡 눌러 줬구나!'}
                   </output>
                 )}
                 <div className="actor-shadow" aria-hidden="true" />
                 <div
-                  key={`${theme}-${scene}-${choiceResult?.trait || 'enter'}`}
+                  key={`${theme}-${scene}-${choiceResult?.trait || pendingChoice?.trait || 'enter'}`}
                   className="actor-action"
+                  onAnimationEnd={completeActorAction}
                 >
-                  <div className="actor-idle">
-                    <Friend image={chosenImage} variant="actor-sprite" />
+                  <div className="actor-look">
+                    <div className="actor-gesture">
+                      <button
+                        type="button"
+                        className="actor-touch"
+                        aria-label={`${persona.name}에게 인사하기`}
+                        onClick={petAdventureCharacter}
+                      >
+                        <span className="actor-idle">
+                          <Friend image={chosenImage} variant="actor-sprite" />
+                        </span>
+                      </button>
+                    </div>
                   </div>
                 </div>
                 {choiceResult && <i className="reaction-burst">✦</i>}
+                {actorPetted && (
+                  <span className="actor-heart-burst" aria-hidden="true">
+                    <i>♥</i>
+                    <i>✦</i>
+                    <i>♥</i>
+                  </span>
+                )}
               </div>
+
+              {collectedClues.length > 0 && (
+                <div className="stage-memories" aria-label="함께 이어지는 단서">
+                  {collectedClues.slice(0, 4).map((decision, index) => (
+                    <span
+                      key={`${decision.chapter}-${decision.clue}`}
+                      className={`path-${decision.trait}`}
+                      title={decision.clue}
+                    >
+                      <i>{clueGlyph(decision)}</i>
+                      <b>{decision.clue}</b>
+                      {index === 0 && <em>{guideGlyph[decision.trait]}</em>}
+                    </span>
+                  ))}
+                </div>
+              )}
 
               <div className="stage-object" aria-hidden="true">
                 <i>
-                  {choiceResult
-                    ? traitMeta[choiceResult.trait].icon
-                    : activeAdventure.icon}
+                  {liveTrait ? traitMeta[liveTrait].icon : activeAdventure.icon}
                 </i>
                 <span>{currentStageClue || '이번 장면의 비밀'}</span>
               </div>
+              <div
+                className={`world-mutation mutation-${liveTrait || 'idle'} ${
+                  choiceResult ? 'is-real' : pendingChoice ? 'is-building' : ''
+                }`}
+                aria-hidden="true"
+              >
+                <i>{liveTrait ? traitMeta[liveTrait].icon : '✦'}</i>
+                <span />
+              </div>
+              {adventurePhase === 'acting' && choiceResult && (
+                <div className="reward-flight" aria-hidden="true">
+                  <i>{clueGlyph(choiceResult)}</i>
+                  <span>{choiceResult.clue}</span>
+                </div>
+              )}
               <div className="stage-foreground" aria-hidden="true" />
 
               {adventurePhase === 'acting' && choiceResult && (
@@ -1932,7 +2507,7 @@ export default function Home() {
                 </output>
               )}
 
-              {!choiceResult ? (
+              {!choiceResult && !pendingChoice ? (
                 <div className="stage-choice-dock">
                   <div className="says">
                     <Volume2 /> “
@@ -1941,12 +2516,34 @@ export default function Home() {
                       : '골라 줘! 내가 직접 움직여서 세상을 바꿔 볼게!'}
                     ”
                   </div>
-                  <div className="choices">
+                  <button
+                    type="button"
+                    className="adventure-read-button"
+                    aria-pressed={adventureSpeaking}
+                    onClick={() => speakAdventureGuide(sceneGuideText)}
+                  >
+                    {adventureSpeaking ? <VolumeX /> : <Volume2 />}
+                    {adventureSpeaking
+                      ? '안내 멈추기'
+                      : '장면과 선택 읽어 주기'}
+                  </button>
+                  <div
+                    className={`choices choice-count-${visibleChoices.length}`}
+                  >
                     {visibleChoices.map((choice, index) => (
                       <button
                         key={choice.label}
-                        className={`path-${choice.trait}`}
-                        onClick={() => chooseAdventureAction(choice)}
+                        className={`path-${choice.trait} ${
+                          previewTrait === choice.trait ? 'is-previewed' : ''
+                        }`}
+                        onPointerEnter={(event) => {
+                          if (event.pointerType === 'mouse')
+                            setPreviewTrait(choice.trait);
+                        }}
+                        onPointerLeave={() => setPreviewTrait(null)}
+                        onFocus={() => setPreviewTrait(choice.trait)}
+                        onBlur={() => setPreviewTrait(null)}
+                        onClick={() => beginAdventureChoice(choice)}
                       >
                         <i>{index + 1}</i>
                         <span>{choice.label}</span>
@@ -1955,13 +2552,102 @@ export default function Home() {
                       </button>
                     ))}
                   </div>
+                  {age === '4–6세' &&
+                    currentScene.choices.length > 2 &&
+                    !showAllYoungChoices && (
+                      <button
+                        type="button"
+                        className="more-young-choices"
+                        onClick={() => setShowAllYoungChoices(true)}
+                      >
+                        <Sparkles /> 다른 멋진 방법도 보기
+                      </button>
+                    )}
                   <small className="story-event">
-                    <Sparkles />{' '}
-                    {age === '4–6세' ? '큰 선택 2개' : '서로 다른 행동 3개'} ·
-                    다음 장면과 마지막 결말까지 기억해요
+                    <Sparkles /> 선택하면 직접 만지고 움직이는 짧은 놀이가
+                    시작돼요 · 다음 장면과 결말까지 기억해요
                   </small>
                 </div>
-              ) : (
+              ) : !choiceResult && pendingChoice ? (
+                <div className={`stage-quest-dock quest-${currentQuest.kind}`}>
+                  <div className="quest-head">
+                    <span>{currentQuest.eyebrow}</span>
+                    <b>{currentQuest.title}</b>
+                    <small>“{pendingChoice.label}” 방법을 만드는 중</small>
+                  </div>
+                  <div className="quest-main">
+                    <p>{questMessage || currentQuestInstruction}</p>
+                    {currentQuest.kind === 'comfort' ? (
+                      <label className="warmth-control">
+                        <span>
+                          마음의 빛 <b>{questWarmth}%</b>
+                        </span>
+                        <input
+                          type="range"
+                          min="0"
+                          max="100"
+                          step="2"
+                          value={questWarmth}
+                          aria-label="따뜻한 마음의 빛 보내기"
+                          onChange={(event) =>
+                            warmSceneHeart(Number(event.target.value))
+                          }
+                        />
+                        <button
+                          type="button"
+                          onClick={() => warmSceneHeart(questWarmth + 20)}
+                        >
+                          <Heart fill="currentColor" /> 빛 한 줌 보내기
+                        </button>
+                      </label>
+                    ) : (
+                      <div className="quest-progress" aria-label="놀이 진행률">
+                        <progress
+                          max={currentQuestTargetCount}
+                          value={questHits.length}
+                        />
+                        <span>
+                          {Array.from(
+                            { length: currentQuestTargetCount },
+                            (_, index) => (
+                              <i
+                                key={index}
+                                className={
+                                  index < questHits.length ? 'is-filled' : ''
+                                }
+                              />
+                            ),
+                          )}
+                        </span>
+                        <b>
+                          {questHits.length} / {currentQuestTargetCount}
+                        </b>
+                      </div>
+                    )}
+                  </div>
+                  <div className="quest-actions">
+                    <button
+                      type="button"
+                      className="quest-read-button"
+                      aria-pressed={adventureSpeaking}
+                      onClick={() =>
+                        speakAdventureGuide(
+                          `${currentQuest.title}. ${currentQuestInstruction}`,
+                        )
+                      }
+                    >
+                      {adventureSpeaking ? <VolumeX /> : <Volume2 />}
+                      {adventureSpeaking ? '멈추기' : '놀이 읽어 주기'}
+                    </button>
+                    <button type="button" onClick={cancelPendingChoice}>
+                      <ArrowLeft /> 다른 방법 고르기
+                    </button>
+                    <button type="button" onClick={completeQuestWithFriend}>
+                      <Heart /> 친구와 함께 완성하기
+                    </button>
+                  </div>
+                </div>
+              ) : choiceResult ? (
                 <div className={`stage-outcome path-${choiceResult.trait}`}>
                   <div className="result-icon">
                     {traitMeta[choiceResult.trait].icon}
@@ -1998,8 +2684,26 @@ export default function Home() {
                     )}
                   </Button>
                 </div>
-              )}
-              <div className="scene-wipe" aria-hidden="true" />
+              ) : null}
+              <output className="stage-live-status" aria-live="polite">
+                {pendingChoice
+                  ? questMessage || currentQuestInstruction
+                  : choiceResult
+                    ? choiceResult.result
+                    : '행동을 고르면 캐릭터와 세계가 함께 반응해요.'}
+              </output>
+              <div
+                className="scene-wipe"
+                aria-hidden="true"
+                onAnimationEnd={(event) => {
+                  if (
+                    adventurePhase === 'exiting' &&
+                    event.target === event.currentTarget &&
+                    event.animationName === 'scene-cover'
+                  )
+                    finishAdventureTransition();
+                }}
+              />
             </div>
           </section>
         ))}
@@ -2088,6 +2792,35 @@ export default function Home() {
               />
             ))}
           </div>
+          {savedStorybooks.length > 0 && (
+            <section className="storybook-library" aria-label="내 동화 보관함">
+              <span>
+                <BookOpen /> 내 동화 보관함
+              </span>
+              <div>
+                {savedStorybooks.map((savedBook, index) => (
+                  <button
+                    type="button"
+                    key={savedBook.id}
+                    aria-current={
+                      storybook === savedBook.pages ? 'true' : undefined
+                    }
+                    onClick={() => {
+                      setStorybook(savedBook.pages);
+                      setStorybookImage(savedBook.image);
+                      setStorybookTheme(savedBook.theme);
+                      setAdventureTrail(savedBook.trail);
+                      setPage(0);
+                      setBookDirection('previous');
+                    }}
+                  >
+                    <b>{index + 1}번째 모험</b>
+                    <small>{savedBook.title}</small>
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
           <div className="book-buttons">
             <Button secondary onClick={() => moveBookPage(0)}>
               <RotateCcw /> 처음부터 읽기
@@ -2099,7 +2832,6 @@ export default function Home() {
                 setAdventureTrail([]);
                 setChoiceResult(null);
                 resetAdventureGame();
-                setStorybook(null);
                 setStep('adventure');
               }}
             >
