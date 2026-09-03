@@ -19,6 +19,10 @@ import {
   sceneQuests,
 } from './adventure-play';
 import {
+  createLocalCharacterPreview,
+  type LocalCharacterPreview,
+} from './local-character-preview';
+import {
   ArrowLeft,
   BookOpen,
   Camera,
@@ -67,7 +71,7 @@ type CharacterQuality = {
   transparent?: boolean;
   transparentRatio?: number;
 };
-type GenerationStatus = 'idle' | 'queued' | 'generating' | 'ready' | 'error';
+type GenerationStatus = 'unrequested' | 'generating' | 'ready' | 'temporary';
 type CharacterErrorPayload = {
   error?: string;
   code?: string;
@@ -76,26 +80,14 @@ type CharacterErrorPayload = {
 };
 
 class CharacterRequestError extends Error {
-  status: number;
   code?: string;
   retryable: boolean;
-  retryAfterMs?: number;
 
-  constructor(
-    message: string,
-    options: {
-      status: number;
-      code?: string;
-      retryable: boolean;
-      retryAfterMs?: number;
-    },
-  ) {
+  constructor(message: string, code?: string, retryable = false) {
     super(message);
     this.name = 'CharacterRequestError';
-    this.status = options.status;
-    this.code = options.code;
-    this.retryable = options.retryable;
-    this.retryAfterMs = options.retryAfterMs;
+    this.code = code;
+    this.retryable = retryable;
   }
 }
 type AdventurePhase =
@@ -147,7 +139,7 @@ const characterStyles = [
   {
     name: '보송 3D 친구',
     detail: '샘플 감성의 고급 플러시 3D',
-    preview: '/style-plush-3d-v2.png',
+    preview: '/style-plush-3d-guide.webp',
   },
 ] as const;
 const colorChoices = [
@@ -211,24 +203,6 @@ async function readJson<T>(response: Response): Promise<T | null> {
   }
 }
 
-function waitForRetry(ms: number, signal?: AbortSignal) {
-  return new Promise<void>((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(new DOMException('Aborted', 'AbortError'));
-      return;
-    }
-    const timer = window.setTimeout(resolve, ms);
-    signal?.addEventListener(
-      'abort',
-      () => {
-        window.clearTimeout(timer);
-        reject(new DOMException('Aborted', 'AbortError'));
-      },
-      { once: true },
-    );
-  });
-}
-
 function apiErrorMessage(response: Response, fallback?: string) {
   if (fallback) return fallback;
   if (response.status === 429)
@@ -236,6 +210,26 @@ function apiErrorMessage(response: Response, fallback?: string) {
   if (response.status >= 500)
     return 'AI 작업실 연결이 잠시 불안정해요. 잠시 뒤 다시 시도해 주세요.';
   return '캐릭터 변환을 완료하지 못했어요. 그림을 확인하고 다시 시도해 주세요.';
+}
+
+function characterFailureMessage(error: unknown) {
+  if (!(error instanceof CharacterRequestError))
+    return 'AI 작업실이 잠깐 쉬고 있어요. 네 그림에는 문제가 없어요. 기기에서 만든 임시 친구로 먼저 놀 수 있어요.';
+  if (error.code === 'invalid_style_reference')
+    return '3D 스타일 재료를 확인하지 못했어요. 네 그림에는 문제가 없어요. 화면을 새로고침하거나 다른 스타일을 골라 주세요.';
+  if (error.code === 'service_unconfigured')
+    return 'AI 작업실을 준비하고 있어요. 기기에서 만든 임시 친구로 먼저 놀아 주세요.';
+  if (error.code === 'rate_limited')
+    return 'AI 친구들이 잠깐 숨을 고르고 있어요. 네 그림에는 문제가 없어요. 잠시 뒤 이 스타일만 다시 불러 주세요.';
+  if (
+    error.code === 'alpha_failed' ||
+    error.code === 'quality_failed' ||
+    error.code === 'quality_review_failed'
+  )
+    return '첫 결과가 투명 배경과 귀여움 기준을 통과하지 못해 보여 주지 않았어요. 기기 미리보기로 놀거나 이 스타일만 새로 만들어 주세요.';
+  return error.retryable
+    ? 'AI 작업실이 잠깐 쉬고 있어요. 네 그림에는 문제가 없어요. 기기 미리보기로 놀거나 잠시 뒤 이 스타일만 다시 불러 주세요.'
+    : error.message;
 }
 const defaultPersona = {
   name: '별콩이',
@@ -372,6 +366,16 @@ function Button({
 export default function Home() {
   const [step, setStep] = useState<Step>('welcome');
   const [image, setImage] = useState<string | null>(null);
+  const [localPreview, setLocalPreview] =
+    useState<LocalCharacterPreview | null>(null);
+  const [originalPaperPreview, setOriginalPaperPreview] =
+    useState<LocalCharacterPreview | null>(null);
+  const [useOriginalPreview, setUseOriginalPreview] = useState(false);
+  const [playImage, setPlayImage] = useState<string | null>(null);
+  const [playImageSource, setPlayImageSource] = useState<'local' | 'ai' | null>(
+    null,
+  );
+  const [arrivalDismissed, setArrivalDismissed] = useState(false);
   const [generated, setGenerated] = useState<string[]>([]);
   const [generatedQuality, setGeneratedQuality] = useState<
     Array<CharacterQuality | null>
@@ -400,7 +404,8 @@ export default function Home() {
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>(
     'environment',
   );
-  const [pick, setPick] = useState(0);
+  const [preferredStyle, setPreferredStyle] = useState(2);
+  const [pick, setPick] = useState(2);
   const [scene, setScene] = useState(0);
   const [theme, setTheme] = useState(0);
   const [page, setPage] = useState(0);
@@ -581,14 +586,29 @@ export default function Home() {
         context.fillStyle = '#ffffff';
         context.fillRect(0, 0, canvas.width, canvas.height);
         context.drawImage(source, 0, 0, canvas.width, canvas.height);
+        let instantPreview: LocalCharacterPreview | null = null;
+        let paperPreview: LocalCharacterPreview | null = null;
+        try {
+          instantPreview = createLocalCharacterPreview(source);
+          paperPreview = createLocalCharacterPreview(source, true);
+        } catch {
+          instantPreview = null;
+          paperPreview = null;
+        }
         // Re-encoding keeps uploads light and strips camera metadata before transmission.
         setImage(canvas.toDataURL('image/jpeg', 0.88));
+        setLocalPreview(instantPreview);
+        setOriginalPaperPreview(paperPreview);
+        setUseOriginalPreview(false);
+        setPlayImage(null);
+        setPlayImageSource(null);
+        setArrivalDismissed(false);
         setGenerated([]);
         setGeneratedQuality([]);
         setGenerationStatuses([]);
         setGenerationNote('');
         setGenerationFailed(false);
-        setPick(0);
+        setPick(preferredStyle);
         setScene(0);
         setTheme(0);
         setPage(0);
@@ -680,7 +700,23 @@ export default function Home() {
       0.9,
     );
   };
-  const chosenImage = generated[pick] || image;
+  const activeLocalPreview = useOriginalPreview
+    ? originalPaperPreview
+    : localPreview;
+  const chosenImage = generated[pick] || activeLocalPreview?.image || image;
+  const selectedHasAiCharacter = Boolean(generated[pick]);
+  const usingLocalCharacter = !selectedHasAiCharacter && Boolean(chosenImage);
+  const storyCharacterImage = playImage || chosenImage;
+  const aiArrivalAvailable = Boolean(
+    playImage &&
+    generated[pick] &&
+    playImage !== generated[pick] &&
+    !arrivalDismissed,
+  );
+  const localPreviewLabel =
+    useOriginalPreview || !localPreview?.cutout
+      ? '원본을 둥글게 보여 주는 임시 미리보기'
+      : '배경을 정리한 기기 미리보기';
   const activeAdventure = adventureStories[theme] || adventureStories[0];
   const activeScenes = activeAdventure.scenes;
   const requestVariant = async (
@@ -703,7 +739,7 @@ export default function Home() {
     if (index === 2) {
       let reference = styleReferenceBlob.current;
       if (!reference) {
-        const referenceResponse = await fetch('/style-plush-3d-v2.png', {
+        const referenceResponse = await fetch('/style-plush-3d-guide.webp', {
           signal,
         });
         if (referenceResponse.ok) {
@@ -712,7 +748,11 @@ export default function Home() {
         }
       }
       if (reference)
-        form.append('styleReference', reference, 'cute-3d-style-reference.png');
+        form.append(
+          'styleReference',
+          reference,
+          'cute-3d-style-reference.webp',
+        );
     }
     const response = await fetch('/api/character', {
       method: 'POST',
@@ -726,152 +766,76 @@ export default function Home() {
       }
     >(response);
     if (!response.ok || !data?.image) {
-      const retryAfterSeconds = Number(response.headers.get('retry-after'));
-      throw new CharacterRequestError(apiErrorMessage(response, data?.error), {
-        status: response.status,
-        code: data?.code,
-        retryable:
-          data?.retryable ?? [429, 502, 503, 504].includes(response.status),
-        retryAfterMs:
-          data?.retryAfterMs ??
-          (Number.isFinite(retryAfterSeconds)
-            ? retryAfterSeconds * 1000
-            : undefined),
-      });
+      throw new CharacterRequestError(
+        apiErrorMessage(response, data?.error),
+        data?.code,
+        data?.retryable,
+      );
     }
     return { index, image: data.image, quality: data.quality || null };
   };
-  const requestVariantWithRetry = async (
-    blob: Blob,
-    index: number,
-    signal?: AbortSignal,
-    highQuality = false,
-    allowRetry = true,
-    onRetry?: () => void,
-  ) => {
-    try {
-      return await requestVariant(blob, index, signal, highQuality);
-    } catch (error) {
-      if (
-        !(error instanceof CharacterRequestError) ||
-        !error.retryable ||
-        !allowRetry ||
-        signal?.aborted
-      )
-        throw error;
-      onRetry?.();
-      setGenerationNote(
-        `${characterStyles[index].name}이 오는 길이 잠깐 붐벼요. 한 번만 다시 연결하고 있어요…`,
-      );
-      await waitForRetry(
-        Math.min(8000, Math.max(1400, error.retryAfterMs || 1800)),
-        signal,
-      );
-      return requestVariant(blob, index, signal, highQuality);
-    }
-  };
   const generateCharacter = async () => {
-    if (!image || generating) return;
+    if (!image || generating || regenerating) return;
     generationRequest.current?.abort();
     generationRequest.current = new AbortController();
     const runId = ++generationRun.current;
     const signal = generationRequest.current.signal;
+    const requestedStyle = preferredStyle;
     setGenerating(true);
     setGenerationFailed(false);
-    setGenerationNote('가장 포근한 보송 3D 친구를 먼저 만들고 있어요…');
+    setPick(requestedStyle);
+    setGenerated(Array.from<string>({ length: characterStyleCount }).fill(''));
+    setGeneratedQuality(
+      Array.from<CharacterQuality | null>({ length: characterStyleCount }).fill(
+        null,
+      ),
+    );
+    const initialStatuses = Array.from<GenerationStatus>({
+      length: characterStyleCount,
+    }).fill('unrequested');
+    initialStatuses[requestedStyle] = 'generating';
+    setGenerationStatuses(initialStatuses);
+    setGenerationNote(
+      `기기에서 먼저 살아난 친구와 인사해 보세요. ${characterStyles[requestedStyle].name}으로 AI가 완성하고 있어요…`,
+    );
+    setStep('character');
     try {
       const blob = await fetch(image).then((r) => r.blob());
-      let images = Array.from<string>({ length: characterStyleCount }).fill('');
-      let qualities = Array.from<CharacterQuality | null>({
+      const result = await requestVariant(blob, requestedStyle, signal, true);
+      if (runId !== generationRun.current)
+        throw new DOMException('Aborted', 'AbortError');
+      const images = Array.from<string>({
+        length: characterStyleCount,
+      }).fill('');
+      images[result.index] = result.image;
+      const qualities = Array.from<CharacterQuality | null>({
         length: characterStyleCount,
       }).fill(null);
-      let statuses = Array.from<GenerationStatus>({
+      qualities[result.index] = result.quality;
+      const statuses = Array.from<GenerationStatus>({
         length: characterStyleCount,
-      }).fill('queued');
+      }).fill('unrequested');
+      statuses[result.index] = 'ready';
       setGenerated(images);
       setGeneratedQuality(qualities);
       setGenerationStatuses(statuses);
-      let revealedFirst = false;
-      let firstFailure: unknown;
-      let automaticRetryAvailable = true;
-      for (const [queueIndex, index] of characterGenerationOrder.entries()) {
-        if (signal.aborted || runId !== generationRun.current)
-          throw new DOMException('Aborted', 'AbortError');
-        statuses = statuses.map((status, itemIndex) =>
-          itemIndex === index ? 'generating' : status,
-        );
-        setGenerationStatuses(statuses);
-        setGenerationNote(
-          queueIndex === 0
-            ? '가장 포근한 보송 3D 친구를 먼저 만들고 있어요…'
-            : `첫 친구와 인사하는 동안 ${characterStyles[index].name}도 한 명씩 태어나고 있어요 · ${images.filter(Boolean).length}/3 완성`,
-        );
-        try {
-          const result = await requestVariantWithRetry(
-            blob,
-            index,
-            signal,
-            false,
-            revealedFirst && automaticRetryAvailable,
-            () => {
-              automaticRetryAvailable = false;
-            },
-          );
-          if (runId !== generationRun.current)
-            throw new DOMException('Aborted', 'AbortError');
-          images = images.map((item, itemIndex) =>
-            itemIndex === result.index ? result.image : item,
-          );
-          qualities = qualities.map((item, itemIndex) =>
-            itemIndex === result.index ? result.quality : item,
-          );
-          statuses = statuses.map((status, itemIndex) =>
-            itemIndex === result.index ? 'ready' : status,
-          );
-          setGenerated(images);
-          setGeneratedQuality(qualities);
-          setGenerationStatuses(statuses);
-          if (!revealedFirst) {
-            revealedFirst = true;
-            setPick(result.index);
-            setGenerationNote(
-              `${characterStyles[result.index].name}이 먼저 도착했어요! 지금 톡 눌러 인사해 보세요.`,
-            );
-            setStep((current) =>
-              current === 'upload' ? 'character' : current,
-            );
-          }
-        } catch (error) {
-          if (error instanceof DOMException && error.name === 'AbortError')
-            throw error;
-          firstFailure ??= error;
-          statuses = statuses.map((status, itemIndex) =>
-            itemIndex === index ? 'error' : status,
-          );
-          setGenerationStatuses(statuses);
-        }
-      }
-      const successCount = images.filter(Boolean).length;
-      if (!successCount) {
-        throw firstFailure instanceof Error
-          ? firstFailure
-          : new Error('캐릭터 변환을 완료하지 못했어요. 다시 시도해 주세요.');
-      }
+      setPick(result.index);
+      setArrivalDismissed(false);
       setGenerationNote(
-        successCount === characterStyleCount
-          ? '그림의 특징을 살리고 귀여움 검수까지 마친 세 친구가 태어났어요!'
-          : `${successCount}개의 모습을 완성했어요. 길을 잃은 모습은 카드를 눌러 다시 부를 수 있어요.`,
+        `${characterStyles[result.index].name}이 귀여움 검수를 마치고 도착했어요! 다른 모습은 원할 때만 불러 주세요.`,
       );
-      setStep((current) => (current === 'upload' ? 'character' : current));
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return;
       if (runId !== generationRun.current) return;
       setGenerationFailed(true);
-      setGenerationNote(
-        error instanceof Error
-          ? error.message
-          : '캐릭터 변환에 실패했어요. 다시 시도해 주세요.',
-      );
+      setGenerationStatuses((previous) => {
+        const next = Array.from<GenerationStatus>({
+          length: characterStyleCount,
+        }).map((_, index) => previous[index] || 'unrequested');
+        next[requestedStyle] = 'temporary';
+        return next;
+      });
+      setGenerationNote(characterFailureMessage(error));
     } finally {
       if (runId === generationRun.current) setGenerating(false);
     }
@@ -883,10 +847,11 @@ export default function Home() {
     const runId = ++generationRun.current;
     setRegenerating(true);
     setGenerationFailed(false);
+    setPick(index);
     setGenerationStatuses((previous) => {
       const next = Array.from<GenerationStatus>({
         length: characterStyleCount,
-      }).map((_, itemIndex) => previous[itemIndex] || 'idle');
+      }).map((_, itemIndex) => previous[itemIndex] || 'unrequested');
       next[index] = 'generating';
       return next;
     });
@@ -895,7 +860,7 @@ export default function Home() {
     );
     try {
       const blob = await fetch(image).then((response) => response.blob());
-      const result = await requestVariantWithRetry(
+      const result = await requestVariant(
         blob,
         index,
         generationRequest.current.signal,
@@ -919,11 +884,11 @@ export default function Home() {
       setGenerationStatuses((previous) => {
         const next = Array.from<GenerationStatus>({
           length: characterStyleCount,
-        }).map((_, itemIndex) => previous[itemIndex] || 'idle');
+        }).map((_, itemIndex) => previous[itemIndex] || 'unrequested');
         next[result.index] = 'ready';
         return next;
       });
-      setPick(result.index);
+      setArrivalDismissed(false);
       setGenerationNote(
         `${characterStyles[index].name}을 취향에 맞춰 새로 완성했어요!`,
       );
@@ -933,15 +898,12 @@ export default function Home() {
       setGenerationStatuses((previous) => {
         const next = Array.from<GenerationStatus>({
           length: characterStyleCount,
-        }).map((_, itemIndex) => previous[itemIndex] || 'idle');
-        next[index] = 'error';
+        }).map((_, itemIndex) => previous[itemIndex] || 'unrequested');
+        next[index] = 'temporary';
         return next;
       });
-      setGenerationNote(
-        error instanceof Error
-          ? error.message
-          : '이 모습을 다시 만들지 못했어요. 잠시 뒤 시도해 주세요.',
-      );
+      setGenerationFailed(true);
+      setGenerationNote(characterFailureMessage(error));
     } finally {
       if (runId === generationRun.current) setRegenerating(false);
     }
@@ -954,8 +916,23 @@ export default function Home() {
     setGenerating(false);
     setRegenerating(false);
     setGenerationStatuses((previous) =>
-      previous.map((status) => (status === 'ready' ? status : 'idle')),
+      previous.map((status) => (status === 'ready' ? status : 'unrequested')),
     );
+  };
+  const startChat = () => {
+    if (!chosenImage) return;
+    setPlayImage(chosenImage);
+    setPlayImageSource(selectedHasAiCharacter ? 'ai' : 'local');
+    setArrivalDismissed(false);
+    setMessages([
+      {
+        role: 'assistant',
+        content: selectedHasAiCharacter
+          ? `안녕! 나는 AI가 네 그림을 바탕으로 완성한 ${persona.name}야. 오늘 어떤 상상을 함께 만들어 볼까?`
+          : `안녕! 나는 네 그림에서 먼저 깨어난 그림친구 ${persona.name}야. AI가 우리 대화와 이야기를 도와줄게!`,
+      },
+    ]);
+    setStep('chat');
   };
   const sendChat = async () => {
     const text = chatInput.trim();
@@ -1372,13 +1349,13 @@ export default function Home() {
       id: `${Date.now()}-${theme}`,
       pages: completedPages,
       trail: [...adventureTrail],
-      image: chosenImage,
+      image: storyCharacterImage,
       theme,
       title: completedPages[0]?.title || activeAdventure.title,
     };
     setSavedStorybooks((current) => [...current, completedBook].slice(-4));
     setStorybook(completedPages);
-    setStorybookImage(chosenImage);
+    setStorybookImage(storyCharacterImage);
     setStorybookTheme(theme);
     setPage(0);
     setBookDirection('next');
@@ -1511,6 +1488,12 @@ export default function Home() {
     chatRequest.current?.abort();
     closeCamera();
     setImage(null);
+    setLocalPreview(null);
+    setOriginalPaperPreview(null);
+    setUseOriginalPreview(false);
+    setPlayImage(null);
+    setPlayImageSource(null);
+    setArrivalDismissed(false);
     setGenerated([]);
     setGeneratedQuality([]);
     setGenerationStatuses([]);
@@ -1526,7 +1509,8 @@ export default function Home() {
     setFavoriteWorld(worldChoices[0].name);
     setCameraError('');
     setFacingMode('environment');
-    setPick(0);
+    setPreferredStyle(2);
+    setPick(2);
     setScene(0);
     setTheme(0);
     setPage(0);
@@ -1607,6 +1591,37 @@ export default function Home() {
           <LockKeyhole size={15} /> 보호자
         </button>
       </header>
+
+      {aiArrivalAvailable && (step === 'chat' || step === 'adventure') && (
+        <aside className="character-arrival" aria-live="polite">
+          <span>
+            <Sparkles />
+          </span>
+          <div>
+            <b>새 AI 모습이 도착했어요!</b>
+            <small>지금 바꿀지, 이 이야기가 끝난 뒤 바꿀지 골라요.</small>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              const arrivedImage = generated[pick];
+              if (arrivedImage) {
+                setPlayImage(arrivedImage);
+                setPlayImageSource('ai');
+              }
+            }}
+          >
+            지금 바꾸기
+          </button>
+          <button
+            type="button"
+            className="later"
+            onClick={() => setArrivalDismissed(true)}
+          >
+            이야기 뒤에
+          </button>
+        </aside>
+      )}
 
       {step === 'welcome' && (
         <section className="welcome">
@@ -1876,7 +1891,10 @@ export default function Home() {
                   </span>
                   <div>
                     <h3>어떤 친구가 태어나면 좋을까요?</h3>
-                    <p>작은 취향을 알려 주면 세 가지 모습에 함께 반영해요.</p>
+                    <p>
+                      먼저 만들 한 가지 모습을 골라요. 다른 스타일은 원할 때만
+                      만들 수 있어요.
+                    </p>
                   </div>
                 </div>
                 <div className="profile-context">
@@ -1890,20 +1908,35 @@ export default function Home() {
                     <Settings /> 프로필 수정
                   </button>
                 </div>
-                <div
-                  className="style-preview-grid"
-                  aria-label="생성 스타일 3종"
-                >
-                  {characterStyles.map((style) => (
-                    <article key={style.name}>
-                      <img src={style.preview} alt={`${style.name} 예시`} />
-                      <span>
-                        <b>{style.name}</b>
-                        <small>{style.detail}</small>
-                      </span>
-                    </article>
-                  ))}
-                </div>
+                <fieldset className="style-preview-grid">
+                  <legend>먼저 만들 스타일 하나</legend>
+                  {characterGenerationOrder.map((index) => {
+                    const style = characterStyles[index];
+                    return (
+                      <button
+                        type="button"
+                        key={style.name}
+                        aria-pressed={preferredStyle === index}
+                        onClick={() => {
+                          setPreferredStyle(index);
+                          setPick(index);
+                        }}
+                      >
+                        {index === 2 && (
+                          <em>
+                            <Sparkles /> 추천
+                          </em>
+                        )}
+                        <img src={style.preview} alt={`${style.name} 예시`} />
+                        <span>
+                          <b>{style.name}</b>
+                          <small>{style.detail}</small>
+                          <i>스타일 예시 · 내 그림의 결과가 아니에요</i>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </fieldset>
                 <div className="direction-fields">
                   <label>
                     <span>꼭 살리고 싶은 부분</span>
@@ -1988,15 +2021,17 @@ export default function Home() {
             ) : (
               <Sparkles size={19} />
             )}{' '}
-            {generating ? '친구가 태어나는 중…' : 'AI 캐릭터로 탄생시키기'}
+            {generating
+              ? '친구가 태어나는 중…'
+              : `${characterStyles[preferredStyle].name} 고화질로 AI 완성하기`}
           </Button>
           {generating && (
             <output className="magic-progress" aria-live="polite">
               <i />
               <span>{generationNote}</span>
               <small>
-                3D 친구가 도착하면 바로 만나요. 다른 모습은 뒤에서 한 명씩
-                차례로 만들어요.
+                선택한 한 모습만 만들어요. 다른 스타일은 카드를 눌렀을 때만
+                추가해요.
               </small>
             </output>
           )}
@@ -2014,22 +2049,52 @@ export default function Home() {
 
       {step === 'character' && (
         <section className="center characters">
-          <span className="badge">짜잔! 그림친구가 태어났어요</span>
-          <h2>원본과 나란히 보며 골라요</h2>
+          <span className={`badge ${usingLocalCharacter ? 'local-badge' : ''}`}>
+            {selectedHasAiCharacter
+              ? '짜잔! AI 그림친구가 태어났어요'
+              : '기기에서 미리 깨어난 그림친구예요'}
+          </span>
+          <h2>
+            {selectedHasAiCharacter
+              ? '원본의 매력을 살린 친구를 만나요'
+              : '기다리는 동안 먼저 인사해 보세요'}
+          </h2>
           <p aria-live="polite" aria-atomic="true">
             {generationNote}
           </p>
+          {generationFailed && usingLocalCharacter && (
+            <div className="local-play-actions">
+              <Button onClick={startChat}>
+                <Play /> 내 그림 친구로 바로 놀기
+              </Button>
+              <Button
+                secondary
+                disabled={generating || regenerating}
+                onClick={() => void regenerateVariant(pick, true)}
+              >
+                <RefreshCw /> 이 스타일만 AI로 다시 만들기
+              </Button>
+            </div>
+          )}
           <div className="transform-proof">
             <article className="source-drawing">
               <small>아이의 원본 그림</small>
               {image && <img src={image} alt="변환 전 원본 그림" />}
             </article>
             <span>
-              <WandSparkles /> AI 변환
+              <WandSparkles />{' '}
+              {selectedHasAiCharacter
+                ? 'AI 변환 완료'
+                : generating || regenerating
+                  ? 'AI 변환 중'
+                  : '기기 미리보기'}
             </span>
             <article className="birth-stage" ref={birthStageNode}>
               <small>
-                <Sparkles /> 배경에서 완전히 꺼낸 살아 있는 친구
+                <Sparkles />{' '}
+                {selectedHasAiCharacter
+                  ? 'AI 완성 · 투명 배경의 살아 있는 친구'
+                  : `${localPreviewLabel} · AI 변환 전`}
               </small>
               <div className="birth-glow" aria-hidden="true" />
               <div className="birth-shadow" aria-hidden="true" />
@@ -2044,7 +2109,7 @@ export default function Home() {
                   className={`birth-gesture gesture-${birthReaction % 4}`}
                 >
                   <span className="birth-idle">
-                    <Friend image={generated[pick]} variant="birth-sprite" />
+                    <Friend image={chosenImage} variant="birth-sprite" />
                   </span>
                 </span>
               </button>
@@ -2061,6 +2126,20 @@ export default function Home() {
               </span>
             </article>
           </div>
+          {usingLocalCharacter &&
+            localPreview?.cutout &&
+            originalPaperPreview && (
+              <button
+                type="button"
+                className="preview-recovery"
+                onClick={() => setUseOriginalPreview((current) => !current)}
+              >
+                <RotateCcw />{' '}
+                {useOriginalPreview
+                  ? '배경 자동 정리 미리보기 다시 쓰기'
+                  : '배경 정리가 이상한가요? 원본 미리보기 사용하기'}
+              </button>
+            )}
           <div className="preference-summary" aria-label="반영한 캐릭터 취향">
             <span>{age} 맞춤</span>
             {childGender !== genderChoices[0] && (
@@ -2080,31 +2159,38 @@ export default function Home() {
             </span>
             {characterWish && <span>“{characterWish}”</span>}
           </div>
-          <h3 className="choose-title">가장 마음에 드는 모습을 골라 주세요</h3>
+          <h3 className="choose-title">
+            한 모습만 먼저 완성해요 · 다른 스타일은 원할 때 추가해요
+          </h3>
           <div className="candidates">
             {characterGenerationOrder.map((i) => {
               const style = characterStyles[i];
-              const status = generationStatuses[i] || 'idle';
+              const status = generationStatuses[i] || 'unrequested';
               const waitingForCurrent =
                 !generated[i] && (generating || regenerating);
               return (
                 <button
                   type="button"
-                  disabled={waitingForCurrent}
-                  className={`${pick === i && generated[i] ? 'selected' : ''} status-${status}`}
+                  aria-disabled={waitingForCurrent}
+                  aria-busy={status === 'generating'}
+                  aria-pressed={pick === i}
+                  aria-describedby={`character-style-${i}-detail character-style-${i}-state`}
+                  className={`${pick === i ? 'selected' : ''} status-${status}`}
                   key={style.name}
                   aria-label={
                     generated[i]
                       ? `${style.name} 선택하기`
-                      : `${style.name}만 다시 만들기`
+                      : `${style.name}만 AI로 만들기`
                   }
-                  onClick={() =>
-                    generated[i] ? setPick(i) : void regenerateVariant(i, false)
-                  }
+                  onClick={() => {
+                    if (waitingForCurrent) return;
+                    if (generated[i]) setPick(i);
+                    else void regenerateVariant(i, true);
+                  }}
                 >
-                  {i === 2 && (
+                  {i === preferredStyle && (
                     <em className="priority-badge">
-                      <Sparkles /> 3D 추천 · 먼저 완성
+                      <Sparkles /> 먼저 고른 스타일
                     </em>
                   )}
                   {pick === i && generated[i] && (
@@ -2112,26 +2198,47 @@ export default function Home() {
                       <Check />
                     </i>
                   )}
-                  <span>
+                  <span className={generated[i] ? 'ai-art' : 'local-art'}>
                     {generated[i] ? (
-                      <Friend image={generated[i]} variant={`v${i}`} />
+                      <>
+                        <Friend image={generated[i]} variant={`v${i}`} />
+                        <small
+                          className="result-source-chip"
+                          id={`character-style-${i}-state`}
+                        >
+                          AI 완성
+                        </small>
+                      </>
                     ) : (
-                      <small className="candidate-status">
-                        {status === 'generating' && (
-                          <LoaderCircle className="spin" size={20} />
-                        )}
-                        {status === 'queued'
-                          ? '다음 차례를 기다리고 있어요'
-                          : status === 'generating'
-                            ? '지금 태어나는 중…'
-                            : status === 'error'
-                              ? '잠깐 길을 잃었어요 · 톡 눌러 다시 부르기'
-                              : '톡 눌러 이 모습 만들기'}
-                      </small>
+                      <>
+                        <img
+                          className="style-reference"
+                          src={style.preview}
+                          alt=""
+                        />
+                        <small className="preview-source-chip">
+                          🎨 스타일 예시 · 아직 내 그림 아님
+                        </small>
+                        <small
+                          className="candidate-status"
+                          id={`character-style-${i}-state`}
+                        >
+                          {status === 'generating' && (
+                            <LoaderCircle className="spin" size={20} />
+                          )}
+                          {status === 'generating'
+                            ? '이 스타일로 완성하는 중…'
+                            : status === 'temporary'
+                              ? 'AI 작업실이 쉬는 중 · 톡 눌러 다시 부르기'
+                              : '톡 눌러 이 모습만 AI로 만들기'}
+                        </small>
+                      </>
                     )}
                   </span>
                   <b>{style.name}</b>
-                  <small>{style.detail}</small>
+                  <small id={`character-style-${i}-detail`}>
+                    {style.detail}
+                  </small>
                   {generatedQuality[i]?.transparent && (
                     <strong className="alpha-pass">
                       <Check /> 진짜 투명 배경 검증
@@ -2239,18 +2346,7 @@ export default function Home() {
               </label>
             </div>
           </div>
-          <Button
-            onClick={() => {
-              stopCharacterGeneration();
-              setMessages([
-                {
-                  role: 'assistant',
-                  content: `안녕! 나는 네 그림에서 태어난 AI 이야기 친구 ${persona.name}야. 오늘 어떤 상상을 함께 만들어 볼까?`,
-                },
-              ]);
-              setStep('chat');
-            }}
-          >
+          <Button onClick={startChat}>
             <MessageCircle /> {persona.name}와 대화 시작하기 <ChevronRight />
           </Button>
         </section>
@@ -2259,7 +2355,19 @@ export default function Home() {
       {step === 'chat' && (
         <section className="chat-view">
           <aside className="chat-persona">
-            <Friend image={chosenImage} />
+            <Friend image={storyCharacterImage} />
+            <span
+              className={`chat-character-source ${playImageSource === 'ai' ? 'ai' : 'local'}`}
+              aria-live="polite"
+            >
+              {playImageSource === 'ai'
+                ? 'AI 완성 이미지'
+                : generating || regenerating
+                  ? '내 그림 미리보기 · AI 완성 중'
+                  : generationFailed
+                    ? '내 그림 미리보기 · AI는 잠시 쉬는 중'
+                    : '내 그림 미리보기'}
+            </span>
             <span className="online">
               <i /> 이야기할 준비 완료
             </span>
@@ -2316,7 +2424,7 @@ export default function Home() {
                 <div key={i} className={`message ${m.role}`}>
                   <span>
                     {m.role === 'assistant' ? (
-                      <Friend image={chosenImage} />
+                      <Friend image={storyCharacterImage} />
                     ) : (
                       '나'
                     )}
@@ -2327,7 +2435,7 @@ export default function Home() {
               {chatting && (
                 <div className="message assistant">
                   <span>
-                    <Friend image={chosenImage} />
+                    <Friend image={storyCharacterImage} />
                   </span>
                   <p className="typing" aria-label="답장을 생각하는 중">
                     <i />
@@ -2655,7 +2763,10 @@ export default function Home() {
                         onClick={petAdventureCharacter}
                       >
                         <span className="actor-idle">
-                          <Friend image={chosenImage} variant="actor-sprite" />
+                          <Friend
+                            image={storyCharacterImage}
+                            variant="actor-sprite"
+                          />
                         </span>
                       </button>
                     </div>
@@ -2971,7 +3082,7 @@ export default function Home() {
                 key={`${page}-${bookDirection}`}
                 storyPage={currentStoryPage}
                 adventure={bookAdventure}
-                image={storybookImage || chosenImage}
+                image={storybookImage || storyCharacterImage}
                 pageNumber={page + 1}
                 totalPages={storyPages.length}
                 direction={bookDirection}
@@ -3064,7 +3175,7 @@ export default function Home() {
                 key={`print-${storyPage.kind}-${index}`}
                 storyPage={storyPage}
                 adventure={bookAdventure}
-                image={storybookImage || chosenImage}
+                image={storybookImage || storyCharacterImage}
                 pageNumber={index + 1}
                 totalPages={storyPages.length}
               />

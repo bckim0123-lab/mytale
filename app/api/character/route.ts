@@ -4,7 +4,7 @@ const CUTENESS_PASS_SCORE = 82;
 const REQUEST_BUDGET_MS = 270_000;
 const ALLOWED_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 const TRUSTED_3D_REFERENCE_SHA256 =
-  'b6783c72074917c022afe2638cb7a0f12cb3667445e0de7299e549f7380ac0b3';
+  'cdb11278d8f3bc776c6e5f02d76e8134cd33763c6f2fbfc3de57bb6eb917a697';
 const recentGenerations = new Map<string, number[]>();
 
 export const maxDuration = 300;
@@ -106,10 +106,6 @@ function budgetedSignal(signal: AbortSignal, deadline: number, capMs: number) {
   ]);
 }
 
-function hasBudget(deadline: number, minimumMs: number) {
-  return !Number.isNaN(deadline) && deadline - Date.now() >= minimumMs;
-}
-
 function decodeBase64(value: string) {
   const binary = atob(value);
   const bytes = new Uint8Array(binary.length);
@@ -138,8 +134,8 @@ async function trusted3dReference(value: FormDataEntryValue | null) {
     byte.toString(16).padStart(2, '0'),
   ).join('');
   if (hash !== TRUSTED_3D_REFERENCE_SHA256) return null;
-  return new File([bytes], 'cute-3d-style-reference.png', {
-    type: 'image/png',
+  return new File([bytes], 'cute-3d-style-reference.webp', {
+    type: 'image/webp',
   });
 }
 
@@ -530,104 +526,6 @@ function reconcileBackgroundReview(review: CutenessReview, alpha: AlphaAudit) {
   };
 }
 
-function imageFileFromBase64(imageBase64: string) {
-  return new File([decodeBase64(imageBase64)], 'cute-character-draft.png', {
-    type: 'image/png',
-  });
-}
-
-async function extractTransparentCutout(
-  apiKey: string,
-  imageBase64: string,
-  signal: AbortSignal,
-  deadline: number,
-) {
-  try {
-    const body = new FormData();
-    body.append('model', 'gpt-image-2');
-    body.append('image', imageFileFromBase64(imageBase64));
-    body.append(
-      'prompt',
-      [
-        'Remove the entire background and return only the exact same character as a clean full-body cutout.',
-        'Preserve the character identity, silhouette, proportions, pose, face, eyes, colors, fur, markings, accessories, lighting, and every design detail unchanged.',
-        'The output file itself must have a genuinely transparent alpha background outside the character.',
-        'Delete every visible gradient, rectangular product-card region, backdrop, glow panel, and semi-transparent background layer even when it sits inside an outer transparent margin.',
-        'Preserve fine fur and hand-drawn edges without white halos. No floor, contact shadow, checkerboard graphic, solid backdrop, card, frame, text, logo, or second character.',
-      ].join(' '),
-    );
-    body.append('size', '1024x1024');
-    body.append('quality', 'medium');
-    body.append('background', 'transparent');
-    body.append('output_format', 'png');
-    const response = await fetch('https://api.openai.com/v1/images/edits', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${apiKey}` },
-      body,
-      signal: budgetedSignal(signal, deadline, 115_000),
-    });
-    const result = (await response.json().catch(() => ({}))) as {
-      data?: Array<{ b64_json?: string }>;
-    };
-    return response.ok ? result.data?.[0]?.b64_json || null : null;
-  } catch {
-    return null;
-  }
-}
-
-async function polishCuteness(
-  apiKey: string,
-  imageBase64: string,
-  sourceDrawing: File,
-  review: CutenessReview,
-  styleIndex: number,
-  highQuality: boolean,
-  signal: AbortSignal,
-  deadline: number,
-  styleReference?: File | null,
-) {
-  try {
-    const body = new FormData();
-    body.append('model', 'gpt-image-2');
-    body.append('image[]', imageFileFromBase64(imageBase64));
-    body.append(
-      'image[]',
-      sourceDrawing,
-      sourceDrawing.name || 'source-drawing.png',
-    );
-    if (styleIndex === 2 && styleReference)
-      body.append('image[]', styleReference, 'cute-3d-style-reference.png');
-    body.append(
-      'prompt',
-      [
-        '첫 이미지는 변환 후보이고 두 번째 이미지는 아이의 원본 그림입니다. 세 번째 이미지가 있다면 신뢰된 3D 재질·비율 스타일 가이드입니다. 후보의 캐릭터 정체성과 스타일을 유지하면서 원본의 대표 색, 실루엣, 눈과 입, 무늬와 특별한 특징을 더 정확히 보존하세요.',
-        `귀여움 품질 검사에서 발견된 문제는 “${review.issue}”입니다. 이 문제만 전문적으로 보정하세요.`,
-        '머리는 조금 더 크고 몸은 짧고 둥글게, 팔다리는 짧고 말랑하게, 눈은 맑고 순하게, 입은 작고 기분 좋은 표정으로 다듬으세요.',
-        '눈·입·팔다리·꼬리·장식의 개수를 정확히 유지하고 중복이나 왜곡을 만들지 마세요.',
-        '한눈에 안아 주고 싶은 아동용 캐릭터여야 합니다. 무서운 표정, 날카로운 부분, 글자, 로고, 액자, 여러 캐릭터를 만들지 마세요.',
-        '캐릭터 밖은 실제 알파가 있는 완전한 투명 배경이어야 합니다. 바닥, 배경색, 카드, 사각 프레임, 그림자 사각형을 만들지 마세요.',
-        `스타일은 ${styles[styleIndex]}를 유지하세요.`,
-      ].join(' '),
-    );
-    body.append('size', '1024x1024');
-    body.append('quality', highQuality ? 'high' : 'medium');
-    body.append('background', 'transparent');
-    body.append('output_format', 'png');
-    const response = await fetch('https://api.openai.com/v1/images/edits', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${apiKey}` },
-      body,
-      signal: budgetedSignal(signal, deadline, 115_000),
-    });
-    const result = (await response.json().catch(() => ({}))) as {
-      data?: Array<{ b64_json?: string }>;
-    };
-    return response.ok ? result.data?.[0]?.b64_json || null : null;
-  } catch {
-    return null;
-  }
-}
-
 export async function GET() {
   return json({
     ready: Boolean(process.env.OPENAI_API_KEY),
@@ -711,7 +609,7 @@ export async function POST(request: Request) {
       sourceBytes,
     )}`;
     const styleReferenceDataUrl = verifiedStyleReference
-      ? `data:image/png;base64,${encodeBase64(
+      ? `data:${verifiedStyleReference.type};base64,${encodeBase64(
           new Uint8Array(await verifiedStyleReference.arrayBuffer()),
         )}`
       : undefined;
@@ -798,7 +696,7 @@ export async function POST(request: Request) {
         body.append(
           'image[]',
           verifiedStyleReference,
-          'cute-3d-style-reference.png',
+          'cute-3d-style-reference.webp',
         );
     } else {
       body.append('image', sourceDrawing, sourceDrawing.name);
@@ -827,7 +725,8 @@ export async function POST(request: Request) {
       );
       return json(
         {
-          error: '이 모습은 완성하지 못했어요. 다른 모습부터 보여 드릴게요.',
+          error:
+            'AI 작업실이 잠깐 쉬고 있어요. 기기 미리보기로 먼저 놀아 주세요.',
           code: 'upstream_busy',
           retryable: true,
         },
@@ -836,23 +735,8 @@ export async function POST(request: Request) {
       );
     }
     generationStage = 'audit-alpha';
-    let finalImage = result.data[0].b64_json;
-    let alpha = await auditPngAlpha(finalImage);
-    if (!alpha.transparent && hasBudget(deadline, 120_000)) {
-      const cutout = await extractTransparentCutout(
-        apiKey,
-        finalImage,
-        request.signal,
-        deadline,
-      );
-      if (cutout) {
-        const cutoutAlpha = await auditPngAlpha(cutout);
-        if (cutoutAlpha.transparent) {
-          finalImage = cutout;
-          alpha = cutoutAlpha;
-        }
-      }
-    }
+    const finalImage = result.data[0].b64_json;
+    const alpha = await auditPngAlpha(finalImage);
     if (!alpha.transparent)
       return json(
         {
@@ -870,7 +754,7 @@ export async function POST(request: Request) {
         502,
       );
     generationStage = 'review-quality';
-    let review = await reviewCuteness(
+    const rawReview = await reviewCuteness(
       apiKey,
       finalImage,
       drawingDataUrl,
@@ -880,18 +764,9 @@ export async function POST(request: Request) {
       deadline,
       styleReferenceDataUrl,
     );
-    if (!review && !request.signal.aborted && hasBudget(deadline, 20_000))
-      review = await reviewCuteness(
-        apiKey,
-        finalImage,
-        drawingDataUrl,
-        age,
-        styleIndex,
-        request.signal,
-        deadline,
-        styleReferenceDataUrl,
-      );
-    if (review) review = reconcileBackgroundReview(review, alpha);
+    const review = rawReview
+      ? reconcileBackgroundReview(rawReview, alpha)
+      : null;
     if (!review)
       return json(
         {
@@ -902,84 +777,6 @@ export async function POST(request: Request) {
         },
         502,
       );
-    let polished = false;
-    if (review.backgroundArtifact && hasBudget(deadline, 138_000)) {
-      generationStage = 'remove-background-artifact';
-      const cutout = await extractTransparentCutout(
-        apiKey,
-        finalImage,
-        request.signal,
-        deadline,
-      );
-      if (cutout) {
-        const cutoutAlpha = await auditPngAlpha(cutout);
-        if (cutoutAlpha.transparent && hasBudget(deadline, 20_000)) {
-          const rawCutoutReview = await reviewCuteness(
-            apiKey,
-            cutout,
-            drawingDataUrl,
-            age,
-            styleIndex,
-            request.signal,
-            deadline,
-            styleReferenceDataUrl,
-          );
-          const cutoutReview = rawCutoutReview
-            ? reconcileBackgroundReview(rawCutoutReview, cutoutAlpha)
-            : null;
-          if (
-            cutoutReview &&
-            !cutoutReview.backgroundArtifact &&
-            cutoutReview.sourceFidelity >= review.sourceFidelity - 6
-          ) {
-            finalImage = cutout;
-            review = cutoutReview;
-            alpha = cutoutAlpha;
-            polished = true;
-          }
-        }
-      }
-    }
-    if (
-      (!review.passed || review.score < CUTENESS_PASS_SCORE) &&
-      hasBudget(deadline, 138_000)
-    ) {
-      const candidate = await polishCuteness(
-        apiKey,
-        finalImage,
-        sourceDrawing,
-        review,
-        styleIndex,
-        highQuality,
-        request.signal,
-        deadline,
-        verifiedStyleReference,
-      );
-      if (candidate) {
-        const candidateAlpha = await auditPngAlpha(candidate);
-        if (candidateAlpha.transparent && hasBudget(deadline, 20_000)) {
-          const rawPolishedReview = await reviewCuteness(
-            apiKey,
-            candidate,
-            drawingDataUrl,
-            age,
-            styleIndex,
-            request.signal,
-            deadline,
-            styleReferenceDataUrl,
-          );
-          const polishedReview = rawPolishedReview
-            ? reconcileBackgroundReview(rawPolishedReview, candidateAlpha)
-            : null;
-          if (polishedReview && polishedReview.score >= review.score) {
-            finalImage = candidate;
-            review = polishedReview;
-            alpha = candidateAlpha;
-            polished = true;
-          }
-        }
-      }
-    }
     if (!review.passed || review.score < CUTENESS_PASS_SCORE)
       return json(
         {
@@ -1010,7 +807,7 @@ export async function POST(request: Request) {
         materialQuality: review.materialQuality,
         naturalPose: review.naturalPose,
         backgroundArtifact: review.backgroundArtifact,
-        polished,
+        polished: false,
         transparent: alpha.transparent,
         transparentRatio: Number(alpha.transparentRatio.toFixed(3)),
         edgeTransparentRatio: Number(
