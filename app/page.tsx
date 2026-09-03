@@ -56,7 +56,10 @@ type CharacterQuality = {
   score?: number;
   passed?: boolean | null;
   polished: boolean;
+  transparent?: boolean;
+  transparentRatio?: number;
 };
+type AdventurePhase = 'entering' | 'idle' | 'acting' | 'resolved' | 'exiting';
 type StoryPage = {
   kind: 'cover' | 'intro' | 'scene' | 'ending';
   eyebrow: string;
@@ -90,7 +93,7 @@ const characterStyles = [
   {
     name: '보송 3D 친구',
     detail: '샘플 감성의 고급 플러시 3D',
-    preview: '/style-plush-3d-v1.webp',
+    preview: '/style-plush-3d-v2.png',
   },
 ] as const;
 const colorChoices = [
@@ -130,6 +133,12 @@ const adventureReactions: Record<AdventureTrait, string> = {
   curiosity: '숨은 비밀을 찾았어!',
   courage: '좋아, 내가 먼저 가 볼게!',
   creativity: '새로운 길이 떠올랐어!',
+};
+const adventureActionEffects: Record<AdventureTrait, string> = {
+  kindness: '친구에게 다가가고 숲빛이 따뜻해져요',
+  curiosity: '카메라가 가까워지고 숨은 장치가 보여요',
+  courage: '무대를 가로질러 달리고 길이 활짝 열려요',
+  creativity: '빛의 궤적을 그려 새로운 길을 만들어요',
 };
 
 async function readJson<T>(response: Response): Promise<T | null> {
@@ -214,6 +223,13 @@ function StorySpread({
       <div className="story-illustration">
         <div
           className={`story-world stage-${sceneIndex}`}
+          style={
+            adventure.id === 'moon'
+              ? {
+                  backgroundImage: `url(/moon-forest-scene-${sceneIndex + 1}.webp)`,
+                }
+              : undefined
+          }
           aria-hidden="true"
         />
         <span className="story-emblem" aria-hidden="true">
@@ -315,9 +331,8 @@ export default function Home() {
   const [choiceResult, setChoiceResult] = useState<AdventureDecision | null>(
     null,
   );
-  const [adventureScore, setAdventureScore] = useState(0);
-  const [adventureCombo, setAdventureCombo] = useState(0);
-  const [lastPoints, setLastPoints] = useState(0);
+  const [adventurePhase, setAdventurePhase] =
+    useState<AdventurePhase>('entering');
   const [soundOn, setSoundOn] = useState(true);
   const [storybook, setStorybook] = useState<StoryPage[] | null>(null);
   const [storybookImage, setStorybookImage] = useState<string | null>(null);
@@ -379,6 +394,12 @@ export default function Home() {
     },
     [],
   );
+  useEffect(() => {
+    if (step !== 'adventure' || scene < 0 || adventurePhase !== 'entering')
+      return;
+    const timer = window.setTimeout(() => setAdventurePhase('idle'), 900);
+    return () => window.clearTimeout(timer);
+  }, [adventurePhase, scene, step]);
   const load = (file?: File) => {
     if (!file) return;
     generationRequest.current?.abort();
@@ -411,9 +432,7 @@ export default function Home() {
         setPage(0);
         setAdventureTrail([]);
         setChoiceResult(null);
-        setAdventureScore(0);
-        setAdventureCombo(0);
-        setLastPoints(0);
+        setAdventurePhase('entering');
         setStorybook(null);
         setStorybookImage(null);
         setStorybookTheme(0);
@@ -504,6 +523,7 @@ export default function Home() {
     blob: Blob,
     index: number,
     signal?: AbortSignal,
+    highQuality = false,
   ) => {
     const form = new FormData();
     form.append('drawing', blob, 'drawing.jpg');
@@ -515,15 +535,12 @@ export default function Home() {
     form.append('childGender', childGender);
     form.append('characterMood', characterMood);
     form.append('favoriteWorld', favoriteWorld);
+    if (highQuality) form.append('qualityTier', 'high');
     if (index === 2) {
-      const referenceResponse = await fetch('/style-plush-3d-v1.webp');
+      const referenceResponse = await fetch('/style-plush-3d-v2.png');
       if (referenceResponse.ok) {
         const reference = await referenceResponse.blob();
-        form.append(
-          'styleReference',
-          reference,
-          'cute-3d-style-reference.webp',
-        );
+        form.append('styleReference', reference, 'cute-3d-style-reference.png');
       }
     }
     const response = await fetch('/api/character', {
@@ -548,8 +565,39 @@ export default function Home() {
     setGenerationNote('그림의 색과 특별한 모양을 살펴보고 있어요…');
     try {
       const blob = await fetch(image).then((r) => r.blob());
+      setGenerated(Array.from({ length: characterStyleCount }, () => ''));
+      setGeneratedQuality(
+        Array.from<CharacterQuality | null>({
+          length: characterStyleCount,
+        }).fill(null),
+      );
+      let revealedFirst = false;
       const variants = Array.from({ length: characterStyleCount }, (_, index) =>
-        requestVariant(blob, index, generationRequest.current?.signal),
+        requestVariant(blob, index, generationRequest.current?.signal).then(
+          (result) => {
+            setGenerated((previous) => {
+              const next = [...previous];
+              next[result.index] = result.image;
+              return next;
+            });
+            setGeneratedQuality((previous) => {
+              const next = [...previous];
+              next[result.index] = result.quality;
+              return next;
+            });
+            if (!revealedFirst) {
+              revealedFirst = true;
+              setPick(result.index);
+              setGenerationNote(
+                '첫 친구가 도착했어요! 다른 모습도 품질 검사를 마치는 대로 옆에 나타나요.',
+              );
+              setStep((current) =>
+                current === 'upload' ? 'character' : current,
+              );
+            }
+            return result;
+          },
+        ),
       );
       const settled = await Promise.allSettled(variants);
       const images = Array.from<string>({ length: characterStyleCount }).fill(
@@ -575,13 +623,12 @@ export default function Home() {
       }
       setGenerated(images);
       setGeneratedQuality(qualities);
-      setPick(Math.max(0, images.findIndex(Boolean)));
       setGenerationNote(
         successCount === characterStyleCount
           ? '그림의 특징을 살리고 귀여움 검수까지 마친 세 친구가 태어났어요!'
           : `${successCount}개의 모습을 먼저 완성했어요. 마음에 드는 친구를 골라 주세요.`,
       );
-      setStep('character');
+      setStep((current) => (current === 'upload' ? 'character' : current));
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return;
       setGenerationNote(
@@ -607,6 +654,7 @@ export default function Home() {
         blob,
         pick,
         generationRequest.current.signal,
+        true,
       );
       setGenerated((previous) =>
         previous.map((item, index) =>
@@ -685,6 +733,8 @@ export default function Home() {
   };
   const buildStoryPages = (trail: AdventureDecision[]): StoryPage[] => {
     const dominantTrait = getDominantTrait(trail);
+    const finalDecision = trail[activeScenes.length - 1];
+    const endingTrait = finalDecision?.trait || dominantTrait;
     const clues = trail.map((decision) => decision.clue).join(' · ');
     return [
       {
@@ -728,19 +778,17 @@ export default function Home() {
       {
         kind: 'ending',
         eyebrow: '그리고 오래오래 행복하게',
-        title: `${traitMeta[dominantTrait].icon} ${traitMeta[dominantTrait].label}이 만든 마지막 장`,
-        body: `${activeAdventure.endings[dominantTrait]} 우리가 모은 ${clues || '반짝이는 마음'}이 모두 이어지자, 이야기 하늘에 커다란 별자리가 떠올랐어요. ${persona.name}와 나는 ‘${activeAdventure.reward}’을 품에 안고 웃으며 집으로 돌아왔답니다.`,
+        title: `${traitMeta[endingTrait].icon} 마지막 선택이 만든 진짜 결말`,
+        body: `${finalDecision ? `마지막 순간 우리는 ‘${finalDecision.label}’ 방법을 골랐어요. ${finalDecision.result}` : ''} ${activeAdventure.endings[endingTrait]} 그동안 모은 ${clues || '반짝이는 마음'}이 모두 이어지자, 먼저 만난 친구와 단서들도 마지막 장면으로 달려왔어요. ${persona.name}와 나는 ‘${activeAdventure.reward}’을 품에 안고 웃으며 집으로 돌아왔답니다.`,
         quote: `이 이야기는 끝이 아니야. 다음 모험도 우리 선택으로 만들어 보자!`,
         clue: activeAdventure.reward,
-        trait: dominantTrait,
+        trait: endingTrait,
         sceneIndex: activeScenes.length - 1,
       },
     ];
   };
   const resetAdventureGame = () => {
-    setAdventureScore(0);
-    setAdventureCombo(0);
-    setLastPoints(0);
+    setAdventurePhase('entering');
   };
   const playAdventureChime = (trait: AdventureTrait) => {
     if (!soundOn) return;
@@ -794,28 +842,31 @@ export default function Home() {
     next[scene] = decision;
     setAdventureTrail(next);
     setChoiceResult(decision);
-    const points = 100 + scene * 25 + adventureCombo * 15;
-    setLastPoints(points);
-    setAdventureScore((current) => current + points);
-    setAdventureCombo((current) => current + 1);
+    setAdventurePhase('acting');
     playAdventureChime(choice.trait);
     navigator.vibrate?.(choice.trait === 'courage' ? [35, 25, 45] : 28);
+    window.setTimeout(() => setAdventurePhase('resolved'), 1750);
   };
   const continueAdventure = () => {
-    if (!choiceResult) return;
-    if (scene < activeScenes.length - 1) {
-      setScene(scene + 1);
+    if (!choiceResult || adventurePhase !== 'resolved') return;
+    setAdventurePhase('exiting');
+    window.setTimeout(() => {
+      if (scene < activeScenes.length - 1) {
+        setScene((current) => current + 1);
+        setChoiceResult(null);
+        setAdventurePhase('entering');
+        return;
+      }
+      setStorybook(buildStoryPages(adventureTrail));
+      setStorybookImage(chosenImage);
+      setStorybookTheme(theme);
+      setPage(0);
+      setBookDirection('next');
+      setReadingAloud(false);
       setChoiceResult(null);
-      return;
-    }
-    setStorybook(buildStoryPages(adventureTrail));
-    setStorybookImage(chosenImage);
-    setStorybookTheme(theme);
-    setPage(0);
-    setBookDirection('next');
-    setReadingAloud(false);
-    setChoiceResult(null);
-    setStep('book');
+      setAdventurePhase('entering');
+      setStep('book');
+    }, 720);
   };
   const storyPages = storybook || buildStoryPages(adventureTrail);
   const bookAdventure =
@@ -858,6 +909,14 @@ export default function Home() {
     ? currentScene.echoes?.[previousDecision.trait]
     : null;
   const activeReactionTrait = choiceResult?.trait || previousDecision?.trait;
+  const visibleChoices =
+    age === '4–6세' ? currentScene.choices.slice(0, 2) : currentScene.choices;
+  const collectedClues = adventureTrail.filter(Boolean);
+  const currentStageClue = choiceResult?.clue || previousDecision?.clue;
+  const sceneBody =
+    age === '4–6세'
+      ? `${currentScene.body.split(/[.!?]/)[0]}!`
+      : currentScene.body;
   const recommendedAdventureId =
     favoriteWorld === '로봇과 우주'
       ? 'space'
@@ -1353,7 +1412,7 @@ export default function Home() {
               <i />
               <span>{generationNote}</span>
               <small>
-                고화질 세 모습을 차례로 만들어요. 최대 2분 걸릴 수 있어요.
+                고화질 세 모습을 동시에 만들어요. 최대 3분 걸릴 수 있어요.
               </small>
             </output>
           )}
@@ -1375,16 +1434,23 @@ export default function Home() {
           <h2>원본과 나란히 보며 골라요</h2>
           <p>{generationNote}</p>
           <div className="transform-proof">
-            <article>
+            <article className="source-drawing">
               <small>아이의 원본 그림</small>
               {image && <img src={image} alt="변환 전 원본 그림" />}
             </article>
             <span>
               <WandSparkles /> AI 변환
             </span>
-            <article>
-              <small>선택한 캐릭터</small>
-              <Friend image={generated[pick]} />
+            <article className="birth-stage">
+              <small>
+                <Sparkles /> 배경에서 완전히 꺼낸 살아 있는 친구
+              </small>
+              <div className="birth-glow" aria-hidden="true" />
+              <div className="birth-shadow" aria-hidden="true" />
+              <div className="birth-idle">
+                <Friend image={generated[pick]} variant="birth-sprite" />
+              </div>
+              <output>“안녕! 이제 어디든 함께 갈 수 있어!”</output>
             </article>
           </div>
           <div className="preference-summary" aria-label="반영한 캐릭터 취향">
@@ -1425,21 +1491,27 @@ export default function Home() {
                     <Friend image={generated[i]} variant={`v${i}`} />
                   ) : (
                     <small>
-                      이번에는
+                      {generating ? '친구가' : '이번에는'}
                       <br />
-                      완성하지 못했어요
+                      {generating ? '오는 중…' : '완성하지 못했어요'}
                     </small>
                   )}
                 </span>
                 <b>{style.name}</b>
                 <small>{style.detail}</small>
-                {generatedQuality[i]?.checked && (
-                  <strong className="cute-pass">
-                    <Heart fill="currentColor" /> 귀여움 검수{' '}
-                    {generatedQuality[i]?.score ?? '완료'}점
-                    {generatedQuality[i]?.polished && <em>자동 보정</em>}
+                {generatedQuality[i]?.transparent && (
+                  <strong className="alpha-pass">
+                    <Check /> 진짜 투명 배경 검증
                   </strong>
                 )}
+                {generatedQuality[i]?.checked &&
+                  generatedQuality[i]?.passed && (
+                    <strong className="cute-pass">
+                      <Heart fill="currentColor" /> 귀여움 검수{' '}
+                      {generatedQuality[i]?.score ?? '완료'}점
+                      {generatedQuality[i]?.polished && <em>자동 보정</em>}
+                    </strong>
+                  )}
               </button>
             ))}
           </div>
@@ -1456,7 +1528,7 @@ export default function Home() {
               )}{' '}
               {regenerating
                 ? '더 귀엽게 다듬는 중…'
-                : `${characterStyles[pick].name} 다시 만들기`}
+                : `${characterStyles[pick].name} 고화질로 다시 만들기`}
             </Button>
             <button
               type="button"
@@ -1724,7 +1796,7 @@ export default function Home() {
             </button>
           </section>
         ) : (
-          <section className="adventure">
+          <section className="adventure adventure-live">
             <div className="adventure-meta">
               <div>
                 <b>{activeAdventure.title}</b>
@@ -1744,14 +1816,16 @@ export default function Home() {
                 <Compass /> 다른 모험
               </button>
             </div>
-            <div className="game-hud" aria-label="모험 게임 정보">
+            <div className="game-hud" aria-label="모험에서 실제로 모은 것">
               <span>
-                <Star fill="currentColor" /> 반짝 점수
-                <b>{adventureScore.toLocaleString('ko-KR')}</b>
+                <Sparkles /> 찾은 단서
+                <b>
+                  {collectedClues.length} / {activeScenes.length}
+                </b>
               </span>
               <span>
-                <Sparkles /> 연속 선택
-                <b>{adventureCombo} 콤보</b>
+                <Heart fill="currentColor" /> 길잡이
+                <b>{collectedClues[0]?.clue || '첫 친구를 기다려요'}</b>
               </span>
               <button
                 type="button"
@@ -1782,120 +1856,150 @@ export default function Home() {
               })}
             </div>
             <div
-              className={`scene s${scene} theme-${activeAdventure.color} path-${
-                choiceResult?.trait || previousDecision?.trait || 'start'
-              } ${choiceResult ? 'scene-resolved' : ''}`}
+              className={`cinematic-stage theme-${activeAdventure.color} stage-${scene} phase-${adventurePhase} action-${
+                choiceResult?.trait || 'idle'
+              } path-${choiceResult?.trait || previousDecision?.trait || 'start'} ${
+                activeAdventure.id === 'moon' ? 'moon-world' : ''
+              }`}
+              aria-live="polite"
             >
-              <div
-                className={`world-backdrop stage-${scene}`}
-                aria-hidden="true"
-              />
-              <i className="moon">{activeAdventure.icon}</i>
-              <i className="stars">✦　·　✧</i>
-              <i className="scene-spark spark-one">✦</i>
-              <i className="scene-spark spark-two">·</i>
-              <div className="game-particles" aria-hidden="true">
-                <i>✦</i>
-                <i>●</i>
-                <i>✧</i>
-                <i>●</i>
+              <div className="camera-rig" aria-hidden="true">
+                <div
+                  className="world-backdrop"
+                  style={
+                    activeAdventure.id === 'moon'
+                      ? {
+                          backgroundImage: `url(/moon-forest-scene-${scene + 1}.webp)`,
+                        }
+                      : undefined
+                  }
+                />
+                <div className="world-grade" />
+                <div className="world-change" />
               </div>
-              <div
-                key={`${theme}-${scene}-${choiceResult?.trait || 'enter'}`}
-                className={`scene-friend game-friend reaction-${
-                  activeReactionTrait || 'start'
-                } ${choiceResult ? 'reacting' : 'entering'}`}
-              >
+              <div className="stage-light" aria-hidden="true" />
+              <div className="stage-motes" aria-hidden="true">
+                <i>✦</i>
+                <i>·</i>
+                <i>✧</i>
+                <i>·</i>
+                <i>✦</i>
+              </div>
+              <article className="stage-story">
+                <span>{currentScene.chapter}</span>
+                <h2>{currentScene.title}</h2>
+                <p>{sceneBody}</p>
+                {currentEcho && !choiceResult && (
+                  <strong
+                    className={`choice-echo path-${previousDecision?.trait}`}
+                  >
+                    <Sparkles /> 지난 선택이 진짜 이어졌어요: {currentEcho}
+                  </strong>
+                )}
+              </article>
+
+              <div className="actor-rig">
                 {activeReactionTrait && (
                   <output className="reaction-bubble">
                     {adventureReactions[activeReactionTrait]}
                   </output>
                 )}
-                <Friend image={chosenImage} />
+                <div className="actor-shadow" aria-hidden="true" />
+                <div
+                  key={`${theme}-${scene}-${choiceResult?.trait || 'enter'}`}
+                  className="actor-action"
+                >
+                  <div className="actor-idle">
+                    <Friend image={chosenImage} variant="actor-sprite" />
+                  </div>
+                </div>
                 {choiceResult && <i className="reaction-burst">✦</i>}
               </div>
-              <article>
-                <span>{currentScene.chapter}</span>
-                <h2>{currentScene.title}</h2>
-                <p>{currentScene.body}</p>
-                {currentEcho && !choiceResult && (
-                  <strong
-                    className={`choice-echo path-${previousDecision?.trait}`}
-                  >
-                    {traitMeta[previousDecision!.trait].icon}{' '}
-                    {previousDecision!.label} 선택이 만든 변화: {currentEcho}
-                  </strong>
-                )}
-              </article>
-            </div>
-            <div className="choice-card">
-              {choiceResult ? (
-                <div className={`choice-result path-${choiceResult.trait}`}>
-                  <div className="result-icon">
-                    {traitMeta[choiceResult.trait].icon}
-                  </div>
-                  <span>
-                    {traitMeta[choiceResult.trait].label}이 반짝였어요
-                  </span>
-                  <h3>{choiceResult.result}</h3>
-                  <p>
-                    단서 획득 <b>{choiceResult.clue}</b>
-                  </p>
-                  <strong className="score-pop">
-                    <Star fill="currentColor" /> +{lastPoints} 반짝
-                  </strong>
-                  <div className="storybook-preview">
-                    <BookOpen />
-                    <span>
-                      <b>동화책에 이렇게 남았어요</b>
-                      <q>
-                        우리는 ‘{choiceResult.label}’ 방법을 골랐어요.{' '}
-                        {choiceResult.result}
-                      </q>
-                    </span>
-                  </div>
-                  <Button onClick={continueAdventure}>
-                    {scene === activeScenes.length - 1 ? (
-                      <>
-                        <BookOpen /> 표지를 열고 우리 동화 읽기{' '}
-                        <ChevronRight />
-                      </>
-                    ) : (
-                      <>
-                        다음 장면에서 변화 확인하기 <ChevronRight />
-                      </>
-                    )}
-                  </Button>
-                </div>
-              ) : (
-                <>
+
+              <div className="stage-object" aria-hidden="true">
+                <i>
+                  {choiceResult
+                    ? traitMeta[choiceResult.trait].icon
+                    : activeAdventure.icon}
+                </i>
+                <span>{currentStageClue || '이번 장면의 비밀'}</span>
+              </div>
+              <div className="stage-foreground" aria-hidden="true" />
+
+              {adventurePhase === 'acting' && choiceResult && (
+                <output className="action-caption">
+                  <Sparkles /> {adventureActionEffects[choiceResult.trait]}
+                </output>
+              )}
+
+              {!choiceResult ? (
+                <div className="stage-choice-dock">
                   <div className="says">
                     <Volume2 /> “
                     {scene === activeScenes.length - 1
-                      ? '마지막 선택이 우리 모험의 결말을 바꿀 거야!'
-                      : '어떤 방법을 고를까? 다음 장면이 달라질 거야!'}
+                      ? '마지막 선택이 결말을 바로 바꿔. 네 방법을 골라 줘!'
+                      : '골라 줘! 내가 직접 움직여서 세상을 바꿔 볼게!'}
                     ”
                   </div>
                   <div className="choices">
-                    {currentScene.choices.map((choice) => (
+                    {visibleChoices.map((choice, index) => (
                       <button
                         key={choice.label}
                         className={`path-${choice.trait}`}
                         onClick={() => chooseAdventureAction(choice)}
                       >
-                        <i>{traitMeta[choice.trait].icon}</i>
+                        <i>{index + 1}</i>
                         <span>{choice.label}</span>
-                        <small>{traitMeta[choice.trait].label}</small>
+                        <small>{adventureActionEffects[choice.trait]}</small>
                         <ChevronRight />
                       </button>
                     ))}
                   </div>
                   <small className="story-event">
-                    <Sparkles /> 선택의 결과와 단서가 다음 장면과 동화책에
-                    이어져요
+                    <Sparkles />{' '}
+                    {age === '4–6세' ? '큰 선택 2개' : '서로 다른 행동 3개'} ·
+                    다음 장면과 마지막 결말까지 기억해요
                   </small>
-                </>
+                </div>
+              ) : (
+                <div className={`stage-outcome path-${choiceResult.trait}`}>
+                  <div className="result-icon">
+                    {traitMeta[choiceResult.trait].icon}
+                  </div>
+                  <span>{choiceResult.label} 선택으로 세상이 달라졌어요</span>
+                  <h3>{choiceResult.result}</h3>
+                  <p className="clue-earned">
+                    <Star fill="currentColor" /> 새 단서{' '}
+                    <b>{choiceResult.clue}</b>가 주머니로 쏙!
+                  </p>
+                  {previousDecision && (
+                    <p className="carry-forward">
+                      <Heart fill="currentColor" /> {previousDecision.clue}도
+                      이번 일을 함께 도왔어요.
+                    </p>
+                  )}
+                  <Button
+                    disabled={adventurePhase !== 'resolved'}
+                    onClick={continueAdventure}
+                  >
+                    {adventurePhase !== 'resolved' ? (
+                      <>
+                        <LoaderCircle className="spin" /> 캐릭터가 행동하는 중…
+                      </>
+                    ) : scene === activeScenes.length - 1 ? (
+                      <>
+                        <BookOpen /> 이 선택으로 완성된 결말 읽기{' '}
+                        <ChevronRight />
+                      </>
+                    ) : (
+                      <>
+                        새로 바뀐 다음 장면으로 <ChevronRight />
+                      </>
+                    )}
+                  </Button>
+                </div>
               )}
+              <div className="scene-wipe" aria-hidden="true" />
             </div>
           </section>
         ))}
@@ -1913,12 +2017,12 @@ export default function Home() {
             </p>
             <div className="book-achievement" aria-label="완성한 모험 기록">
               <span>
-                <Star fill="currentColor" />
-                <b>{adventureScore.toLocaleString('ko-KR')}</b> 반짝
+                <Sparkles />
+                <b>{adventureTrail.length}</b>개 단서
               </span>
               <span>
-                <Sparkles />
-                <b>{adventureTrail.length}</b>개 선택
+                <Heart fill="currentColor" />
+                <b>{adventureTrail[0]?.clue || '나만의 친구'}</b>
               </span>
               <span>
                 <BookOpen />
