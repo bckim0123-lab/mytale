@@ -85,6 +85,16 @@ assert.match(
 );
 assert.match(
   page,
+  /headers: \{ Accept: 'application\/x-ndjson' \}/,
+  '장시간 생성 요청은 스트림 전송을 명시해야 합니다.',
+);
+assert.match(
+  page,
+  /readCharacterStream<CharacterResponse>\(response\)/,
+  '클라이언트가 장시간 생성 스트림의 최종 결과를 읽어야 합니다.',
+);
+assert.match(
+  page,
   /AI 작업실이 잠깐 쉬고 있어요\. 네 그림에는 문제가 없어요\./,
   '일시 장애는 아이 탓이 아닌 안전한 문구로 알려야 합니다.',
 );
@@ -128,12 +138,32 @@ assert.doesNotMatch(
   /instanceof File/,
   'multipart 파일 검증은 배포 런타임 realm에 민감한 instanceof를 사용하면 안 됩니다.',
 );
+assert.match(
+  route,
+  /send\(\{ type: 'accepted' \}\)[\s\S]{0,200}send\(\{ type: 'heartbeat' \}\)/,
+  '배포 연결 제한을 넘는 생성은 즉시 응답을 열고 주기적으로 연결을 유지해야 합니다.',
+);
+assert.match(
+  route,
+  /'Content-Type': 'application\/x-ndjson; charset=utf-8'/,
+  '장시간 생성 응답은 NDJSON 스트림 형식을 명시해야 합니다.',
+);
+assert.match(
+  route,
+  /const generationAbort = new AbortController\(\)[\s\S]{0,1000}handleCharacterRequest\(request, operationSignal\)[\s\S]{0,2000}generationAbort\.abort\(\)/,
+  '사용자가 스트림을 닫으면 진행 중인 이미지 생성과 품질 검사도 중단해야 합니다.',
+);
+assert.match(
+  route,
+  /character-stream-terminal[\s\S]{0,300}status: response\.status/,
+  'HTTP 200 스트림 안의 실제 종료 상태를 운영 로그에 남겨야 합니다.',
+);
 assert.equal(
   route.match(/api\.openai\.com\/v1\/images\/edits/g)?.length,
   1,
   '서버의 사용자 요청 한 건에는 GPT Image 호출 경로가 하나만 있어야 합니다.',
 );
-const postStart = route.indexOf('export async function POST');
+const postStart = route.indexOf('async function handleCharacterRequest');
 const postRoute = route.slice(postStart);
 assert.equal(
   postRoute.match(/await reviewCuteness\(/g)?.length,
@@ -150,11 +180,8 @@ const server = await createServer({
 });
 
 try {
-  const {
-    imageTypeFromBytes,
-    isBinaryFormPart,
-    trusted3dReference,
-  } = await server.ssrLoadModule('/app/api/character/route.ts');
+  const { imageTypeFromBytes, isBinaryFormPart, trusted3dReference } =
+    await server.ssrLoadModule('/app/api/character/route.ts');
   const guideBytes = await readFile('public/style-plush-3d-guide.webp');
   const guideHash = createHash('sha256').update(guideBytes).digest('hex');
   assert.match(

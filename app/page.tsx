@@ -204,6 +204,60 @@ async function readJson<T>(response: Response): Promise<T | null> {
   }
 }
 
+async function readCharacterStream<T>(response: Response): Promise<T> {
+  if (!response.body)
+    throw new CharacterRequestError(
+      'AI 작업실의 응답을 읽지 못했어요.',
+      'generation_failed',
+      true,
+    );
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  const readLine = (line: string): T | undefined => {
+    if (!line.trim()) return undefined;
+    let event: {
+      type?: string;
+      status?: number;
+      data?: T & CharacterErrorPayload;
+    };
+    try {
+      event = JSON.parse(line) as typeof event;
+    } catch {
+      return undefined;
+    }
+    if (event.type === 'result' && event.data !== undefined) return event.data;
+    if (event.type === 'error')
+      throw new CharacterRequestError(
+        event.data?.error || 'AI 작업실 연결이 잠시 불안정해요.',
+        event.data?.code,
+        event.data?.retryable ??
+          (typeof event.status === 'number' ? event.status >= 500 : true),
+      );
+    return undefined;
+  };
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+    for (const line of lines) {
+      const result = readLine(line);
+      if (result !== undefined) return result;
+    }
+    if (done) {
+      const result = readLine(buffer);
+      if (result !== undefined) return result;
+      break;
+    }
+  }
+  throw new CharacterRequestError(
+    'AI 작업실의 응답이 일찍 끝났어요.',
+    'generation_failed',
+    true,
+  );
+}
+
 function apiErrorMessage(response: Response, fallback?: string) {
   if (fallback) return fallback;
   if (response.status === 429)
@@ -760,15 +814,19 @@ export default function Home() {
     }
     const response = await fetch('/api/character', {
       method: 'POST',
+      headers: { Accept: 'application/x-ndjson' },
       body: form,
       signal,
     });
-    const data = await readJson<
-      CharacterErrorPayload & {
-        image?: string;
-        quality?: CharacterQuality;
-      }
-    >(response);
+    type CharacterResponse = CharacterErrorPayload & {
+      image?: string;
+      quality?: CharacterQuality;
+    };
+    const data = response.headers
+      .get('content-type')
+      ?.includes('application/x-ndjson')
+      ? await readCharacterStream<CharacterResponse>(response)
+      : await readJson<CharacterResponse>(response);
     if (!response.ok || !data?.image) {
       throw new CharacterRequestError(
         apiErrorMessage(response, data?.error),

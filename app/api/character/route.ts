@@ -159,9 +159,7 @@ export function imageTypeFromBytes(bytes: Uint8Array) {
   return null;
 }
 
-export async function trusted3dReference(
-  value: FormDataEntryValue | null,
-) {
+export async function trusted3dReference(value: FormDataEntryValue | null) {
   if (!isBinaryFormPart(value) || value.size > 2 * 1024 * 1024) return null;
   const bytes = new Uint8Array(await value.arrayBuffer());
   if (imageTypeFromBytes(bytes) !== 'image/webp') return null;
@@ -567,11 +565,15 @@ export async function GET() {
   });
 }
 
-export async function POST(request: Request) {
+async function handleCharacterRequest(
+  request: Request,
+  operationSignal = request.signal,
+) {
   const deadline = Date.now() + REQUEST_BUDGET_MS;
   let generationStage = 'parse-form';
   try {
     const form = await request.formData();
+    operationSignal.throwIfAborted();
     const drawing = form.get('drawing');
     const styleReference = form.get('styleReference');
     const styleIndex = Number(form.get('styleIndex'));
@@ -702,7 +704,7 @@ export async function POST(request: Request) {
         ? '두 번째 입력 이미지는 3D 재질과 귀여운 비율만 참고하는 스타일 가이드입니다. 그 이미지의 동물 정체성, 장식, 글자, 여러 각도 구성은 복사하지 말고 첫 번째 원본의 캐릭터만 한 명 생성하세요.'
         : styleIndex === 2
           ? '신뢰된 3D 스타일 가이드를 불러오지 못했으므로 첫 번째 원본만 사용해 보송한 플러시 재질, 둥근 비율, 순한 눈과 고급 애니메이션 영화 수준의 마감을 구현하세요.'
-        : '',
+          : '',
     ]
       .filter(Boolean)
       .join(' ');
@@ -730,7 +732,7 @@ export async function POST(request: Request) {
       method: 'POST',
       headers: { Authorization: `Bearer ${apiKey}` },
       body,
-      signal: budgetedSignal(request.signal, deadline, 190_000),
+      signal: budgetedSignal(operationSignal, deadline, 190_000),
     });
     const result = (await response.json().catch(() => ({}))) as {
       data?: Array<{ b64_json?: string }>;
@@ -778,7 +780,7 @@ export async function POST(request: Request) {
       drawingDataUrl,
       age,
       styleIndex,
-      request.signal,
+      operationSignal,
       deadline,
       styleReferenceDataUrl,
     );
@@ -847,7 +849,7 @@ export async function POST(request: Request) {
       error instanceof Error ? error.message : 'unknown',
     );
     const deadlineExceeded =
-      !request.signal.aborted &&
+      !operationSignal.aborted &&
       (error instanceof DOMException ||
         (error instanceof Error && /timeout|timed out/i.test(error.message)));
     return json(
@@ -861,4 +863,86 @@ export async function POST(request: Request) {
       { 'Retry-After': '2' },
     );
   }
+}
+
+export function POST(request: Request) {
+  if (!request.headers.get('accept')?.includes('application/x-ndjson'))
+    return handleCharacterRequest(request);
+
+  const encoder = new TextEncoder();
+  const generationAbort = new AbortController();
+  const operationSignal = AbortSignal.any([
+    request.signal,
+    generationAbort.signal,
+  ]);
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
+  let open = true;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const send = (event: unknown) => {
+        if (!open) return;
+        try {
+          controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+        } catch {
+          open = false;
+        }
+      };
+      send({ type: 'accepted' });
+      heartbeat = setInterval(() => send({ type: 'heartbeat' }), 8_000);
+      void handleCharacterRequest(request, operationSignal)
+        .then(async (response) => {
+          const data = await response.json().catch(() => ({
+            error:
+              '캐릭터 변환 결과를 읽지 못했어요. 기기 미리보기로 먼저 놀아 주세요.',
+            code: 'generation_failed',
+            retryable: true,
+          }));
+          console.info('character-stream-terminal', {
+            ok: response.ok,
+            status: response.status,
+            code:
+              data && typeof data === 'object' && 'code' in data
+                ? data.code
+                : undefined,
+          });
+          send(
+            response.ok
+              ? { type: 'result', data }
+              : { type: 'error', status: response.status, data },
+          );
+        })
+        .catch(() => {
+          send({
+            type: 'error',
+            status: 502,
+            data: {
+              error:
+                '캐릭터 변환을 완료하지 못했어요. 기기 미리보기로 먼저 놀아 주세요.',
+              code: 'generation_failed',
+              retryable: true,
+            },
+          });
+        })
+        .finally(() => {
+          if (heartbeat) clearInterval(heartbeat);
+          if (!open) return;
+          open = false;
+          controller.close();
+        });
+    },
+    cancel() {
+      open = false;
+      if (heartbeat) clearInterval(heartbeat);
+      generationAbort.abort();
+    },
+  });
+
+  return new Response(stream, {
+    status: 200,
+    headers: {
+      'Cache-Control': 'no-cache, no-store',
+      'Content-Type': 'application/x-ndjson; charset=utf-8',
+      'X-Content-Type-Options': 'nosniff',
+    },
+  });
 }
