@@ -510,8 +510,8 @@ function GenerationProgressPanel({
           </ol>
           {connectionDelayed ? (
             <small className="generation-long-wait delayed">
-              새 진행 신호를 기다리고 있어요. 연결이 느리면 요청을 멈춘 뒤 다시
-              시도할 수 있어요.
+              고화질 단계에서는 진행 소식이 잠시 멈출 수 있어요. 요청은 그대로
+              기다리거나 내 그림 친구로 먼저 놀 수 있어요.
             </small>
           ) : (
             elapsedSeconds >= 90 && (
@@ -534,7 +534,7 @@ function GenerationProgressPanel({
             진행 화면 보기
           </button>
         )}
-        {(elapsedSeconds >= 180 || connectionDelayed) && onStop && (
+        {elapsedSeconds >= 180 && onStop && (
           <button type="button" className="stop" onClick={onStop}>
             <X /> 이 요청 멈추기
           </button>
@@ -685,7 +685,7 @@ export default function Home() {
       );
       setGenerationConnectionDelayed(
         generationLastActivityAt !== null &&
-          now - generationLastActivityAt > 12_000,
+          now - generationLastActivityAt > 45_000,
       );
     };
     const timer = window.setInterval(updateElapsed, 1000);
@@ -1000,7 +1000,7 @@ export default function Home() {
     '예상: 투명 배경과 귀여움을 확인하는 중',
   ][generationPhaseIndex];
   const visibleGenerationPhaseLabel = generationConnectionDelayed
-    ? '진행 신호가 늦어져 연결을 확인하는 중'
+    ? '고화질 렌더링 응답을 기다리는 중'
     : generationPhaseLabel;
   const generationCanRetry =
     generationRetryable && generationRetryRemainingSeconds === 0;

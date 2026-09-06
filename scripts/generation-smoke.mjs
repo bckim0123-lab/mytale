@@ -178,6 +178,11 @@ assert.match(
   /tier: review\.passed \? 'premium' : 'ready'/,
   '검사 완료 결과만 프리미엄 또는 사용 가능한 완성본으로 전달해야 합니다.',
 );
+assert.match(
+  route,
+  /edgeTransparentRatio >= 0\.9[\s\S]{0,120}rectangularFillRatio <= 0\.94/,
+  '사각 카드나 불투명 캔버스는 픽셀 알파 검사에서 계속 차단해야 합니다.',
+);
 assert.doesNotMatch(
   `${page}\n${route}`,
   /tier[^\n]*unchecked|=== 'unchecked'/,
@@ -287,8 +292,8 @@ try {
   );
   assert.equal(
     isHardQualityFailure({ ...usableReview, backgroundArtifact: true }),
-    true,
-    '검사가 찾은 배경 카드나 바닥판은 알파 수치와 무관하게 차단해야 합니다.',
+    false,
+    '투명 알파 검사를 통과한 작은 접지 그림자 오탐은 완성본을 폐기하면 안 됩니다.',
   );
   const guideBytes = await readFile('public/style-plush-3d-guide.webp');
   const guideHash = createHash('sha256').update(guideBytes).digest('hex');

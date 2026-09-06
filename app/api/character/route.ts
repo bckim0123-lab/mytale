@@ -446,7 +446,7 @@ async function reviewCuteness(
                   '둥글고 한눈에 읽히는 실루엣, 큰 머리와 짧은 몸의 안정적인 비율, 따뜻하고 순한 눈, 작고 사랑스러운 입, 짧고 말랑한 팔다리, 포근한 색과 재질을 기준으로 평가한다.',
                   '원본의 대표 색, 실루엣, 얼굴, 무늬와 특별한 특징을 보존했는지 sourceFidelity로 평가한다. 전신이 모두 보이는지 fullBody, 팔다리·얼굴·꼬리·장식이 자연스러운지 anatomy로 평가한다.',
                   '요청 스타일과의 일치도는 styleMatch, 표면 재질·조명·가장자리·렌더 마감은 materialQuality, 생명감 있고 안정적인 기본 자세는 naturalPose로 평가한다. 3D 레퍼런스가 있으면 동물 정체성이나 장식을 복사하지 말고 보송한 플러시 재질, 둥근 비율, 순한 눈과 고급 마감만 비교한다. 세 번째 레퍼런스의 베이지 보드, 글자, 여러 각도 캐릭터는 backgroundArtifact 평가 대상이 아니며 오직 두 번째 변환 결과에서만 배경 오염을 판정한다.',
-                  '기괴함, 무서운 눈, 날카로운 이빨, 중복 팔다리, 뒤틀린 얼굴, 잘림, 복수 캐릭터, 글자나 로고가 있으면 실패다. 투명 여백 안쪽에도 흰색·체커보드·색면·제품 카드·액자·프레임·바닥판·사각 그림자가 있으면 backgroundArtifact를 true로 하고 실패다.',
+                  '기괴함, 무서운 눈, 날카로운 이빨, 중복 팔다리, 뒤틀린 얼굴, 잘림, 복수 캐릭터, 글자나 로고가 있으면 실패다. 투명 여백 안쪽에 흰색·체커보드·색면·제품 카드·액자·프레임·넓은 바닥판이 있으면 backgroundArtifact를 true로 한다. 발밑의 작고 부드러운 유기적 접지 그림자만 있는 경우는 backgroundArtifact가 아니다.',
                   `score ${CUTENESS_PASS_SCORE} 이상, sourceFidelity 72 이상, fullBody 88 이상, anatomy 85 이상, styleMatch 80 이상, materialQuality 80 이상, naturalPose 85 이상, 한 캐릭터이며 기괴하지 않고 배경 아티팩트가 없을 때만 passed를 true로 해라.`,
                   '제공된 JSON 스키마에만 맞춰 답한다.',
                 ].join(' '),
@@ -573,7 +573,6 @@ export function isHardQualityFailure(review: CutenessReview) {
   return (
     !review.singleCharacter ||
     review.scaryOrUncanny ||
-    review.backgroundArtifact ||
     review.anatomy < 40 ||
     review.fullBody < 45
   );
@@ -836,7 +835,17 @@ async function handleCharacterRequest(
       styleMatch: review.styleMatch,
       materialQuality: review.materialQuality,
       naturalPose: review.naturalPose,
+      singleCharacter: review.singleCharacter,
+      scaryOrUncanny: review.scaryOrUncanny,
       backgroundArtifact: review.backgroundArtifact,
+      alphaTransparentRatio: Number(alpha.transparentRatio.toFixed(3)),
+      alphaEdgeTransparentRatio: Number(
+        (alpha.edgeTransparentRatio || 0).toFixed(3),
+      ),
+      alphaForegroundRatio: Number((alpha.foregroundRatio || 0).toFixed(3)),
+      alphaRectangularFillRatio: Number(
+        (alpha.rectangularFillRatio || 0).toFixed(3),
+      ),
     });
     if (isHardQualityFailure(review))
       return json(
