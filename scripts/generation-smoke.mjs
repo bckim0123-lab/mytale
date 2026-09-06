@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { createServer } from 'vite';
 
@@ -74,6 +75,16 @@ assert.doesNotMatch(
 );
 assert.match(
   page,
+  /style-plush-3d-guide\.webp\?v=\$\{plushReferenceVersion\}[\s\S]{0,120}cache: 'no-store'/,
+  '3D 기준 파일은 버전 URL로 캐시를 우회해 받아야 합니다.',
+);
+assert.match(
+  page,
+  /new Blob\(\[await referenceResponse\.arrayBuffer\(\)\],[\s\S]{0,80}type: 'image\/webp'/,
+  '배포 런타임의 MIME 차이와 무관하게 기준 파일 형식을 명시해야 합니다.',
+);
+assert.match(
+  page,
   /AI 작업실이 잠깐 쉬고 있어요\. 네 그림에는 문제가 없어요\./,
   '일시 장애는 아이 탓이 아닌 안전한 문구로 알려야 합니다.',
 );
@@ -97,6 +108,26 @@ assert.match(
   /code: 'quality_failed',[\s\S]{0,80}retryable: false/,
   '귀여움 품질 탈락은 비용이 드는 자동 재생성을 반복하면 안 됩니다.',
 );
+assert.doesNotMatch(
+  route,
+  /code: 'invalid_style_reference'/,
+  '내부 3D 기준 파일 문제로 핵심 생성을 400에서 중단하면 안 됩니다.',
+);
+assert.match(
+  route,
+  /character-style-reference-fallback/,
+  '3D 기준 파일 검증 실패를 개인정보 없이 운영 로그에 남겨야 합니다.',
+);
+assert.match(
+  route,
+  /신뢰된 3D 스타일 가이드를 불러오지 못했으므로/,
+  '3D 기준 파일 검증 실패 시 임의 파일은 버리고 안전한 텍스트 스타일로 계속 생성해야 합니다.',
+);
+assert.doesNotMatch(
+  route,
+  /instanceof File/,
+  'multipart 파일 검증은 배포 런타임 realm에 민감한 instanceof를 사용하면 안 됩니다.',
+);
 assert.equal(
   route.match(/api\.openai\.com\/v1\/images\/edits/g)?.length,
   1,
@@ -119,6 +150,47 @@ const server = await createServer({
 });
 
 try {
+  const {
+    imageTypeFromBytes,
+    isBinaryFormPart,
+    trusted3dReference,
+  } = await server.ssrLoadModule('/app/api/character/route.ts');
+  const guideBytes = await readFile('public/style-plush-3d-guide.webp');
+  const guideHash = createHash('sha256').update(guideBytes).digest('hex');
+  assert.match(
+    route,
+    new RegExp(guideHash),
+    '배포할 3D 기준 파일의 해시와 서버 상수가 일치해야 합니다.',
+  );
+  const crossRuntimeGuide = new Blob([guideBytes], {
+    type: 'application/octet-stream',
+  });
+  assert.equal(
+    isBinaryFormPart(crossRuntimeGuide),
+    true,
+    '다른 런타임의 Blob도 바이트 기반 검증 대상으로 받아야 합니다.',
+  );
+  assert.equal(
+    imageTypeFromBytes(new Uint8Array(guideBytes)),
+    'image/webp',
+    '3D 기준 파일 형식은 응답 MIME이 아니라 실제 바이트로 판별해야 합니다.',
+  );
+  const verifiedGuide = await trusted3dReference(crossRuntimeGuide);
+  assert.equal(
+    verifiedGuide?.type,
+    'image/webp',
+    '정상 기준 파일은 런타임 MIME이 달라도 신뢰된 WebP로 정규화해야 합니다.',
+  );
+  const alteredGuideBytes = new Uint8Array(guideBytes);
+  alteredGuideBytes[alteredGuideBytes.length - 1] ^= 1;
+  assert.equal(
+    await trusted3dReference(
+      new Blob([alteredGuideBytes], { type: 'image/webp' }),
+    ),
+    null,
+    '변조된 기준 파일은 모델 입력에서 제외해야 합니다.',
+  );
+
   const { removeConnectedPaperBackground } = await server.ssrLoadModule(
     '/app/local-character-preview.ts',
   );

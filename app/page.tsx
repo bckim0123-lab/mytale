@@ -125,6 +125,7 @@ const flow: { id: Step; label: string }[] = [
 ];
 const characterStyleCount = 3;
 const characterGenerationOrder = [2, 1, 0] as const;
+const plushReferenceVersion = 'cdb11278';
 const characterStyles = [
   {
     name: '동화 그림친구',
@@ -739,11 +740,14 @@ export default function Home() {
     if (index === 2) {
       let reference = styleReferenceBlob.current;
       if (!reference) {
-        const referenceResponse = await fetch('/style-plush-3d-guide.webp', {
-          signal,
-        });
+        const referenceResponse = await fetch(
+          `/style-plush-3d-guide.webp?v=${plushReferenceVersion}`,
+          { signal, cache: 'no-store' },
+        );
         if (referenceResponse.ok) {
-          reference = await referenceResponse.blob();
+          reference = new Blob([await referenceResponse.arrayBuffer()], {
+            type: 'image/webp',
+          });
           styleReferenceBlob.current = reference;
         }
       }
