@@ -85,6 +85,11 @@ type CutenessReview = {
   issue: string;
 };
 
+type CutenessReviewOutcome =
+  | { status: 'reviewed'; review: CutenessReview }
+  | { status: 'timeout' }
+  | { status: 'failed' };
+
 type AlphaAudit = {
   transparent: boolean;
   transparentRatio: number;
@@ -330,19 +335,14 @@ async function auditPngAlpha(imageBase64: string): Promise<AlphaAudit> {
         : 0;
     const touchesEdge =
       minX === 0 || minY === 0 || maxX === width - 1 || maxY === height - 1;
+    const hasClearBackground =
+      transparentRatio >= 0.08 &&
+      foregroundRatio >= 0.03 &&
+      foregroundRatio <= 0.9 &&
+      edgeTransparentRatio >= 0.9 &&
+      rectangularFillRatio <= 0.94;
     return {
-      transparent:
-        transparentRatio >= 0.12 &&
-        foregroundRatio >= 0.06 &&
-        foregroundRatio <= 0.76 &&
-        edgeTransparentRatio >= 0.97 &&
-        bboxWidthRatio >= 0.22 &&
-        bboxWidthRatio <= 0.95 &&
-        bboxHeightRatio >= 0.45 &&
-        bboxHeightRatio <= 0.95 &&
-        safeMarginRatio >= 0.018 &&
-        rectangularFillRatio <= 0.88 &&
-        !touchesEdge,
+      transparent: hasClearBackground,
       transparentRatio,
       edgeTransparentRatio,
       foregroundRatio,
@@ -350,7 +350,23 @@ async function auditPngAlpha(imageBase64: string): Promise<AlphaAudit> {
       bboxHeightRatio,
       safeMarginRatio,
       rectangularFillRatio,
-      reason: touchesEdge ? 'foreground-touches-edge' : undefined,
+      reason: !hasClearBackground
+        ? transparentRatio < 0.08
+          ? 'insufficient-alpha'
+          : edgeTransparentRatio < 0.9
+            ? 'opaque-canvas-edge'
+            : rectangularFillRatio > 0.94
+              ? 'rectangular-background'
+              : foregroundRatio < 0.03
+                ? 'foreground-too-small'
+                : foregroundRatio > 0.9
+                  ? 'foreground-too-large'
+                  : touchesEdge
+                    ? 'foreground-touches-edge'
+                    : 'alpha-layout-failed'
+        : touchesEdge
+          ? 'foreground-touches-edge-soft'
+          : undefined,
     };
   } catch (error) {
     return {
@@ -382,7 +398,10 @@ async function reviewCuteness(
   signal: AbortSignal,
   deadline: number,
   styleReferenceDataUrl?: string,
-): Promise<CutenessReview | null> {
+): Promise<CutenessReviewOutcome> {
+  const reviewTimeout = AbortSignal.timeout(
+    Math.min(30_000, Math.max(1, deadline - Date.now())),
+  );
   try {
     const reviewImages = [
       {
@@ -478,7 +497,7 @@ async function reviewCuteness(
         },
         store: false,
       }),
-      signal: budgetedSignal(signal, deadline, 18_000),
+      signal: AbortSignal.any([signal, reviewTimeout]),
     });
     const result = (await response.json().catch(() => ({}))) as {
       output?: Array<{
@@ -486,9 +505,9 @@ async function reviewCuteness(
       }>;
     };
     const raw = responseText(result);
-    if (!response.ok || !raw) return null;
+    if (!response.ok || !raw) return { status: 'failed' };
     const parsed = JSON.parse(raw) as Partial<CutenessReview>;
-    if (typeof parsed.score !== 'number') return null;
+    if (typeof parsed.score !== 'number') return { status: 'failed' };
     const score = Math.max(0, Math.min(100, Math.round(parsed.score)));
     const sourceFidelity = Math.max(
       0,
@@ -515,47 +534,49 @@ async function reviewCuteness(
     const scaryOrUncanny = parsed.scaryOrUncanny === true;
     const backgroundArtifact = parsed.backgroundArtifact === true;
     return {
-      score,
-      sourceFidelity,
-      fullBody,
-      anatomy,
-      styleMatch,
-      materialQuality,
-      naturalPose,
-      singleCharacter,
-      scaryOrUncanny,
-      backgroundArtifact,
-      passed:
-        score >= CUTENESS_PASS_SCORE &&
-        sourceFidelity >= 72 &&
-        fullBody >= 88 &&
-        anatomy >= 85 &&
-        styleMatch >= 80 &&
-        materialQuality >= 80 &&
-        naturalPose >= 85 &&
-        singleCharacter &&
-        !scaryOrUncanny,
-      issue:
-        typeof parsed.issue === 'string'
-          ? parsed.issue.replace(/\s+/g, ' ').trim().slice(0, 180)
-          : '표정과 비율을 더 포근하고 사랑스럽게 다듬기',
+      status: 'reviewed',
+      review: {
+        score,
+        sourceFidelity,
+        fullBody,
+        anatomy,
+        styleMatch,
+        materialQuality,
+        naturalPose,
+        singleCharacter,
+        scaryOrUncanny,
+        backgroundArtifact,
+        passed:
+          score >= CUTENESS_PASS_SCORE &&
+          sourceFidelity >= 72 &&
+          fullBody >= 88 &&
+          anatomy >= 85 &&
+          styleMatch >= 80 &&
+          materialQuality >= 80 &&
+          naturalPose >= 85 &&
+          singleCharacter &&
+          !scaryOrUncanny &&
+          !backgroundArtifact,
+        issue:
+          typeof parsed.issue === 'string'
+            ? parsed.issue.replace(/\s+/g, ' ').trim().slice(0, 180)
+            : '표정과 비율을 더 포근하고 사랑스럽게 다듬기',
+      },
     };
-  } catch {
-    return null;
+  } catch (error) {
+    if (signal.aborted) throw error;
+    return reviewTimeout.aborted ? { status: 'timeout' } : { status: 'failed' };
   }
 }
 
-function reconcileBackgroundReview(review: CutenessReview, alpha: AlphaAudit) {
-  const numericArtifact =
-    (alpha.rectangularFillRatio || 0) > 0.82 ||
-    (alpha.foregroundRatio || 0) > 0.72 ||
-    alpha.transparentRatio < 0.16;
-  const confirmedArtifact = review.backgroundArtifact && numericArtifact;
-  return {
-    ...review,
-    backgroundArtifact: confirmedArtifact,
-    passed: review.passed && !confirmedArtifact,
-  };
+export function isHardQualityFailure(review: CutenessReview) {
+  return (
+    !review.singleCharacter ||
+    review.scaryOrUncanny ||
+    review.backgroundArtifact ||
+    review.anatomy < 40 ||
+    review.fullBody < 45
+  );
 }
 
 export async function GET() {
@@ -647,7 +668,7 @@ async function handleCharacterRequest(
           error:
             '친구들이 숨을 고르고 있어요. 잠시 쉬었다가 다시 만들어 주세요.',
           code: 'rate_limited',
-          retryable: false,
+          retryable: true,
           retryAfterMs: Math.max(1000, recent[0] + 15 * 60_000 - now),
         },
         429,
@@ -774,7 +795,7 @@ async function handleCharacterRequest(
         502,
       );
     generationStage = 'review-quality';
-    const rawReview = await reviewCuteness(
+    const reviewOutcome = await reviewCuteness(
       apiKey,
       finalImage,
       drawingDataUrl,
@@ -784,24 +805,44 @@ async function handleCharacterRequest(
       deadline,
       styleReferenceDataUrl,
     );
-    const review = rawReview
-      ? reconcileBackgroundReview(rawReview, alpha)
-      : null;
-    if (!review)
+    operationSignal.throwIfAborted();
+    if (reviewOutcome.status !== 'reviewed') {
+      console.warn('character-quality-review-unavailable', {
+        reason: reviewOutcome.status,
+        remainingMs: Math.max(0, deadline - Date.now()),
+      });
       return json(
         {
           error:
-            '귀여움 품질 검사를 끝내지 못해 이 모습은 보여 주지 않았어요. 다시 만들면 안전하게 새 모습으로 시도할게요.',
-          code: 'quality_review_failed',
-          retryable: false,
+            '완성된 모습을 안전하게 확인하지 못해 이번 결과는 보여 주지 않았어요. 잠시 뒤 다시 시도해 주세요.',
+          code:
+            reviewOutcome.status === 'timeout'
+              ? 'quality_review_timeout'
+              : 'quality_review_failed',
+          retryable: true,
+          retryAfterMs: 30_000,
         },
         502,
+        { 'Retry-After': '30' },
       );
-    if (!review.passed || review.score < CUTENESS_PASS_SCORE)
+    }
+    const review = reviewOutcome.review;
+    console.info('character-quality-evaluated', {
+      score: review.score,
+      passed: review.passed,
+      sourceFidelity: review.sourceFidelity,
+      fullBody: review.fullBody,
+      anatomy: review.anatomy,
+      styleMatch: review.styleMatch,
+      materialQuality: review.materialQuality,
+      naturalPose: review.naturalPose,
+      backgroundArtifact: review.backgroundArtifact,
+    });
+    if (isHardQualityFailure(review))
       return json(
         {
           error:
-            '이 모습은 귀여움 품질 기준을 통과하지 못해 보여 주지 않았어요. 다시 만들면 새 모습으로 시도할게요.',
+            '이 모습은 안전한 캐릭터 기준을 통과하지 못해 보여 주지 않았어요. 다시 만들면 새 모습으로 시도할게요.',
           code: 'quality_failed',
           retryable: false,
           ...(process.env.NODE_ENV !== 'production'
@@ -822,6 +863,7 @@ async function handleCharacterRequest(
         checked: true,
         score: review.score,
         passed: review.passed,
+        tier: review.passed ? 'premium' : 'ready',
         sourceFidelity: review.sourceFidelity,
         styleMatch: review.styleMatch,
         materialQuality: review.materialQuality,
@@ -870,6 +912,7 @@ export function POST(request: Request) {
     return handleCharacterRequest(request);
 
   const encoder = new TextEncoder();
+  const streamStartedAt = Date.now();
   const generationAbort = new AbortController();
   const operationSignal = AbortSignal.any([
     request.signal,
@@ -888,6 +931,7 @@ export function POST(request: Request) {
         }
       };
       send({ type: 'accepted' });
+      console.info('character-stream-accepted');
       heartbeat = setInterval(() => send({ type: 'heartbeat' }), 8_000);
       void handleCharacterRequest(request, operationSignal)
         .then(async (response) => {
@@ -900,6 +944,7 @@ export function POST(request: Request) {
           console.info('character-stream-terminal', {
             ok: response.ok,
             status: response.status,
+            durationMs: Date.now() - streamStartedAt,
             code:
               data && typeof data === 'object' && 'code' in data
                 ? data.code

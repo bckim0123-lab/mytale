@@ -67,6 +67,7 @@ type CharacterQuality = {
   checked: boolean;
   score?: number;
   passed?: boolean | null;
+  tier?: 'premium' | 'ready';
   polished: boolean;
   transparent?: boolean;
   transparentRatio?: number;
@@ -82,12 +83,19 @@ type CharacterErrorPayload = {
 class CharacterRequestError extends Error {
   code?: string;
   retryable: boolean;
+  retryAfterMs?: number;
 
-  constructor(message: string, code?: string, retryable = false) {
+  constructor(
+    message: string,
+    code?: string,
+    retryable = false,
+    retryAfterMs?: number,
+  ) {
     super(message);
     this.name = 'CharacterRequestError';
     this.code = code;
     this.retryable = retryable;
+    this.retryAfterMs = retryAfterMs;
   }
 }
 type AdventurePhase =
@@ -194,6 +202,14 @@ const birthReactions = [
   '“빙글— 네 그림에서 태어난 게 정말 좋아!”',
 ] as const;
 
+function formatGenerationTime(totalSeconds: number) {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return minutes
+    ? `${minutes}분 ${String(seconds).padStart(2, '0')}초`
+    : `${seconds}초`;
+}
+
 async function readJson<T>(response: Response): Promise<T | null> {
   if (!response.headers.get('content-type')?.includes('application/json'))
     return null;
@@ -204,7 +220,10 @@ async function readJson<T>(response: Response): Promise<T | null> {
   }
 }
 
-async function readCharacterStream<T>(response: Response): Promise<T> {
+async function readCharacterStream<T>(
+  response: Response,
+  onActivity?: () => void,
+): Promise<T> {
   if (!response.body)
     throw new CharacterRequestError(
       'AI 작업실의 응답을 읽지 못했어요.',
@@ -226,6 +245,10 @@ async function readCharacterStream<T>(response: Response): Promise<T> {
     } catch {
       return undefined;
     }
+    if (event.type === 'accepted' || event.type === 'heartbeat') {
+      onActivity?.();
+      return undefined;
+    }
     if (event.type === 'result' && event.data !== undefined) return event.data;
     if (event.type === 'error')
       throw new CharacterRequestError(
@@ -233,6 +256,7 @@ async function readCharacterStream<T>(response: Response): Promise<T> {
         event.data?.code,
         event.data?.retryable ??
           (typeof event.status === 'number' ? event.status >= 500 : true),
+        event.data?.retryAfterMs,
       );
     return undefined;
   };
@@ -279,7 +303,8 @@ function characterFailureMessage(error: unknown) {
   if (
     error.code === 'alpha_failed' ||
     error.code === 'quality_failed' ||
-    error.code === 'quality_review_failed'
+    error.code === 'quality_review_failed' ||
+    error.code === 'quality_review_timeout'
   )
     return '첫 결과가 투명 배경과 귀여움 기준을 통과하지 못해 보여 주지 않았어요. 기기 미리보기로 놀거나 이 스타일만 새로 만들어 주세요.';
   return error.retryable
@@ -418,6 +443,107 @@ function Button({
   );
 }
 
+function GenerationProgressPanel({
+  elapsedSeconds,
+  phaseIndex,
+  phaseLabel,
+  compact = false,
+  connectionDelayed = false,
+  onPlay,
+  onView,
+  onStop,
+}: {
+  elapsedSeconds: number;
+  phaseIndex: number;
+  phaseLabel: string;
+  compact?: boolean;
+  connectionDelayed?: boolean;
+  onPlay?: () => void;
+  onView?: () => void;
+  onStop?: () => void;
+}) {
+  const steps = [
+    '그림과 취향 준비',
+    '캐릭터 모습 만들기',
+    '투명 배경·귀여움 확인',
+  ];
+  return (
+    <div
+      className={`generation-live-panel ${compact ? 'compact' : ''}`}
+      aria-live="polite"
+      aria-atomic="false"
+    >
+      <div className="generation-live-heading">
+        <span>
+          <LoaderCircle className="spin" />
+        </span>
+        <div>
+          <b>AI 그림친구가 살아나는 중</b>
+          <small>{phaseLabel}</small>
+        </div>
+        <strong aria-hidden="true">
+          {formatGenerationTime(elapsedSeconds)}
+        </strong>
+      </div>
+      {!compact && (
+        <>
+          <p>
+            고화질 완성은 보통 2–4분 걸리고, 드물게 조금 더 걸릴 수 있어요.
+            화면을 이동해도 만들기는 계속돼요.
+          </p>
+          <ol aria-label="AI 캐릭터 예상 진행 단계">
+            {steps.map((step, index) => (
+              <li
+                className={
+                  index < phaseIndex
+                    ? 'done'
+                    : index === phaseIndex
+                      ? 'active'
+                      : ''
+                }
+                key={step}
+              >
+                <i>{index < phaseIndex ? <Check /> : index + 1}</i>
+                <span>{step}</span>
+              </li>
+            ))}
+          </ol>
+          {connectionDelayed ? (
+            <small className="generation-long-wait delayed">
+              새 진행 신호를 기다리고 있어요. 연결이 느리면 요청을 멈춘 뒤 다시
+              시도할 수 있어요.
+            </small>
+          ) : (
+            elapsedSeconds >= 90 && (
+              <small className="generation-long-wait">
+                진행 신호가 이어지고 있어요. 고화질 재질을 꼼꼼하게 다듬느라
+                조금 더 걸리고 있어요.
+              </small>
+            )
+          )}
+        </>
+      )}
+      <div className="generation-live-actions">
+        {onPlay && (
+          <button type="button" onClick={onPlay}>
+            <Play /> 기다리며 내 그림으로 놀기
+          </button>
+        )}
+        {onView && (
+          <button type="button" onClick={onView}>
+            진행 화면 보기
+          </button>
+        )}
+        {(elapsedSeconds >= 180 || connectionDelayed) && onStop && (
+          <button type="button" className="stop" onClick={onStop}>
+            <X /> 이 요청 멈추기
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function Home() {
   const [step, setStep] = useState<Step>('welcome');
   const [image, setImage] = useState<string | null>(null);
@@ -440,8 +566,26 @@ export default function Home() {
   >([]);
   const [generating, setGenerating] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
+  const [generationStartedAt, setGenerationStartedAt] = useState<number | null>(
+    null,
+  );
+  const [generationElapsedSeconds, setGenerationElapsedSeconds] = useState(0);
+  const [generationLastActivityAt, setGenerationLastActivityAt] = useState<
+    number | null
+  >(null);
+  const [generationConnectionDelayed, setGenerationConnectionDelayed] =
+    useState(false);
   const [generationNote, setGenerationNote] = useState('');
   const [generationFailed, setGenerationFailed] = useState(false);
+  const [generationRetryable, setGenerationRetryable] = useState(false);
+  const [generationRetryRemainingSeconds, setGenerationRetryRemainingSeconds] =
+    useState(0);
+  const [generationFailureDismissed, setGenerationFailureDismissed] =
+    useState(false);
+  const [generationReturnStep, setGenerationReturnStep] = useState<
+    'chat' | 'adventure' | 'book' | null
+  >(null);
+  const [uploadError, setUploadError] = useState('');
   const [favoriteColor, setFavoriteColor] = useState(colorChoices[0].value);
   const [preserveFocus, setPreserveFocus] = useState(focusChoices[0]);
   const [characterWish, setCharacterWish] = useState('');
@@ -533,6 +677,34 @@ export default function Home() {
     messagesEnd.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages, chatting]);
   useEffect(() => {
+    if ((!generating && !regenerating) || generationStartedAt === null) return;
+    const updateElapsed = () => {
+      const now = Date.now();
+      setGenerationElapsedSeconds(
+        Math.max(0, Math.floor((now - generationStartedAt) / 1000)),
+      );
+      setGenerationConnectionDelayed(
+        generationLastActivityAt !== null &&
+          now - generationLastActivityAt > 12_000,
+      );
+    };
+    const timer = window.setInterval(updateElapsed, 1000);
+    return () => window.clearInterval(timer);
+  }, [generating, regenerating, generationStartedAt, generationLastActivityAt]);
+  useEffect(() => {
+    if (!generationFailed || generationRetryRemainingSeconds <= 0) return;
+    const timer = window.setInterval(() => {
+      setGenerationRetryRemainingSeconds((remaining) => {
+        if (remaining <= 1) {
+          window.clearInterval(timer);
+          return 0;
+        }
+        return remaining - 1;
+      });
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [generationFailed, generationRetryRemainingSeconds]);
+  useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
     if (step !== 'book' && 'speechSynthesis' in window) {
       window.speechSynthesis.cancel();
@@ -619,79 +791,124 @@ export default function Home() {
   );
   const load = (file?: File) => {
     if (!file) return;
+    const setFileError = (message: string) =>
+      setUploadError(
+        image ? `${message} 이전 그림은 그대로 유지했어요.` : message,
+      );
+    const supportedMime = new Set(['image/png', 'image/jpeg', 'image/webp']);
+    const supportedExtension = /\.(png|jpe?g|webp)$/i.test(file.name);
+    if (file.size > 8 * 1024 * 1024) {
+      setFileError('그림 파일은 8MB보다 작게 준비해 주세요.');
+      return;
+    }
+    if (!supportedMime.has(file.type) && !supportedExtension) {
+      setFileError('JPG, PNG, WEBP 그림만 사용할 수 있어요.');
+      return;
+    }
+    setUploadError('');
     generationRequest.current?.abort();
     generationRun.current += 1;
     chatRequest.current?.abort();
     setGenerating(false);
     setRegenerating(false);
+    setGenerationStartedAt(null);
+    setGenerationElapsedSeconds(0);
+    setGenerationLastActivityAt(null);
+    setGenerationConnectionDelayed(false);
     const reader = new FileReader();
+    reader.onerror = () =>
+      setFileError('그림 파일을 읽지 못했어요. 다른 파일을 골라 주세요.');
     reader.onload = () => {
       const source = new Image();
-      source.onload = () => {
-        const maxSide = 1600;
-        const scale = Math.min(
-          1,
-          maxSide / Math.max(source.width, source.height),
+      source.onerror = () =>
+        setFileError(
+          '이 그림을 화면에 열 수 없어요. JPG, PNG, WEBP로 다시 저장해 주세요.',
         );
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.max(1, Math.round(source.width * scale));
-        canvas.height = Math.max(1, Math.round(source.height * scale));
-        const context = canvas.getContext('2d');
-        if (!context) return;
-        context.fillStyle = '#ffffff';
-        context.fillRect(0, 0, canvas.width, canvas.height);
-        context.drawImage(source, 0, 0, canvas.width, canvas.height);
-        let instantPreview: LocalCharacterPreview | null = null;
-        let paperPreview: LocalCharacterPreview | null = null;
+      source.onload = () => {
         try {
-          instantPreview = createLocalCharacterPreview(source);
-          paperPreview = createLocalCharacterPreview(source, true);
+          if (!source.width || !source.height)
+            throw new Error('empty image dimensions');
+          const maxSide = 1600;
+          const scale = Math.min(
+            1,
+            maxSide / Math.max(source.width, source.height),
+          );
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.max(1, Math.round(source.width * scale));
+          canvas.height = Math.max(1, Math.round(source.height * scale));
+          const context = canvas.getContext('2d');
+          if (!context) throw new Error('canvas unavailable');
+          context.fillStyle = '#ffffff';
+          context.fillRect(0, 0, canvas.width, canvas.height);
+          context.drawImage(source, 0, 0, canvas.width, canvas.height);
+          let instantPreview: LocalCharacterPreview | null = null;
+          let paperPreview: LocalCharacterPreview | null = null;
+          try {
+            instantPreview = createLocalCharacterPreview(source);
+            paperPreview = createLocalCharacterPreview(source, true);
+          } catch {
+            instantPreview = null;
+            paperPreview = null;
+          }
+          // Re-encoding keeps uploads light and strips camera metadata before transmission.
+          setImage(canvas.toDataURL('image/jpeg', 0.88));
+          setLocalPreview(instantPreview);
+          setOriginalPaperPreview(paperPreview);
+          setUseOriginalPreview(false);
+          setPlayImage(null);
+          setPlayImageSource(null);
+          setArrivalDismissed(false);
+          setGenerated([]);
+          setGeneratedQuality([]);
+          setGenerationStatuses([]);
+          setGenerationNote('');
+          setGenerationFailed(false);
+          setGenerationRetryable(false);
+          setGenerationRetryRemainingSeconds(0);
+          setGenerationFailureDismissed(false);
+          setGenerationReturnStep(null);
+          setPick(preferredStyle);
+          setScene(0);
+          setTheme(0);
+          setPage(0);
+          setAdventureTrail([]);
+          setChoiceResult(null);
+          setAdventurePhase('entering');
+          setStorybook(null);
+          setStorybookImage(null);
+          setStorybookTheme(0);
+          setBookDirection('next');
+          setReadingAloud(false);
+          setAdventureSpeaking(false);
+          setSavedStorybooks([]);
+          setPersona(defaultPersona);
+          setMessages([
+            {
+              role: 'assistant',
+              content:
+                '안녕! 나는 네 그림에서 태어날 AI 이야기 친구야. 오늘 어떤 상상을 함께 만들어 볼까?',
+            },
+          ]);
+          setChatInput('');
+          setChatError('');
+          setUploadError('');
         } catch {
-          instantPreview = null;
-          paperPreview = null;
+          setFileError(
+            '그림을 준비하지 못했어요. JPG, PNG, WEBP로 다시 저장해 주세요.',
+          );
         }
-        // Re-encoding keeps uploads light and strips camera metadata before transmission.
-        setImage(canvas.toDataURL('image/jpeg', 0.88));
-        setLocalPreview(instantPreview);
-        setOriginalPaperPreview(paperPreview);
-        setUseOriginalPreview(false);
-        setPlayImage(null);
-        setPlayImageSource(null);
-        setArrivalDismissed(false);
-        setGenerated([]);
-        setGeneratedQuality([]);
-        setGenerationStatuses([]);
-        setGenerationNote('');
-        setGenerationFailed(false);
-        setPick(preferredStyle);
-        setScene(0);
-        setTheme(0);
-        setPage(0);
-        setAdventureTrail([]);
-        setChoiceResult(null);
-        setAdventurePhase('entering');
-        setStorybook(null);
-        setStorybookImage(null);
-        setStorybookTheme(0);
-        setBookDirection('next');
-        setReadingAloud(false);
-        setAdventureSpeaking(false);
-        setSavedStorybooks([]);
-        setPersona(defaultPersona);
-        setMessages([
-          {
-            role: 'assistant',
-            content:
-              '안녕! 나는 네 그림에서 태어날 AI 이야기 친구야. 오늘 어떤 상상을 함께 만들어 볼까?',
-          },
-        ]);
-        setChatInput('');
-        setChatError('');
       };
-      if (typeof reader.result !== 'string') return;
+      if (typeof reader.result !== 'string') {
+        setFileError('그림 파일을 읽지 못했어요. 다른 파일을 골라 주세요.');
+        return;
+      }
       source.src = reader.result;
     };
-    reader.readAsDataURL(file);
+    try {
+      reader.readAsDataURL(file);
+    } catch {
+      setFileError('그림 파일을 읽지 못했어요. 다른 파일을 골라 주세요.');
+    }
   };
   const closeCamera = () => {
     cameraRequest.current += 1;
@@ -774,6 +991,30 @@ export default function Home() {
       : '배경을 정리한 기기 미리보기';
   const activeAdventure = adventureStories[theme] || adventureStories[0];
   const activeScenes = activeAdventure.scenes;
+  const generationBusy = generating || regenerating;
+  const generationPhaseIndex =
+    generationElapsedSeconds < 8 ? 0 : generationElapsedSeconds < 135 ? 1 : 2;
+  const generationPhaseLabel = [
+    '예상: 그림과 취향을 안전하게 준비하는 중',
+    '예상: AI가 특징을 살려 캐릭터를 그리는 중',
+    '예상: 투명 배경과 귀여움을 확인하는 중',
+  ][generationPhaseIndex];
+  const visibleGenerationPhaseLabel = generationConnectionDelayed
+    ? '진행 신호가 늦어져 연결을 확인하는 중'
+    : generationPhaseLabel;
+  const generationCanRetry =
+    generationRetryable && generationRetryRemainingSeconds === 0;
+  const generationRetryLabel = generationRetryRemainingSeconds
+    ? `${formatGenerationTime(generationRetryRemainingSeconds)} 뒤 다시 만들기`
+    : '다시 만들기';
+  const generationFloatsOverPlay =
+    generationBusy && step !== 'character' && step !== 'upload';
+  const completedCharacterOnHome = Boolean(
+    generated[pick] &&
+    !generationBusy &&
+    step === 'welcome' &&
+    !arrivalDismissed,
+  );
   const requestVariant = async (
     blob: Blob,
     index: number,
@@ -794,15 +1035,29 @@ export default function Home() {
     if (index === 2) {
       let reference = styleReferenceBlob.current;
       if (!reference) {
-        const referenceResponse = await fetch(
-          `/style-plush-3d-guide.webp?v=${plushReferenceVersion}`,
-          { signal, cache: 'no-store' },
+        const referenceController = new AbortController();
+        const stopReference = () => referenceController.abort(signal?.reason);
+        const referenceTimer = window.setTimeout(
+          () => referenceController.abort(),
+          4_000,
         );
-        if (referenceResponse.ok) {
-          reference = new Blob([await referenceResponse.arrayBuffer()], {
-            type: 'image/webp',
-          });
-          styleReferenceBlob.current = reference;
+        signal?.addEventListener('abort', stopReference, { once: true });
+        try {
+          const referenceResponse = await fetch(
+            `/style-plush-3d-guide.webp?v=${plushReferenceVersion}`,
+            { signal: referenceController.signal, cache: 'force-cache' },
+          );
+          if (referenceResponse.ok) {
+            reference = new Blob([await referenceResponse.arrayBuffer()], {
+              type: 'image/webp',
+            });
+            styleReferenceBlob.current = reference;
+          }
+        } catch (error) {
+          if (signal?.aborted) throw error;
+        } finally {
+          window.clearTimeout(referenceTimer);
+          signal?.removeEventListener('abort', stopReference);
         }
       }
       if (reference)
@@ -825,16 +1080,32 @@ export default function Home() {
     const data = response.headers
       .get('content-type')
       ?.includes('application/x-ndjson')
-      ? await readCharacterStream<CharacterResponse>(response)
+      ? await readCharacterStream<CharacterResponse>(response, () => {
+          if (!signal?.aborted) setGenerationLastActivityAt(Date.now());
+        })
       : await readJson<CharacterResponse>(response);
     if (!response.ok || !data?.image) {
       throw new CharacterRequestError(
         apiErrorMessage(response, data?.error),
         data?.code,
         data?.retryable,
+        data?.retryAfterMs,
       );
     }
     return { index, image: data.image, quality: data.quality || null };
+  };
+  const rememberGenerationFailure = (error: unknown) => {
+    const requestError =
+      error instanceof CharacterRequestError ? error : undefined;
+    setGenerationFailed(true);
+    setGenerationRetryable(requestError?.retryable ?? true);
+    setGenerationRetryRemainingSeconds(
+      requestError?.retryAfterMs
+        ? Math.max(1, Math.ceil(requestError.retryAfterMs / 1000))
+        : 0,
+    );
+    setGenerationFailureDismissed(false);
+    setGenerationNote(characterFailureMessage(error));
   };
   const generateCharacter = async () => {
     if (!image || generating || regenerating) return;
@@ -844,7 +1115,14 @@ export default function Home() {
     const signal = generationRequest.current.signal;
     const requestedStyle = preferredStyle;
     setGenerating(true);
+    setGenerationStartedAt(Date.now());
+    setGenerationElapsedSeconds(0);
+    setGenerationLastActivityAt(Date.now());
+    setGenerationConnectionDelayed(false);
     setGenerationFailed(false);
+    setGenerationRetryable(false);
+    setGenerationRetryRemainingSeconds(0);
+    setGenerationFailureDismissed(false);
     setPick(requestedStyle);
     setGenerated(Array.from<string>({ length: characterStyleCount }).fill(''));
     setGeneratedQuality(
@@ -858,7 +1136,7 @@ export default function Home() {
     initialStatuses[requestedStyle] = 'generating';
     setGenerationStatuses(initialStatuses);
     setGenerationNote(
-      `기기에서 먼저 살아난 친구와 인사해 보세요. ${characterStyles[requestedStyle].name}으로 AI가 완성하고 있어요…`,
+      `기기에서 먼저 살아난 친구와 인사해 보세요. ‘${characterStyles[requestedStyle].name}’ 모습으로 AI가 완성하고 있어요.`,
     );
     setStep('character');
     try {
@@ -884,12 +1162,13 @@ export default function Home() {
       setPick(result.index);
       setArrivalDismissed(false);
       setGenerationNote(
-        `${characterStyles[result.index].name}이 귀여움 검수를 마치고 도착했어요! 다른 모습은 원할 때만 불러 주세요.`,
+        result.quality?.passed
+          ? `‘${characterStyles[result.index].name}’ 모습이 귀여움 검수를 마치고 도착했어요!`
+          : `‘${characterStyles[result.index].name}’ 모습이 도착했어요. 원하면 한 번 더 귀엽게 다듬을 수 있어요.`,
       );
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return;
       if (runId !== generationRun.current) return;
-      setGenerationFailed(true);
       setGenerationStatuses((previous) => {
         const next = Array.from<GenerationStatus>({
           length: characterStyleCount,
@@ -897,18 +1176,32 @@ export default function Home() {
         next[requestedStyle] = 'temporary';
         return next;
       });
-      setGenerationNote(characterFailureMessage(error));
+      rememberGenerationFailure(error);
     } finally {
-      if (runId === generationRun.current) setGenerating(false);
+      if (runId === generationRun.current) {
+        setGenerating(false);
+        setGenerationStartedAt(null);
+      }
     }
   };
   const regenerateVariant = async (index: number, highQuality = false) => {
     if (!image || regenerating || generating) return;
+    if (generationFailed && !generationCanRetry) {
+      setPick(index);
+      return;
+    }
     generationRequest.current?.abort();
     generationRequest.current = new AbortController();
     const runId = ++generationRun.current;
     setRegenerating(true);
+    setGenerationStartedAt(Date.now());
+    setGenerationElapsedSeconds(0);
+    setGenerationLastActivityAt(Date.now());
+    setGenerationConnectionDelayed(false);
     setGenerationFailed(false);
+    setGenerationRetryable(false);
+    setGenerationRetryRemainingSeconds(0);
+    setGenerationFailureDismissed(false);
     setPick(index);
     setGenerationStatuses((previous) => {
       const next = Array.from<GenerationStatus>({
@@ -918,7 +1211,7 @@ export default function Home() {
       return next;
     });
     setGenerationNote(
-      `${characterStyles[index].name}을 ${highQuality ? '더 귀엽고 선명하게' : '다시'} 만들고 있어요…`,
+      `‘${characterStyles[index].name}’ 모습을 ${highQuality ? '더 귀엽고 선명하게' : '다시'} 만들고 있어요.`,
     );
     try {
       const blob = await fetch(image).then((response) => response.blob());
@@ -952,7 +1245,9 @@ export default function Home() {
       });
       setArrivalDismissed(false);
       setGenerationNote(
-        `${characterStyles[index].name}을 취향에 맞춰 새로 완성했어요!`,
+        result.quality?.passed
+          ? `‘${characterStyles[index].name}’ 모습을 귀여움 검수까지 마쳤어요!`
+          : `‘${characterStyles[index].name}’ 새 모습이 도착했어요. 원하면 다시 다듬을 수 있어요.`,
       );
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return;
@@ -964,10 +1259,12 @@ export default function Home() {
         next[index] = 'temporary';
         return next;
       });
-      setGenerationFailed(true);
-      setGenerationNote(characterFailureMessage(error));
+      rememberGenerationFailure(error);
     } finally {
-      if (runId === generationRun.current) setRegenerating(false);
+      if (runId === generationRun.current) {
+        setRegenerating(false);
+        setGenerationStartedAt(null);
+      }
     }
   };
   const regenerateSelected = () => regenerateVariant(pick, true);
@@ -977,15 +1274,39 @@ export default function Home() {
     generationRun.current += 1;
     setGenerating(false);
     setRegenerating(false);
+    setGenerationStartedAt(null);
+    setGenerationLastActivityAt(null);
+    setGenerationConnectionDelayed(false);
     setGenerationStatuses((previous) =>
       previous.map((status) => (status === 'ready' ? status : 'unrequested')),
     );
+  };
+  const stopAndOfferRetry = () => {
+    stopCharacterGeneration();
+    setGenerationFailed(true);
+    setGenerationRetryable(true);
+    setGenerationRetryRemainingSeconds(0);
+    setGenerationFailureDismissed(false);
+    setGenerationNote(
+      '요청을 멈췄어요. 내 그림 친구로 계속 놀거나 원하는 스타일을 다시 눌러 주세요.',
+    );
+  };
+  const openGenerationView = () => {
+    if (step === 'chat' || step === 'adventure' || step === 'book')
+      setGenerationReturnStep(step);
+    setStep('character');
+  };
+  const returnToPreviousPlay = () => {
+    if (!generationReturnStep) return;
+    setStep(generationReturnStep);
+    setGenerationReturnStep(null);
   };
   const startChat = () => {
     if (!chosenImage) return;
     setPlayImage(chosenImage);
     setPlayImageSource(selectedHasAiCharacter ? 'ai' : 'local');
     setArrivalDismissed(false);
+    setGenerationReturnStep(null);
     setMessages([
       {
         role: 'assistant',
@@ -1563,6 +1884,14 @@ export default function Home() {
     setRegenerating(false);
     setGenerationNote('');
     setGenerationFailed(false);
+    setGenerationRetryable(false);
+    setGenerationRetryRemainingSeconds(0);
+    setGenerationFailureDismissed(false);
+    setGenerationReturnStep(null);
+    setGenerationStartedAt(null);
+    setGenerationElapsedSeconds(0);
+    setGenerationLastActivityAt(null);
+    setGenerationConnectionDelayed(false);
     setFavoriteColor(colorChoices[0].value);
     setPreserveFocus(focusChoices[0]);
     setCharacterWish('');
@@ -1570,6 +1899,7 @@ export default function Home() {
     setCharacterMood(moodChoices[0].name);
     setFavoriteWorld(worldChoices[0].name);
     setCameraError('');
+    setUploadError('');
     setFacingMode('environment');
     setPreferredStyle(2);
     setPick(2);
@@ -1604,7 +1934,9 @@ export default function Home() {
   };
 
   return (
-    <main className="app">
+    <main
+      className={`app ${generationFloatsOverPlay ? 'has-generation-floating' : ''}`}
+    >
       <header>
         <button className="logo-button" onClick={() => setStep('welcome')}>
           <Logo />
@@ -1681,6 +2013,104 @@ export default function Home() {
             onClick={() => setArrivalDismissed(true)}
           >
             이야기 뒤에
+          </button>
+        </aside>
+      )}
+
+      {generationFloatsOverPlay && (
+        <aside className="generation-floating">
+          <GenerationProgressPanel
+            compact
+            elapsedSeconds={generationElapsedSeconds}
+            phaseIndex={generationPhaseIndex}
+            phaseLabel={visibleGenerationPhaseLabel}
+            connectionDelayed={generationConnectionDelayed}
+            onView={openGenerationView}
+            onStop={stopAndOfferRetry}
+          />
+        </aside>
+      )}
+
+      {generationFailed &&
+        !generationFailureDismissed &&
+        step !== 'character' &&
+        step !== 'upload' && (
+          <aside className="character-arrival generation-failure-arrival">
+            <span>
+              <RefreshCw />
+            </span>
+            <div>
+              <output>AI 모습은 이번에 도착하지 못했어요</output>
+              <small>
+                {generationRetryable ? (
+                  generationRetryRemainingSeconds ? (
+                    <>
+                      <span className="sr-only">
+                        지금 친구로 놀다가 잠시 뒤 다시 시도할 수 있어요.
+                      </span>
+                      <span aria-hidden="true">
+                        지금 친구로 놀다가{' '}
+                        {formatGenerationTime(generationRetryRemainingSeconds)}{' '}
+                        뒤 다시 시도할 수 있어요.
+                      </span>
+                    </>
+                  ) : (
+                    '지금 친구로 계속 놀거나 한 번만 다시 만들 수 있어요.'
+                  )
+                ) : (
+                  '안전 기준을 위해 이 결과는 보여 주지 않았어요. 지금 친구로 계속 놀아 주세요.'
+                )}
+              </small>
+              {generationCanRetry && (
+                <output className="sr-only">다시 만들 준비가 됐어요.</output>
+              )}
+            </div>
+            {generationRetryable && (
+              <button
+                type="button"
+                disabled={!generationCanRetry}
+                onClick={openGenerationView}
+                aria-label={
+                  generationCanRetry
+                    ? '다시 만들기 화면 보기'
+                    : '잠시 뒤 다시 만들기 화면 보기'
+                }
+              >
+                <span aria-hidden="true">
+                  {generationRetryRemainingSeconds
+                    ? `${formatGenerationTime(generationRetryRemainingSeconds)} 뒤 화면 보기`
+                    : '다시 만들기 화면 보기'}
+                </span>
+              </button>
+            )}
+            <button
+              type="button"
+              className="later"
+              onClick={() => setGenerationFailureDismissed(true)}
+            >
+              지금 친구로 계속
+            </button>
+          </aside>
+        )}
+
+      {completedCharacterOnHome && (
+        <aside className="character-arrival" aria-live="polite">
+          <span>
+            <Sparkles />
+          </span>
+          <div>
+            <b>AI 그림친구가 완성됐어요</b>
+            <small>투명 배경과 아동 캐릭터 안전 검사를 마쳤어요.</small>
+          </div>
+          <button type="button" onClick={() => setStep('character')}>
+            친구 만나기
+          </button>
+          <button
+            type="button"
+            className="later"
+            onClick={() => setArrivalDismissed(true)}
+          >
+            나중에
           </button>
         </aside>
       )}
@@ -1855,7 +2285,7 @@ export default function Home() {
             ref={cameraInput}
             hidden
             type="file"
-            accept="image/*"
+            accept="image/png,image/jpeg,image/webp"
             capture="environment"
             onChange={(e) => load(e.target.files?.[0])}
           />
@@ -1939,6 +2369,11 @@ export default function Home() {
           {cameraError && (
             <div className="camera-error" role="alert">
               {cameraError}
+            </div>
+          )}
+          {uploadError && (
+            <div className="camera-error" role="alert">
+              {uploadError}
             </div>
           )}
           {image && (
@@ -2075,7 +2510,9 @@ export default function Home() {
             </>
           )}
           <Button
-            disabled={!image || generating || regenerating}
+            disabled={
+              !image || Boolean(uploadError) || generating || regenerating
+            }
             onClick={generateCharacter}
           >
             {generating ? (
@@ -2087,6 +2524,12 @@ export default function Home() {
               ? '친구가 태어나는 중…'
               : `${characterStyles[preferredStyle].name} 고화질로 AI 완성하기`}
           </Button>
+          {image && !generationBusy && (
+            <small className="generation-expectation">
+              <LoaderCircle /> 고화질 캐릭터는 보통 2–4분, 드물게 조금 더
+              걸려요. 기다리는 동안 내 그림 친구와 먼저 놀 수 있어요.
+            </small>
+          )}
           {generating && (
             <output className="magic-progress" aria-live="polite">
               <i />
@@ -2111,6 +2554,21 @@ export default function Home() {
 
       {step === 'character' && (
         <section className="center characters">
+          {generationReturnStep && (
+            <button
+              type="button"
+              className="return-to-play"
+              onClick={returnToPreviousPlay}
+            >
+              <ArrowLeft /> 하던{' '}
+              {generationReturnStep === 'chat'
+                ? '대화로'
+                : generationReturnStep === 'adventure'
+                  ? '모험으로'
+                  : '동화책으로'}{' '}
+              돌아가기
+            </button>
+          )}
           <span className={`badge ${usingLocalCharacter ? 'local-badge' : ''}`}>
             {selectedHasAiCharacter
               ? '짜잔! AI 그림친구가 태어났어요'
@@ -2124,18 +2582,30 @@ export default function Home() {
           <p aria-live="polite" aria-atomic="true">
             {generationNote}
           </p>
+          {generationBusy && (
+            <GenerationProgressPanel
+              elapsedSeconds={generationElapsedSeconds}
+              phaseIndex={generationPhaseIndex}
+              phaseLabel={visibleGenerationPhaseLabel}
+              connectionDelayed={generationConnectionDelayed}
+              onPlay={startChat}
+              onStop={stopAndOfferRetry}
+            />
+          )}
           {generationFailed && usingLocalCharacter && (
             <div className="local-play-actions">
               <Button onClick={startChat}>
                 <Play /> 내 그림 친구로 바로 놀기
               </Button>
-              <Button
-                secondary
-                disabled={generating || regenerating}
-                onClick={() => void regenerateVariant(pick, true)}
-              >
-                <RefreshCw /> 이 스타일만 AI로 다시 만들기
-              </Button>
+              {generationRetryable && (
+                <Button
+                  secondary
+                  disabled={generating || regenerating || !generationCanRetry}
+                  onClick={() => void regenerateVariant(pick, true)}
+                >
+                  <RefreshCw /> {generationRetryLabel}
+                </Button>
+              )}
             </div>
           )}
           <div className="transform-proof">
@@ -2230,6 +2700,8 @@ export default function Home() {
               const status = generationStatuses[i] || 'unrequested';
               const waitingForCurrent =
                 !generated[i] && (generating || regenerating);
+              const retryBlocked =
+                !generated[i] && generationFailed && !generationCanRetry;
               return (
                 <button
                   type="button"
@@ -2237,16 +2709,19 @@ export default function Home() {
                   aria-busy={status === 'generating'}
                   aria-pressed={pick === i}
                   aria-describedby={`character-style-${i}-detail character-style-${i}-state`}
-                  className={`${pick === i ? 'selected' : ''} status-${status}`}
+                  className={`${pick === i ? 'selected' : ''} status-${status} ${retryBlocked ? 'retry-blocked' : ''}`}
                   key={style.name}
                   aria-label={
                     generated[i]
                       ? `${style.name} 선택하기`
-                      : `${style.name}만 AI로 만들기`
+                      : retryBlocked
+                        ? `${style.name} 선택하기 · 지금은 AI 생성 대기 중`
+                        : `${style.name}만 AI로 만들기`
                   }
                   onClick={() => {
                     if (waitingForCurrent) return;
                     if (generated[i]) setPick(i);
+                    else if (retryBlocked) setPick(i);
                     else void regenerateVariant(i, true);
                   }}
                 >
@@ -2288,11 +2763,15 @@ export default function Home() {
                           {status === 'generating' && (
                             <LoaderCircle className="spin" size={20} />
                           )}
-                          {status === 'generating'
-                            ? '이 스타일로 완성하는 중…'
-                            : status === 'temporary'
-                              ? 'AI 작업실이 쉬는 중 · 톡 눌러 다시 부르기'
-                              : '톡 눌러 이 모습만 AI로 만들기'}
+                          {retryBlocked
+                            ? generationRetryRemainingSeconds
+                              ? `${formatGenerationTime(generationRetryRemainingSeconds)} 뒤 다시 만들 수 있어요`
+                              : '지금은 스타일만 고를 수 있어요 · 내 그림 친구로 놀아 주세요'
+                            : status === 'generating'
+                              ? '이 스타일로 완성하는 중…'
+                              : status === 'temporary'
+                                ? 'AI 작업실이 쉬는 중 · 톡 눌러 다시 부르기'
+                                : '톡 눌러 이 모습만 AI로 만들기'}
                         </small>
                       </>
                     )}
@@ -2314,6 +2793,13 @@ export default function Home() {
                         {generatedQuality[i]?.polished && <em>자동 보정</em>}
                       </strong>
                     )}
+                  {generatedQuality[i]?.checked &&
+                    generatedQuality[i]?.passed === false && (
+                      <strong className="cute-ready">
+                        <Sparkles /> AI 완성 {generatedQuality[i]?.score ?? ''}
+                        점 · 더 다듬기 가능
+                      </strong>
+                    )}
                 </button>
               );
             })}
@@ -2321,7 +2807,12 @@ export default function Home() {
           <div className="regenerate-row">
             <Button
               secondary
-              disabled={regenerating || generating || !generated[pick]}
+              disabled={
+                regenerating ||
+                generating ||
+                !generated[pick] ||
+                (generationFailed && !generationCanRetry)
+              }
               onClick={() => void regenerateSelected()}
             >
               {regenerating ? (
@@ -2339,6 +2830,8 @@ export default function Home() {
                 stopCharacterGeneration();
                 setGenerationNote('');
                 setGenerationFailed(false);
+                setGenerationRetryable(false);
+                setGenerationRetryRemainingSeconds(0);
                 setStep('upload');
               }}
             >

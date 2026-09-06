@@ -75,8 +75,13 @@ assert.doesNotMatch(
 );
 assert.match(
   page,
-  /style-plush-3d-guide\.webp\?v=\$\{plushReferenceVersion\}[\s\S]{0,120}cache: 'no-store'/,
-  '3D 기준 파일은 버전 URL로 캐시를 우회해 받아야 합니다.',
+  /style-plush-3d-guide\.webp\?v=\$\{plushReferenceVersion\}[\s\S]{0,140}cache: 'force-cache'/,
+  '버전이 고정된 3D 기준 파일은 캐시를 사용해 생성 전 지연을 줄여야 합니다.',
+);
+assert.match(
+  page,
+  /new AbortController\(\)[\s\S]{0,500}setTimeout\([\s\S]{0,120}4_000[\s\S]{0,800}style-plush-3d-guide/,
+  '구형 모바일에서도 3D 기준 파일이 지연되면 4초 뒤 텍스트 폴백으로 계속해야 합니다.',
 );
 assert.match(
   page,
@@ -90,8 +95,8 @@ assert.match(
 );
 assert.match(
   page,
-  /readCharacterStream<CharacterResponse>\(response\)/,
-  '클라이언트가 장시간 생성 스트림의 최종 결과를 읽어야 합니다.',
+  /readCharacterStream<CharacterResponse>\(response,[\s\S]{0,180}setGenerationLastActivityAt/,
+  '클라이언트가 장시간 생성 스트림의 결과와 실제 heartbeat를 읽어야 합니다.',
 );
 assert.match(
   page,
@@ -100,7 +105,42 @@ assert.match(
 );
 assert.match(
   page,
-  /stopCharacterGeneration\(\);[\s\S]{0,180}setStep\('upload'\)/,
+  /고화질 완성은 보통 2–4분[\s\S]{0,1000}AI 캐릭터 예상 진행 단계/,
+  '장시간 생성에는 실제 예상 시간과 단계 안내가 보여야 합니다.',
+);
+assert.match(
+  page,
+  /기다리며 내 그림으로 놀기[\s\S]{0,1200}이 요청 멈추기/,
+  '생성 중에도 즉시 놀기와 오래 걸릴 때 취소하기를 제공해야 합니다.',
+);
+assert.match(
+  page,
+  /JPG, PNG, WEBP 그림만 사용할 수 있어요/,
+  '지원하지 않는 업로드 형식은 버튼이 멈추지 않고 명확히 알려야 합니다.',
+);
+assert.doesNotMatch(
+  page,
+  /accept="image\/\*"/,
+  '카메라 파일 입력도 실제 디코딩 가능한 형식만 받아야 합니다.',
+);
+assert.match(
+  page,
+  /disabled=\{[\s\S]{0,80}!image \|\| Boolean\(uploadError\)/,
+  '새 파일을 읽지 못했을 때 이전 그림으로 잘못 생성하지 못하게 해야 합니다.',
+);
+assert.match(
+  page,
+  /const regenerateVariant[\s\S]{0,240}if \(generationFailed && !generationCanRetry\)[\s\S]{0,100}setPick\(index\)/,
+  '재시도 제한 중에는 생성 함수가 새 API 요청을 보내면 안 됩니다.',
+);
+assert.match(
+  page,
+  /else if \(retryBlocked\) setPick\(i\)/,
+  '재시도 제한 중 스타일 카드는 선택만 하고 API 요청은 보내면 안 됩니다.',
+);
+assert.match(
+  page,
+  /stopCharacterGeneration\(\);[\s\S]{0,360}setStep\('upload'\)/,
   '취향 화면으로 돌아갈 때 진행 중인 생성을 취소해야 합니다.',
 );
 assert.match(
@@ -115,8 +155,33 @@ assert.match(
 );
 assert.match(
   route,
+  /code: 'rate_limited',[\s\S]{0,100}retryable: true[\s\S]{0,120}retryAfterMs/,
+  '사용량 제한은 실제 재시도 대기시간과 함께 전달해야 합니다.',
+);
+assert.match(
+  route,
   /code: 'quality_failed',[\s\S]{0,80}retryable: false/,
-  '귀여움 품질 탈락은 비용이 드는 자동 재생성을 반복하면 안 됩니다.',
+  '무섭거나 복수 캐릭터인 결과는 비용이 드는 자동 재생성을 반복하면 안 됩니다.',
+);
+assert.doesNotMatch(
+  route,
+  /if \(!review\.passed/,
+  '안전 검사를 통과한 완성 이미지를 미관 점수만으로 폐기하면 안 됩니다.',
+);
+assert.match(
+  route,
+  /reviewOutcome\.status !== 'reviewed'[\s\S]{0,900}code:[\s\S]{0,160}quality_review_timeout[\s\S]{0,160}quality_review_failed/,
+  '아동 안전 검사를 완료하지 못한 AI 결과는 화면에 노출하면 안 됩니다.',
+);
+assert.match(
+  route,
+  /tier: review\.passed \? 'premium' : 'ready'/,
+  '검사 완료 결과만 프리미엄 또는 사용 가능한 완성본으로 전달해야 합니다.',
+);
+assert.doesNotMatch(
+  `${page}\n${route}`,
+  /tier[^\n]*unchecked|=== 'unchecked'/,
+  '미검수 AI 이미지를 완성본으로 노출하는 상태가 없어야 합니다.',
 );
 assert.doesNotMatch(
   route,
@@ -158,6 +223,11 @@ assert.match(
   /character-stream-terminal[\s\S]{0,300}status: response\.status/,
   'HTTP 200 스트림 안의 실제 종료 상태를 운영 로그에 남겨야 합니다.',
 );
+assert.match(
+  route,
+  /character-stream-accepted/,
+  '장시간 요청은 종료 전에도 접수 사실을 운영 로그에 남겨야 합니다.',
+);
 assert.equal(
   route.match(/api\.openai\.com\/v1\/images\/edits/g)?.length,
   1,
@@ -180,8 +250,46 @@ const server = await createServer({
 });
 
 try {
-  const { imageTypeFromBytes, isBinaryFormPart, trusted3dReference } =
-    await server.ssrLoadModule('/app/api/character/route.ts');
+  const {
+    imageTypeFromBytes,
+    isBinaryFormPart,
+    isHardQualityFailure,
+    trusted3dReference,
+  } = await server.ssrLoadModule('/app/api/character/route.ts');
+  const usableReview = {
+    score: 68,
+    sourceFidelity: 65,
+    fullBody: 80,
+    anatomy: 74,
+    styleMatch: 72,
+    materialQuality: 70,
+    naturalPose: 76,
+    singleCharacter: true,
+    scaryOrUncanny: false,
+    backgroundArtifact: false,
+    passed: false,
+    issue: '조금 더 다듬기',
+  };
+  assert.equal(
+    isHardQualityFailure(usableReview),
+    false,
+    '안전한 결과는 미관 점수가 프리미엄 기준보다 낮아도 보여 줘야 합니다.',
+  );
+  assert.equal(
+    isHardQualityFailure({ ...usableReview, scaryOrUncanny: true }),
+    true,
+    '무섭거나 기괴한 결과는 계속 차단해야 합니다.',
+  );
+  assert.equal(
+    isHardQualityFailure({ ...usableReview, singleCharacter: false }),
+    true,
+    '복수 캐릭터 결과는 계속 차단해야 합니다.',
+  );
+  assert.equal(
+    isHardQualityFailure({ ...usableReview, backgroundArtifact: true }),
+    true,
+    '검사가 찾은 배경 카드나 바닥판은 알파 수치와 무관하게 차단해야 합니다.',
+  );
   const guideBytes = await readFile('public/style-plush-3d-guide.webp');
   const guideHash = createHash('sha256').update(guideBytes).digest('hex');
   assert.match(
