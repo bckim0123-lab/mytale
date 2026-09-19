@@ -7993,6 +7993,130 @@ select:focus-visible,
   }
 }
 
+/* Real-time WebGL diorama. The existing DOM stage remains the accessible fallback. */
+.adventure-world3d {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  touch-action: pan-y;
+  transition: opacity 420ms ease;
+}
+.adventure-world3d.is-loading,
+.adventure-world3d.is-ready {
+  opacity: 1;
+}
+.adventure-world3d-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  filter: saturate(1.08) contrast(1.02);
+}
+.adventure-world3d-loading {
+  position: absolute;
+  right: 22px;
+  top: 22px;
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 7px 12px;
+  border: 1px solid #ffffff42;
+  border-radius: 999px;
+  background: #0a2530a3;
+  color: #fff9df;
+  box-shadow: 0 8px 28px #03141938;
+  backdrop-filter: blur(10px);
+  font-size: 10px;
+  font-weight: 850;
+}
+.adventure-world3d-status {
+  position: absolute;
+  z-index: 4;
+  top: 24px;
+  right: 24px;
+  display: grid;
+  justify-items: end;
+  gap: 3px;
+  opacity: 0;
+  transform: translateY(-6px);
+  pointer-events: none;
+  transition:
+    opacity 360ms ease 160ms,
+    transform 420ms ease 160ms;
+}
+.webgl-ready > .adventure-world3d-status {
+  opacity: 1;
+  transform: translateY(0);
+}
+.adventure-world3d-status span {
+  padding: 7px 11px;
+  border: 1px solid #ffffff4f;
+  border-radius: 999px;
+  background: #082630b8;
+  color: #fff1ae;
+  box-shadow: 0 8px 28px #03141940;
+  backdrop-filter: blur(12px);
+  font-size: 10px;
+  font-weight: 950;
+  letter-spacing: -0.01em;
+}
+.adventure-world3d-status small {
+  padding-right: 5px;
+  color: #effff8;
+  font-size: 9px;
+  font-weight: 800;
+  text-shadow: 0 2px 9px #05181f;
+}
+.webgl-ready .camera-rig {
+  opacity: 0.72;
+  filter: saturate(0.9) brightness(0.68) blur(0.4px);
+  transition:
+    opacity 500ms ease,
+    filter 600ms ease;
+}
+.webgl-ready .actor-rig .actor-idle,
+.webgl-ready .actor-rig .actor-shadow {
+  opacity: 0;
+  transition: opacity 300ms ease;
+}
+.webgl-ready .actor-touch:focus-visible {
+  outline-color: #fff2a8;
+  background: radial-gradient(circle, #fff4ad33, transparent 68%);
+}
+
+@media (max-width: 700px) {
+  .adventure-world3d-status {
+    top: 113px;
+    right: 10px;
+  }
+  .adventure-world3d-status small {
+    display: none;
+  }
+  .adventure-world3d-status span {
+    padding: 5px 8px;
+    font-size: 8px;
+  }
+  .adventure-world3d-loading {
+    top: 111px;
+    right: 9px;
+    min-height: 27px;
+    padding: 5px 8px;
+    font-size: 8px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .adventure-world3d,
+  .adventure-world3d-status,
+  .webgl-ready .camera-rig,
+  .webgl-ready .actor-rig .actor-idle,
+  .webgl-ready .actor-rig .actor-shadow {
+    transition: none !important;
+  }
+}
+
 /* Persistent adventure memories: every collected trait leaves a distinct mark. */
 .cinematic-stage .depth-far::before,
 .cinematic-stage .depth-far::after,

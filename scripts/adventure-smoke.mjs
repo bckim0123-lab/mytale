@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { createServer } from 'vite';
 
 const ages = new Map([
@@ -179,6 +179,67 @@ try {
   }
 
   const pageSource = await readFile('app/page.tsx', 'utf8');
+  const worldSource = await readFile('app/adventure-world-3d.tsx', 'utf8');
+  const threeRuntimeSource = await readFile(
+    'app/adventure-three-runtime.ts',
+    'utf8',
+  );
+  const cssSource = await readFile('app/globals.css', 'utf8');
+  const mascotAsset = await stat('public/game-mascot-3d-v1.webp');
+  assert.ok(
+    pageSource.includes('<AdventureWorld3D'),
+    '모험 무대에 3D 월드가 연결되어야 합니다.',
+  );
+  assert.match(
+    worldSource,
+    /await import\(['"]\.\/adventure-three-runtime['"]\)/,
+    'Three.js는 모험 진입 때 지연 로드해야 합니다.',
+  );
+  assert.doesNotMatch(
+    worldSource,
+    /^import(?!\s+type\b).+from ['"]three['"]/m,
+    'Three.js 런타임을 초기 화면 번들에 정적으로 넣으면 안 됩니다.',
+  );
+  assert.match(
+    threeRuntimeSource,
+    /export\s*\{[\s\S]+WebGLRenderer[\s\S]+\}\s*from ['"]three['"]/,
+    '3D 런타임은 필요한 Three.js 기능만 골라 내보내야 합니다.',
+  );
+  assert.match(worldSource, /prefers-reduced-motion:\s*reduce/);
+  assert.match(worldSource, /motionQuery\.addEventListener\(['"]change['"]/);
+  assert.match(worldSource, /motionQuery\.removeEventListener\(['"]change['"]/);
+  assert.match(
+    worldSource,
+    /document\.addEventListener\(['"]visibilitychange['"]/,
+  );
+  assert.match(
+    worldSource,
+    /document\.removeEventListener\(['"]visibilitychange['"]/,
+  );
+  assert.match(worldSource, /new ResizeObserver/);
+  assert.match(worldSource, /resizeObserver\.disconnect\(\)/);
+  assert.match(worldSource, /renderer\.setAnimationLoop\(null\)/);
+  assert.match(worldSource, /renderer\.dispose\(\)/);
+  assert.match(worldSource, /geometry\?\.dispose\(\)/);
+  assert.match(worldSource, /item\.dispose\(\)/);
+  assert.match(worldSource, /texture\.dispose\(\)/);
+  assert.match(worldSource, /webglcontextlost/);
+  assert.match(worldSource, /failToFallback/);
+  assert.match(
+    worldSource,
+    /Math\.min\([\s\S]{0,150}?devicePixelRatio[\s\S]{0,150}?1\.5/,
+    '렌더 해상도 상한이 필요합니다.',
+  );
+  assert.match(worldSource, /aria-hidden="true"/);
+  assert.match(
+    cssSource,
+    /\.adventure-world3d\s*\{[\s\S]{0,400}?touch-action:\s*pan-y/,
+    '3D 장면이 모바일 세로 스크롤을 막으면 안 됩니다.',
+  );
+  assert.ok(
+    mascotAsset.size <= 250_000,
+    `기본 3D 캐릭터는 250KB 이하여야 합니다. 현재 ${mascotAsset.size}B`,
+  );
   const finishStart = pageSource.indexOf('const finishAdventureTransition');
   const finishEnd = pageSource.indexOf('const continueAdventure', finishStart);
   const finishBlock = pageSource.slice(finishStart, finishEnd);

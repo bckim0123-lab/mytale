@@ -18,6 +18,7 @@ import {
   questTargetCount,
   sceneQuests,
 } from './adventure-play';
+import { AdventureWorld3D } from './adventure-world-3d';
 import {
   createLocalCharacterPreview,
   type LocalCharacterPreview,
@@ -630,6 +631,7 @@ export default function Home() {
   const [showAllYoungChoices, setShowAllYoungChoices] = useState(false);
   const [actorGesture, setActorGesture] = useState(0);
   const [actorPetted, setActorPetted] = useState(false);
+  const [world3DReady, setWorld3DReady] = useState(false);
   const [birthReaction, setBirthReaction] = useState(0);
   const [soundOn, setSoundOn] = useState(true);
   const [storybook, setStorybook] = useState<StoryPage[] | null>(null);
@@ -3165,7 +3167,7 @@ export default function Home() {
                 'start'
               } ${memoryClasses} ${actorPetted ? 'is-petted' : ''} ${
                 activeAdventure.id === 'moon' ? 'moon-world' : ''
-              }`}
+              } ${world3DReady ? 'webgl-ready' : 'webgl-fallback'}`}
               ref={stageNode}
               onPointerMove={updateStageParallax}
               onPointerLeave={resetStageParallax}
@@ -3175,6 +3177,28 @@ export default function Home() {
                 } as React.CSSProperties
               }
             >
+              <AdventureWorld3D
+                image={storyCharacterImage}
+                worldId={activeAdventure.id}
+                sceneIndex={playableSceneIndex}
+                phase={adventurePhase}
+                trait={liveTrait || previousDecision?.trait || null}
+                questProgress={questProgress}
+                questPulse={
+                  currentQuest.kind === 'comfort'
+                    ? Math.ceil(questWarmth / 20)
+                    : questHits.length
+                }
+                questHits={questHits}
+                gesture={actorGesture}
+                petted={actorPetted}
+                memoryTraits={collectedClues.map((decision) => decision.trait)}
+                onReady={setWorld3DReady}
+              />
+              <div className="adventure-world3d-status" aria-hidden="true">
+                <span>실시간 3D 월드</span>
+                <small>화면을 살짝 움직여 둘러봐요</small>
+              </div>
               <div className="camera-rig" aria-hidden="true">
                 <div className="camera-scene">
                   <div
@@ -3282,7 +3306,7 @@ export default function Home() {
                   <strong
                     className={`choice-echo path-${previousDecision?.trait}`}
                   >
-                    <Sparkles /> 지난 선택이 진짜 이어졌어요: {currentEcho}
+                    <Sparkles /> 지난 선택도 함께 빛났어요: {currentEcho}
                   </strong>
                 )}
               </article>
@@ -3297,7 +3321,7 @@ export default function Home() {
                     {actorPetted
                       ? '네 손길이 느껴져! 같이 가자!'
                       : pendingChoice
-                        ? `“${pendingChoice.label}” 방법, 같이 해 보자!`
+                        ? `“${pendingChoice.label}”로 가 보자!`
                         : activeReactionTrait
                           ? adventureReactions[activeReactionTrait]
                           : '안녕! 나를 톡 눌러 줬구나!'}
@@ -3388,7 +3412,7 @@ export default function Home() {
                     <Volume2 /> “
                     {scene === activeScenes.length - 1
                       ? '마지막 선택이 결말을 바로 바꿔. 네 방법을 골라 줘!'
-                      : '골라 줘! 내가 직접 움직여서 세상을 바꿔 볼게!'}
+                      : '어디부터 가 볼까? 네가 골라 줘!'}
                     ”
                   </div>
                   <button
@@ -3439,8 +3463,7 @@ export default function Home() {
                       </button>
                     )}
                   <small className="story-event">
-                    <Sparkles /> 선택하면 직접 만지고 움직이는 짧은 놀이가
-                    시작돼요 · 다음 장면과 결말까지 기억해요
+                    <Sparkles /> 반짝이는 곳을 누르면 내가 그곳으로 갈게.
                   </small>
                 </div>
               ) : !choiceResult && pendingChoice ? (
@@ -3527,7 +3550,7 @@ export default function Home() {
                   <div className="result-icon">
                     {traitMeta[choiceResult.trait].icon}
                   </div>
-                  <span>{choiceResult.label} 선택으로 세상이 달라졌어요</span>
+                  <span>네가 고른 길이 열렸어요!</span>
                   <h3>{choiceResult.result}</h3>
                   <p className="clue-earned">
                     <Star fill="currentColor" /> 새 단서{' '}
@@ -3554,7 +3577,7 @@ export default function Home() {
                       </>
                     ) : (
                       <>
-                        새로 바뀐 다음 장면으로 <ChevronRight />
+                        바뀐 세계로 가기 <ChevronRight />
                       </>
                     )}
                   </Button>
