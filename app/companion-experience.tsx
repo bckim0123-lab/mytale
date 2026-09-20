@@ -1,5 +1,6 @@
 'use client';
-import { useCallback, useEffect, useRef, useState } from 'react';
+/* eslint-disable next/no-img-element -- Locally kept data-URL portraits must never be sent to an image optimizer. */
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowRight,
   BookOpen,
@@ -24,13 +25,26 @@ import {
 import { CompanionWorld, type CompanionWorldHandle } from './companion-world';
 import CompanionStorybook from './companion-storybook';
 import { drawingPalette } from './companion-palette';
+import { useCompanionStorage } from './use-companion-storage';
+import { useDrawingAsset } from './use-drawing-asset';
 import {
-  createCompanionSave,
-  loadCompanionSave,
-  saveCompanionSave,
-  clearCompanionSave,
+  keepDrawingAsset,
+  portableArtwork,
+  downloadLocalFile,
+  putDrawingAssets,
+  clearDrawingAssets,
+  listDrawingAssets,
+  validDrawingAsset,
+  artworkId,
+  type DrawingAsset,
+} from './drawing-assets';
+import {
   type CompanionSave,
   type CompanionStoryBook,
+  serializeCompanionBackup,
+  parseCompanionBackup,
+  readCompanionSave,
+  COMPANION_SAVE_KEY,
 } from './companion-save';
 import {
   initialForestState,
@@ -38,6 +52,7 @@ import {
   transitionForest,
   getForestEnding,
   type ForestEvent,
+  type ForestDifficulty,
 } from './forest-story';
 import type { CreatureAppearance, CreatureKind } from './creature-types';
 import './companion.css';
@@ -91,6 +106,12 @@ type Props = {
   sourceImage?: string | null;
   initialName?: string;
   age?: string;
+  incomingArtwork?: {
+    png: string;
+    name: string;
+    persona: { likes: string; traits: string; ability: string; quirk: string };
+  } | null;
+  onArtworkAccepted?: () => void;
 };
 
 export default function CompanionExperience({
@@ -99,13 +120,37 @@ export default function CompanionExperience({
   sourceImage,
   initialName,
   age = '7–9세',
+  incomingArtwork,
+  onArtworkAccepted,
 }: Props) {
-  const [save, setSave] = useState<CompanionSave>(() => createCompanionSave());
-  const [hydrated, setHydrated] = useState(false);
-  const [saveError, setSaveError] = useState('');
+  const {
+    save,
+    saveRef,
+    commitSave,
+    hydrated,
+    saveError,
+    blocked,
+    reloadLatest,
+    restoreSave,
+    reset,
+    flush,
+  } = useCompanionStorage(initialName);
+  const art = useDrawingAsset(save.appearance.drawingAssetId);
+  const [artworkBusy, setArtworkBusy] = useState(false);
+  const [backupBusy, setBackupBusy] = useState(false);
+  const artworkEpoch = useRef(0);
+  const backupOperation = useRef(false);
+  const [backupStatus, setBackupStatus] = useState('');
+  const [pendingBackup, setPendingBackup] = useState<{
+    save: CompanionSave;
+    assets: DrawingAsset[];
+  } | null>(null);
+  const [artLibrary, setArtLibrary] = useState<DrawingAsset[]>([]);
+  const backupInput = useRef<HTMLInputElement>(null);
+  const acceptedArtwork = useRef<string | null>(null);
   const [mode, setMode] = useState<'home' | 'forest'>('home');
   const [panel, setPanel] = useState<'customize' | 'books'>('customize');
-  const [notice, setNotice] = useState('안녕! 나는 몽글. 우리 같이 놀까?');
+  const [notice, setNotice] = useState('안녕! 만나서 반가워. 우리 같이 놀까?');
   const [walking, setWalking] = useState('');
   const [unavailable, setUnavailable] = useState(false);
   const [sound, setSound] = useState(false);
@@ -136,56 +181,99 @@ export default function CompanionExperience({
   const chatAbort = useRef<AbortController | null>(null);
   const dialog = useRef<HTMLDialogElement>(null);
   const chatEnd = useRef<HTMLDivElement>(null);
-  const saveRef = useRef(save);
-  const didHydrate = useRef(false);
   const mounted = useRef(false);
   const colorRequest = useRef(0);
   const soundRef = useRef(sound);
-  const commitSave = useCallback(
-    (update: CompanionSave | ((current: CompanionSave) => CompanionSave)) => {
-      const next =
-        typeof update === 'function' ? update(saveRef.current) : update;
-      saveRef.current = next;
-      setSave(next);
-    },
-    [],
-  );
   const forest = save.forest ?? initialForestState();
+  const liveAppearance = useMemo(
+    () => ({
+      ...save.appearance,
+      ...(art.png ? { drawingImage: art.png } : {}),
+    }),
+    [save.appearance, art.png],
+  );
   const view = getForestView(forest);
   useEffect(() => {
-    let cancelled = false;
-    queueMicrotask(() => {
-      if (cancelled || didHydrate.current) return;
-      const existing = loadCompanionSave();
-      const current =
-        existing ??
-        createCompanionSave({ name: initialName?.trim() || '몽글' });
-      commitSave(current);
-      didHydrate.current = true;
-      setNotice(
-        `안녕! 나는 ${current.name}. ${existing ? '다시 만나서 반가워!' : '우리 같이 놀까?'}`,
+    if (
+      !hydrated ||
+      !incomingArtwork ||
+      blocked ||
+      acceptedArtwork.current === incomingArtwork.png
+    )
+      return;
+    let canceled = false;
+    const operation = ++artworkEpoch.current;
+    const snapshot = readCompanionSave();
+    if (snapshot.status !== 'ready' && snapshot.status !== 'empty') return;
+    const generation = snapshot.snapshot.generation;
+    const stillCurrent = () => {
+      const latest = readCompanionSave();
+      return (
+        !canceled &&
+        operation === artworkEpoch.current &&
+        (latest.status === 'ready' || latest.status === 'empty') &&
+        latest.snapshot.generation === generation
       );
-      setHydrated(true);
-    });
-    return () => {
-      cancelled = true;
     };
-  }, [initialName, commitSave]);
-  useEffect(() => {
-    if (!hydrated) return;
-    let cancelled = false;
-    // An empty name while editing is valid UI state, but never a corrupt save.
-    const result = saveCompanionSave({
-      ...save,
-      name: save.name.trim() || '몽글',
-    });
     queueMicrotask(() => {
-      if (!cancelled) setSaveError(result.ok ? '' : result.error);
+      if (!canceled) setArtworkBusy(true);
     });
+    void portableArtwork(incomingArtwork.png)
+      .then((png) => {
+        if (!stillCurrent())
+          throw new Error('친구 보관이 취소됐어요. 다시 보관해 주세요.');
+        return keepDrawingAsset(png, incomingArtwork.name, {
+          expectedGeneration: generation,
+          cancelled: () => !stillCurrent(),
+          persona: incomingArtwork.persona,
+        });
+      })
+      .then((asset) => {
+        if (!stillCurrent()) {
+          setArtworkBusy(false);
+          if (!canceled) {
+            acceptedArtwork.current = incomingArtwork.png;
+            onArtworkAccepted?.();
+          }
+          return;
+        }
+        acceptedArtwork.current = incomingArtwork.png;
+        commitSave((current) => ({
+          ...current,
+          name: incomingArtwork.name.trim() || current.name,
+          persona: incomingArtwork.persona,
+          appearance: { ...current.appearance, drawingAssetId: asset.id },
+          updatedAt: Date.now(),
+        }));
+        setNotice(
+          '네가 만든 바로 그 친구야! 같은 모습으로 숲에도, 우리 책에도 함께 갈게.',
+        );
+        setArtworkBusy(false);
+        onArtworkAccepted?.();
+      })
+      .catch((error) => {
+        if (!canceled) {
+          acceptedArtwork.current = null;
+          setBackupStatus(
+            error instanceof Error
+              ? error.message
+              : '친구 그림을 보관하지 못했어요.',
+          );
+          if (!stillCurrent()) onArtworkAccepted?.();
+        }
+      })
+      .finally(() => {
+        if (!canceled) setArtworkBusy(false);
+      });
     return () => {
-      cancelled = true;
+      canceled = true;
     };
-  }, [save, hydrated]);
+  }, [hydrated, incomingArtwork, blocked, commitSave, onArtworkAccepted]);
+  useEffect(() => {
+    void listDrawingAssets()
+      .then(setArtLibrary)
+      .catch(() => {});
+  }, [save.appearance.drawingAssetId, artworkBusy]);
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -253,9 +341,8 @@ export default function CompanionExperience({
   const replayMelody = useCallback(() => {
     timers.current.forEach(clearTimeout);
     timers.current = [];
-    const melody = getForestView(
-      saveRef.current.forest ?? initialForestState(),
-    ).melody;
+    const current = saveRef.current;
+    const melody = getForestView(current.forest ?? initialForestState()).melody;
     setReplaying(true);
     melody.forEach((id, index) => {
       timers.current.push(
@@ -271,7 +358,7 @@ export default function CompanionExperience({
         setReplaying(false);
       }, melody.length * 720),
     );
-  }, [playTone]);
+  }, [playTone, saveRef]);
   const dispatch = useCallback(
     (event: ForestEvent) => {
       const old = saveRef.current;
@@ -297,7 +384,7 @@ export default function CompanionExperience({
               : paragraph,
           ),
           createdAt: timestamp,
-          ending: next.ending ?? 'sky',
+          ending: ending.paragraphs.at(-1) || ending.title,
           heroName: old.name.trim() || '몽글',
           heroAppearance: { ...old.appearance },
           choices: {
@@ -312,7 +399,7 @@ export default function CompanionExperience({
           unlockedAccessories: Array.from(
             new Set([...old.unlockedAccessories, accessory]),
           ),
-          storyBooks: [story, ...old.storyBooks].slice(0, 10),
+          storyBooks: [story, ...old.storyBooks],
         };
         world.current?.react('celebrate');
       }
@@ -331,7 +418,7 @@ export default function CompanionExperience({
       )
         replayMelody();
     },
-    [commitSave, playTone, replayMelody],
+    [commitSave, playTone, replayMelody, saveRef],
   );
   function goTo(id: string) {
     if (unavailable) dispatch({ type: 'interact', id });
@@ -349,6 +436,22 @@ export default function CompanionExperience({
     }
   }
   function startAdventure() {
+    if (artworkBusy || art.loading || art.error) {
+      setBackupStatus(
+        art.error || '친구 모습을 준비하고 있어요. 잠깐만 기다려 주세요.',
+      );
+      return;
+    }
+    if (
+      save.storyBooks.length >= 100 &&
+      (!save.forest || save.forest.chapter === 'complete')
+    ) {
+      setBackupStatus(
+        '책장에 100권이 모였어요. 먼저 보호자와 백업 파일을 보관해 주세요. 기존 책을 자동으로 지우지 않아요.',
+      );
+      setSettings(true);
+      return;
+    }
     timers.current.forEach(clearTimeout);
     timers.current = [];
     setActiveNote(null);
@@ -357,7 +460,14 @@ export default function CompanionExperience({
     if (!current.forest || current.forest.chapter === 'complete')
       commitSave((s) => ({
         ...s,
-        forest: initialForestState(),
+        forest: initialForestState(
+          s.playDifficulty ??
+            (age.startsWith('4')
+              ? 'simple'
+              : age.startsWith('10')
+                ? 'challenge'
+                : 'standard'),
+        ),
         updatedAt: Date.now(),
       }));
     setWalking('');
@@ -384,6 +494,153 @@ export default function CompanionExperience({
     chatAbort.current = null;
     setChatStatus('');
     setBusy(false);
+  }
+  async function exportBackup() {
+    setBackupStatus('친구와 책을 백업에 담고 있어요…');
+    try {
+      await flush();
+      const exportSave = structuredClone(saveRef.current);
+      const before = readCompanionSave();
+      if (before.status !== 'ready' && before.status !== 'empty')
+        throw new Error(
+          '저장 공간의 상태를 확인하지 못했어요. 기존 기록을 덮어쓰지 않았어요.',
+        );
+      const exportGeneration = before.snapshot.generation;
+      const serialized = serializeCompanionBackup(exportSave);
+      if (!serialized.ok) throw new Error(serialized.error);
+      const assets = await listDrawingAssets();
+      const required = [
+        exportSave.appearance.drawingAssetId,
+        ...exportSave.storyBooks.map(
+          (item) => item.heroAppearance?.drawingAssetId,
+        ),
+      ].filter(Boolean);
+      if (
+        assets.length > 100 ||
+        required.some((id) => !assets.some((asset) => asset.id === id))
+      )
+        throw new Error(
+          '책에 필요한 친구 그림이 일부 없어요. 그림이 포함된 기존 백업을 먼저 가져와 주세요. 불완전한 백업을 만들지는 않았어요.',
+        );
+      for (const asset of assets)
+        if (
+          !validDrawingAsset(asset) ||
+          (await artworkId(asset.png)) !== asset.id
+        )
+          throw new Error('손상된 친구 그림이 있어 백업을 멈췄어요.');
+      const backup = JSON.stringify({
+        format: 'drawing-friend-family-backup',
+        version: 1,
+        record: JSON.parse(serialized.json),
+        assets,
+      });
+      if (new TextEncoder().encode(backup).length > 32 * 1024 * 1024)
+        throw new Error(
+          '보관한 그림이 많아 전체 백업이 32MB를 넘었어요. 각 친구 그림도 별도로 저장해 주세요.',
+        );
+      const after = readCompanionSave();
+      if (
+        (after.status !== 'ready' && after.status !== 'empty') ||
+        after.snapshot.generation !== exportGeneration
+      )
+        throw new Error(
+          '백업을 만드는 동안 다른 창에서 기록을 지웠어요. 현재 기록으로 다시 시도해 주세요.',
+        );
+      downloadLocalFile(
+        `그림친구-우리집-백업-${new Date().toISOString().slice(0, 10)}.json`,
+        backup,
+      );
+      setBackupStatus(
+        '백업 파일에 친구 그림·설정·모든 책을 담았어요. 사진 원본과 대화는 들어가지 않아요.',
+      );
+    } catch (error) {
+      setBackupStatus(
+        error instanceof Error ? error.message : '백업을 만들지 못했어요.',
+      );
+    }
+  }
+  async function inspectBackup(file?: File) {
+    if (!file) return;
+    try {
+      if (file.size > 32 * 1024 * 1024)
+        throw new Error('32MB 이하의 그림친구 백업 파일을 골라 주세요.');
+      const raw: unknown = JSON.parse(await file.text());
+      const wrapper = raw as {
+        format?: string;
+        version?: number;
+        record?: unknown;
+        assets?: unknown[];
+      };
+      if (
+        wrapper.format !== 'drawing-friend-family-backup' ||
+        wrapper.version !== 1 ||
+        !Array.isArray(wrapper.assets) ||
+        wrapper.assets.length > 100
+      )
+        throw new Error('지원하는 그림친구 백업 파일이 아니에요.');
+      const checked = parseCompanionBackup(JSON.stringify(wrapper.record));
+      if (!checked.ok) throw new Error(checked.error);
+      if (!wrapper.assets.every(validDrawingAsset))
+        throw new Error('백업 속 친구 그림 정보를 확인하지 못했어요.');
+      const assets = wrapper.assets as DrawingAsset[];
+      const ids = new Set(assets.map((asset) => asset.id));
+      const needed = [
+        checked.save.appearance.drawingAssetId,
+        ...checked.save.storyBooks.map(
+          (item) => item.heroAppearance?.drawingAssetId,
+        ),
+      ].filter(Boolean);
+      if (needed.some((id) => !ids.has(id as string)))
+        throw new Error(
+          '백업에서 필요한 친구 그림이 빠져 있어요. 원래 기기에서 다시 백업해 주세요.',
+        );
+      setPendingBackup({ save: checked.save, assets });
+      setBackupStatus('아직 바꾸지 않았어요. 아래 내용을 확인하고 가져오세요.');
+    } catch (error) {
+      setPendingBackup(null);
+      setBackupStatus(
+        error instanceof Error ? error.message : '백업 파일을 읽지 못했어요.',
+      );
+    } finally {
+      if (backupInput.current) backupInput.current.value = '';
+    }
+  }
+  async function importBackup() {
+    if (!pendingBackup || backupOperation.current || artworkBusy) return;
+    backupOperation.current = true;
+    setBackupBusy(true);
+    const operation = ++artworkEpoch.current;
+    try {
+      const before = readCompanionSave();
+      if (before.status !== 'ready' && before.status !== 'empty')
+        throw new Error('먼저 기존 기록의 저장 문제를 확인해 주세요.');
+      await putDrawingAssets(pendingBackup.assets, {
+        expectedGeneration: before.snapshot.generation,
+      });
+      const after = readCompanionSave();
+      if (
+        operation !== artworkEpoch.current ||
+        (after.status !== 'ready' && after.status !== 'empty') ||
+        after.snapshot.generation !== before.snapshot.generation
+      )
+        throw new Error('다른 창에서 기록이 바뀌어 가져오기를 멈췄어요.');
+      const result = await restoreSave(pendingBackup.save, {
+        expectedGeneration: before.snapshot.generation,
+      });
+      if (!result.ok) throw new Error(result.error);
+      setArtLibrary(await listDrawingAssets());
+      setPendingBackup(null);
+      setBackupStatus(
+        '친구와 책을 가져왔어요. 같은 책은 중복해서 넣지 않았어요.',
+      );
+    } catch (error) {
+      setBackupStatus(
+        error instanceof Error ? error.message : '백업을 가져오지 못했어요.',
+      );
+    } finally {
+      backupOperation.current = false;
+      setBackupBusy(false);
+    }
   }
   async function extractColors(url: string) {
     const request = ++colorRequest.current;
@@ -463,6 +720,7 @@ export default function CompanionExperience({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message,
+          consent: true,
           history,
           age: chatAge,
           persona: {
@@ -471,6 +729,7 @@ export default function CompanionExperience({
             traits: '다정하고 호기심이 많음',
             ability: '친구들과 달빛 숲을 밝히기',
             quirk: '기쁘면 귀가 살랑거림',
+            ...save.persona,
           },
         }),
         signal: controller.signal,
@@ -479,12 +738,20 @@ export default function CompanionExperience({
       const result = (await response.json()) as {
         text?: string;
         safety?: string;
+        clearHistory?: boolean;
       };
       if (chatAbort.current !== controller || controller.signal.aborted) return;
       if (typeof result.text !== 'string' || !result.text.trim())
         throw new Error();
+      if (result.clearHistory) {
+        setMessages([]);
+        setChatStatus(result.text);
+        return;
+      }
       setMessages((items) => [
-        ...items,
+        ...(result.safety === 'redirected' || result.safety === 'urgent'
+          ? items.slice(0, -1)
+          : items),
         { role: 'assistant', content: result.text as string },
       ]);
       if (result.safety === 'fallback')
@@ -561,40 +828,60 @@ export default function CompanionExperience({
         <div className="cw-alert" role="alert">
           {saveError} 이 창에서는 계속 놀 수 있지만, 창을 닫으면 이번 변경이
           사라질 수 있어요.
+          <button onClick={() => setSettings(true)}>백업·복구 열기</button>
         </div>
+      )}
+      {(backupStatus || artworkBusy || art.error) && (
+        <output className="cw-alert">
+          {artworkBusy
+            ? '완성한 친구를 안전하게 보관하고 있어요…'
+            : art.error || backupStatus}
+        </output>
       )}
       {mode === 'home' ? (
         <div className="cw-home-layout">
           <section className="cw-home-stage" aria-label="내 입체 친구">
             <div className="cw-home-heading">
-              <span className="cw-eyebrow">너의 색으로 태어난 작은 친구</span>
+              <span className="cw-eyebrow">
+                {save.appearance.drawingAssetId
+                  ? '네 그림 속 모습 그대로, 우리의 친구'
+                  : '너의 색으로 태어난 작은 친구'}
+              </span>
               <h1>
                 만나서 반가워,
                 <br />
                 <em>{save.name}!</em>
               </h1>
               <p>
-                살랑이는 귀, 반짝이는 눈.
+                {save.appearance.drawingAssetId
+                  ? '네가 만든 얼굴, 나만 아는 이름.'
+                  : '살랑이는 귀, 반짝이는 눈.'}
                 <br />
                 {save.completedAdventures
                   ? '우리가 만든 이야기를 기억해.'
                   : '너와 첫 모험을 기다리고 있어.'}
               </p>
             </div>
-            <CompanionWorld
-              ref={world}
-              mode="home"
-              appearance={save.appearance}
-              forest={forest}
-              onInteract={() => {}}
-              onPet={() => {
-                setNotice('헤헤, 간지러워! 한 번 더 쓰다듬어 줄래?');
-                playTone('bell-leaf');
-              }}
-              onStatus={setWalking}
-              onUnavailable={() => setUnavailable(true)}
-              onReady={() => setUnavailable(false)}
-            />
+            {save.appearance.drawingAssetId && !art.png ? (
+              <output className="cw-art-loading">
+                {art.error || '보관한 친구가 오는 중…'}
+              </output>
+            ) : (
+              <CompanionWorld
+                ref={world}
+                mode="home"
+                appearance={liveAppearance}
+                forest={forest}
+                onInteract={() => {}}
+                onPet={() => {
+                  setNotice('헤헤, 간지러워! 한 번 더 쓰다듬어 줄래?');
+                  playTone('bell-leaf');
+                }}
+                onStatus={setWalking}
+                onUnavailable={() => setUnavailable(true)}
+                onReady={() => setUnavailable(false)}
+              />
+            )}
             <output className="cw-bubble">{notice}</output>
             {save.storyBooks[0] && (
               <button
@@ -654,6 +941,16 @@ export default function CompanionExperience({
             </small>
           </section>
           <aside className="cw-home-side">
+            <button
+              className="cw-primary cw-start-now"
+              onClick={startAdventure}
+              disabled={artworkBusy || art.loading || !!art.error}
+            >
+              <Leaf size={18} />{' '}
+              {save.forest && save.forest.chapter !== 'complete'
+                ? '친구와 모험 이어가기'
+                : '이 친구와 모험 시작'}
+            </button>
             <div className="cw-tabs">
               <button
                 className={panel === 'customize' ? 'is-active' : ''}
@@ -673,6 +970,44 @@ export default function CompanionExperience({
             </div>
             {panel === 'customize' ? (
               <div className="cw-customize">
+                {artLibrary.length > 0 && (
+                  <div className="cw-art-library">
+                    <span className="cw-label">내가 만든 그림친구</span>
+                    <div>
+                      {artLibrary.map((asset) => (
+                        <button
+                          key={asset.id}
+                          aria-pressed={
+                            save.appearance.drawingAssetId === asset.id
+                          }
+                          onClick={() => {
+                            commitSave((current) => ({
+                              ...current,
+                              name: asset.name || current.name,
+                              persona: asset.persona,
+                              appearance: {
+                                ...current.appearance,
+                                drawingAssetId: asset.id,
+                              },
+                              updatedAt: Date.now(),
+                            }));
+                            setNotice('내가 만든 모습 그대로, 다시 만났네!');
+                          }}
+                        >
+                          <img
+                            src={asset.png}
+                            alt={asset.name || '보관한 그림친구'}
+                          />
+                          <span>{asset.name || '그림친구'}</span>
+                        </button>
+                      ))}
+                    </div>
+                    <p className="cw-fine">
+                      그림의 실루엣에 두께를 준 입체 그림인형이에요. 얼굴·무늬는
+                      생성한 모습 그대로예요.
+                    </p>
+                  </div>
+                )}
                 <label className="cw-label" htmlFor="companion-name">
                   친구에게 이름을 지어 주세요
                 </label>
@@ -710,9 +1045,17 @@ export default function CompanionExperience({
                         className={
                           save.appearance.kind === kind.id ? 'is-selected' : ''
                         }
-                        aria-pressed={save.appearance.kind === kind.id}
+                        aria-pressed={
+                          !save.appearance.drawingAssetId &&
+                          save.appearance.kind === kind.id
+                        }
                         title={kind.description}
-                        onClick={() => updateAppearance({ kind: kind.id })}
+                        onClick={() =>
+                          updateAppearance({
+                            kind: kind.id,
+                            drawingAssetId: undefined,
+                          })
+                        }
                       >
                         <span>{kind.icon}</span>
                         {kind.name}
@@ -720,157 +1063,194 @@ export default function CompanionExperience({
                     ))}
                   </div>
                 </fieldset>
-                <fieldset>
-                  <legend>좋아하는 색을 입혀요</legend>
-                  <div className="cw-palettes">
-                    {palettes.map((p) => (
-                      <button
-                        key={p.name}
-                        title={p.name}
-                        aria-label={p.name}
-                        aria-pressed={save.appearance.bodyColor === p.body}
-                        onClick={() =>
-                          updateAppearance({
-                            bodyColor: p.body,
-                            accentColor: p.accent,
-                          })
-                        }
-                        style={{
-                          background: `linear-gradient(135deg,${p.body} 55%,${p.accent} 55%)`,
-                        }}
-                      >
-                        {save.appearance.bodyColor === p.body && (
-                          <Check size={18} />
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                </fieldset>
-                <fieldset>
-                  <legend>나만 알아볼 수 있는 무늬</legend>
-                  <div className="cw-personality-options">
-                    {(
-                      [
-                        ['plain', '보송보송'],
-                        ['heart', '하트 한 조각'],
-                        ['spots', '콩콩 물방울'],
-                      ] as const
-                    ).map(([pattern, label]) => (
-                      <button
-                        key={pattern}
-                        aria-pressed={
-                          (save.appearance.pattern ?? 'plain') === pattern
-                        }
-                        onClick={() => {
-                          updateAppearance({ pattern });
-                          world.current?.react('curious');
-                        }}
-                      >
-                        <span aria-hidden="true">
-                          {pattern === 'heart'
-                            ? '♡'
-                            : pattern === 'spots'
-                              ? '●'
-                              : '☁'}
-                        </span>
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                </fieldset>
-                <fieldset>
-                  <legend>귀는 어떻게 할까?</legend>
-                  <div className="cw-personality-options cw-ear-options">
-                    {(
-                      [
-                        ['upright', '쫑긋, 궁금한 귀'],
-                        ['floppy', '살랑, 포근한 귀'],
-                      ] as const
-                    ).map(([earStyle, label]) => (
-                      <button
-                        key={earStyle}
-                        aria-pressed={
-                          (save.appearance.earStyle ?? 'upright') === earStyle
-                        }
-                        onClick={() => {
-                          updateAppearance({ earStyle });
-                          setNotice(
-                            earStyle === 'floppy'
-                              ? '내 귀, 바람이 불면 살랑살랑!'
-                              : '무슨 소리지? 귀를 쫑긋!',
-                          );
-                        }}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                </fieldset>
-                <input
-                  ref={upload}
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp"
-                  hidden
-                  onChange={(e) => void uploadColors(e.target.files?.[0])}
-                />
-                <button
-                  className="cw-outline cw-color-upload"
-                  disabled={colorBusy}
-                  onClick={() =>
-                    sourceImage
-                      ? void extractColors(sourceImage)
-                      : upload.current?.click()
-                  }
-                >
-                  {colorBusy ? (
-                    <LoaderCircle size={18} className="cw-spin" />
-                  ) : (
-                    <ImagePlus size={18} />
-                  )}
-                  {colorBusy
-                    ? '그림에서 색을 찾는 중…'
-                    : sourceImage
-                      ? '내 그림의 색 가져오기'
-                      : '사진·그림에서 색 가져오기'}
-                  <ArrowRight size={16} />
-                </button>
-                <p className="cw-fine">
-                  그림에서 찾은 색을 털과 장식에 입혀요. 무늬와 귀는 직접
-                  골라요. 사진은 이 기기에서만 읽고 저장하거나 전송하지 않아요.
-                </p>
-                <div className="cw-accessories">
-                  <span>작은 선물</span>
-                  {(['star', 'flower', 'scarf'] as const).map((item, index) => (
+                {save.appearance.drawingAssetId && (
+                  <p className="cw-fine">
+                    위 동물 버튼을 고르면 봉제 친구로 바뀌어요. 그림친구는
+                    보관함에 그대로 남아요.
+                  </p>
+                )}
+                {art.png && (
+                  <a
+                    className="cw-outline"
+                    href={art.png}
+                    download={`${save.name.replace(/[\\/:*?"<>|]/g, '')}-그림친구.png`}
+                  >
+                    친구 그림 따로 저장
+                  </a>
+                )}
+                {!save.appearance.drawingAssetId && (
+                  <>
+                    <fieldset>
+                      <legend>좋아하는 색을 입혀요</legend>
+                      <div className="cw-palettes">
+                        {palettes.map((p) => (
+                          <button
+                            key={p.name}
+                            title={p.name}
+                            aria-label={p.name}
+                            aria-pressed={save.appearance.bodyColor === p.body}
+                            onClick={() =>
+                              updateAppearance({
+                                bodyColor: p.body,
+                                accentColor: p.accent,
+                              })
+                            }
+                            style={{
+                              background: `linear-gradient(135deg,${p.body} 55%,${p.accent} 55%)`,
+                            }}
+                          >
+                            {save.appearance.bodyColor === p.body && (
+                              <Check size={18} />
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    </fieldset>
+                    <fieldset>
+                      <legend>나만 알아볼 수 있는 무늬</legend>
+                      <div className="cw-personality-options">
+                        {(
+                          [
+                            ['plain', '보송보송'],
+                            ['heart', '하트 한 조각'],
+                            ['spots', '콩콩 물방울'],
+                          ] as const
+                        ).map(([pattern, label]) => (
+                          <button
+                            key={pattern}
+                            aria-pressed={
+                              (save.appearance.pattern ?? 'plain') === pattern
+                            }
+                            onClick={() => {
+                              updateAppearance({ pattern });
+                              world.current?.react('curious');
+                            }}
+                          >
+                            <span aria-hidden="true">
+                              {pattern === 'heart'
+                                ? '♡'
+                                : pattern === 'spots'
+                                  ? '●'
+                                  : '☁'}
+                            </span>
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    </fieldset>
+                    <fieldset>
+                      <legend>귀는 어떻게 할까?</legend>
+                      <div className="cw-personality-options cw-ear-options">
+                        {(
+                          [
+                            ['upright', '쫑긋, 궁금한 귀'],
+                            ['floppy', '살랑, 포근한 귀'],
+                          ] as const
+                        ).map(([earStyle, label]) => (
+                          <button
+                            key={earStyle}
+                            aria-pressed={
+                              (save.appearance.earStyle ?? 'upright') ===
+                              earStyle
+                            }
+                            onClick={() => {
+                              updateAppearance({ earStyle });
+                              setNotice(
+                                earStyle === 'floppy'
+                                  ? '내 귀, 바람이 불면 살랑살랑!'
+                                  : '무슨 소리지? 귀를 쫑긋!',
+                              );
+                            }}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    </fieldset>
+                    <input
+                      ref={upload}
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      hidden
+                      onChange={(e) => void uploadColors(e.target.files?.[0])}
+                    />
                     <button
-                      key={item}
-                      disabled={!save.unlockedAccessories.includes(item)}
-                      aria-pressed={save.equippedAccessory === item}
-                      title={
-                        save.unlockedAccessories.includes(item)
-                          ? ['별 목걸이', '꽃 장식', '포근한 스카프'][index]
-                          : '달빛 숲을 마치면 받을 수 있어요'
-                      }
+                      className="cw-outline cw-color-upload"
+                      disabled={colorBusy}
                       onClick={() =>
-                        commitSave((s) => ({
-                          ...s,
-                          equippedAccessory: item,
-                          appearance: { ...s.appearance, accessory: item },
-                          updatedAt: Date.now(),
-                        }))
+                        sourceImage
+                          ? void extractColors(sourceImage)
+                          : upload.current?.click()
                       }
                     >
-                      {['⭐', '🌸', '🧣'][index]}
-                      {!save.unlockedAccessories.includes(item) && (
-                        <small>모험 선물</small>
+                      {colorBusy ? (
+                        <LoaderCircle size={18} className="cw-spin" />
+                      ) : (
+                        <ImagePlus size={18} />
                       )}
+                      {colorBusy
+                        ? '그림에서 색을 찾는 중…'
+                        : sourceImage
+                          ? '내 그림의 색 가져오기'
+                          : '사진·그림에서 색 가져오기'}
+                      <ArrowRight size={16} />
                     </button>
-                  ))}
-                </div>
+                    <p className="cw-fine">
+                      그림에서 찾은 색을 털과 장식에 입혀요. 무늬와 귀는 직접
+                      골라요. 사진은 이 기기에서만 읽고 저장하거나 전송하지
+                      않아요.
+                    </p>
+                    <div className="cw-accessories">
+                      <span>작은 선물</span>
+                      {(['star', 'flower', 'scarf'] as const).map(
+                        (item, index) => (
+                          <button
+                            key={item}
+                            disabled={!save.unlockedAccessories.includes(item)}
+                            aria-pressed={save.equippedAccessory === item}
+                            title={
+                              save.unlockedAccessories.includes(item)
+                                ? ['별 목걸이', '꽃 장식', '포근한 스카프'][
+                                    index
+                                  ]
+                                : '달빛 숲을 마치면 받을 수 있어요'
+                            }
+                            onClick={() =>
+                              commitSave((s) => ({
+                                ...s,
+                                equippedAccessory: item,
+                                appearance: {
+                                  ...s.appearance,
+                                  accessory: item,
+                                },
+                                updatedAt: Date.now(),
+                              }))
+                            }
+                          >
+                            {['⭐', '🌸', '🧣'][index]}
+                            {!save.unlockedAccessories.includes(item) && (
+                              <small>모험 선물</small>
+                            )}
+                          </button>
+                        ),
+                      )}
+                    </div>
+                  </>
+                )}
               </div>
             ) : (
               <div className="cw-bookshelf">
                 <h2>우리가 만든 이야기</h2>
-                <p>선택이 달라지면 책 속 이야기도 달라져요.</p>
+                <p>
+                  선택이 달라지면 책 속 이야기도 달라져요. 최대 100권까지
+                  보관하며 오래된 책을 자동으로 지우지 않아요.
+                </p>
+                <button
+                  className="cw-outline"
+                  onClick={() => void exportBackup()}
+                >
+                  친구와 책 전체 백업
+                </button>
                 {save.storyBooks.length === 0 ? (
                   <div className="cw-empty-book">
                     <BookOpen size={40} />
@@ -919,6 +1299,56 @@ export default function CompanionExperience({
               </span>
               <ArrowRight size={23} />
             </button>
+            <fieldset className="cw-difficulty">
+              <legend>우리에게 맞는 모험 속도</legend>
+              <div>
+                {(
+                  [
+                    {
+                      id: 'simple',
+                      label: '천천히 함께',
+                      detail: '4–6세 추천 · 짧은 이야기',
+                    },
+                    {
+                      id: 'standard',
+                      label: '스스로 척척',
+                      detail: '7–9세 추천 · 기본 모험',
+                    },
+                    {
+                      id: 'challenge',
+                      label: '단서를 찾아',
+                      detail: '10–12세 추천 · 노래 추리',
+                    },
+                  ] as { id: ForestDifficulty; label: string; detail: string }[]
+                ).map((option) => (
+                  <button
+                    key={option.id}
+                    aria-pressed={
+                      (save.playDifficulty ??
+                        (age.startsWith('4')
+                          ? 'simple'
+                          : age.startsWith('10')
+                            ? 'challenge'
+                            : 'standard')) === option.id
+                    }
+                    onClick={() =>
+                      commitSave((current) => ({
+                        ...current,
+                        playDifficulty: option.id,
+                        updatedAt: Date.now(),
+                      }))
+                    }
+                  >
+                    <strong>{option.label}</strong>
+                    <small>{option.detail}</small>
+                  </button>
+                ))}
+              </div>
+              <p>
+                나이와 달라도 편한 것을 골라요. 이미 시작한 모험은 그대로, 다음
+                모험부터 바뀌어요.
+              </p>
+            </fieldset>
             <div className="cw-secondary-actions">
               <button onClick={openChat}>
                 <MessageCircle size={17} />
@@ -939,17 +1369,23 @@ export default function CompanionExperience({
               <h1>{view.title}</h1>
               <span>{view.chapterLabel}</span>
             </div>
-            <CompanionWorld
-              ref={world}
-              mode="forest"
-              appearance={save.appearance}
-              forest={forest}
-              onInteract={(id) => dispatch({ type: 'interact', id })}
-              onPet={() => {}}
-              onStatus={setWalking}
-              onUnavailable={() => setUnavailable(true)}
-              onReady={() => setUnavailable(false)}
-            />
+            {save.appearance.drawingAssetId && !art.png ? (
+              <output className="cw-art-loading">
+                {art.error || '친구 그림을 준비하는 중…'}
+              </output>
+            ) : (
+              <CompanionWorld
+                ref={world}
+                mode="forest"
+                appearance={liveAppearance}
+                forest={forest}
+                onInteract={(id) => dispatch({ type: 'interact', id })}
+                onPet={() => {}}
+                onStatus={setWalking}
+                onUnavailable={() => setUnavailable(true)}
+                onReady={() => setUnavailable(false)}
+              />
+            )}
             <div className="cw-world-instructions">
               {unavailable
                 ? '이야기 모드 · 아래 행동 버튼으로 함께해요'
@@ -1064,32 +1500,39 @@ export default function CompanionExperience({
                   <br />
                   오늘 모습 그대로, 우리 책도 완성됐어!
                 </p>
-                <button
-                  className="cw-gift"
-                  onClick={() => {
-                    const accessory =
-                      forest.owlChoice === 'invite' ? 'scarf' : 'flower';
-                    if (
-                      !saveRef.current.unlockedAccessories.includes(accessory)
-                    )
-                      return;
-                    commitSave((s) => ({
-                      ...s,
-                      equippedAccessory: accessory,
-                      appearance: { ...s.appearance, accessory },
-                      updatedAt: Date.now(),
-                    }));
-                    world.current?.react('celebrate');
-                  }}
-                >
-                  <span aria-hidden="true">
-                    {forest.owlChoice === 'invite' ? '🧣' : '🌸'}
-                  </span>
-                  {save.equippedAccessory ===
-                  (forest.owlChoice === 'invite' ? 'scarf' : 'flower')
-                    ? '선물을 입었어요!'
-                    : '선물 바로 입어 보기'}
-                </button>
+                {save.appearance.drawingAssetId ? (
+                  <p className="cw-fine">
+                    선물은 옷장에 보관했어요. 나중에 봉제 친구를 꾸밀 때 입힐 수
+                    있어요.
+                  </p>
+                ) : (
+                  <button
+                    className="cw-gift"
+                    onClick={() => {
+                      const accessory =
+                        forest.owlChoice === 'invite' ? 'scarf' : 'flower';
+                      if (
+                        !saveRef.current.unlockedAccessories.includes(accessory)
+                      )
+                        return;
+                      commitSave((s) => ({
+                        ...s,
+                        equippedAccessory: accessory,
+                        appearance: { ...s.appearance, accessory },
+                        updatedAt: Date.now(),
+                      }));
+                      world.current?.react('celebrate');
+                    }}
+                  >
+                    <span aria-hidden="true">
+                      {forest.owlChoice === 'invite' ? '🧣' : '🌸'}
+                    </span>
+                    {save.equippedAccessory ===
+                    (forest.owlChoice === 'invite' ? 'scarf' : 'flower')
+                      ? '선물을 입었어요!'
+                      : '선물 바로 입어 보기'}
+                  </button>
+                )}
                 <button
                   className="cw-primary"
                   onClick={() =>
@@ -1132,19 +1575,22 @@ export default function CompanionExperience({
               : '보호자 안내와 저장 설정'
         }
       >
-        <button
-          className="cw-dialog-close cw-icon"
-          aria-label="닫기"
-          onClick={closeDialog}
-        >
-          <X size={22} />
-        </button>
+        {!book && (
+          <button
+            className="cw-dialog-close cw-icon"
+            aria-label="닫기"
+            onClick={closeDialog}
+          >
+            <X size={22} />
+          </button>
+        )}
         {book && (
           <CompanionStorybook
             key={book.id}
             book={book}
             fallbackName={save.name}
             fallbackAppearance={save.appearance}
+            onClose={closeDialog}
           />
         )}
         {chat && (
@@ -1320,12 +1766,105 @@ export default function CompanionExperience({
             <p>
               입체 친구와 숲 모험은 API 없이 기기에서 작동합니다. 친구의
               이름·색·모험 선택·완성한 동화는 이 브라우저에만 저장돼요. 다른
-              기기로는 옮겨지지 않아요.
+              기기에서는 자동으로 이어지지 않아요. 아래 백업 파일을 옮겨
+              가져오면 친구와 책을 복원할 수 있어요.
             </p>
             <p>
               사진에서 색을 가져올 때 사진은 전송되지 않습니다. 별도의 ‘AI 그림
               변환’과 ‘친구와 이야기’는 안내 후 OpenAI를 사용해요.
             </p>
+            <section className="cw-backup-panel" aria-label="작품 백업과 복구">
+              <h3>우리 가족의 작은 보관함</h3>
+              <p>
+                완성해서 보관한 캐릭터 그림만 기기에 저장해요. 원본 사진·대화는
+                백업하지 않아요. 파일에는 친구 이름과 이야기가 있으니 가족끼리
+                안전하게 보관해 주세요.
+              </p>
+              <button
+                className="cw-outline"
+                onClick={() => void exportBackup()}
+              >
+                친구·그림·동화책 백업 저장
+              </button>
+              <button
+                className="cw-outline"
+                onClick={() => backupInput.current?.click()}
+              >
+                다른 기기의 백업 가져오기
+              </button>
+              <input
+                hidden
+                type="file"
+                accept="application/json,.json"
+                ref={backupInput}
+                onChange={(event) =>
+                  void inspectBackup(event.target.files?.[0])
+                }
+              />
+              {backupStatus && <output>{backupStatus}</output>}
+              {pendingBackup && (
+                <div className="cw-reset-confirm">
+                  <strong>
+                    {pendingBackup.save.name} · 동화{' '}
+                    {pendingBackup.save.storyBooks.length}권 · 그림{' '}
+                    {pendingBackup.assets.length}개
+                  </strong>
+                  <p>
+                    이 파일의 친구 설정을 적용하고 기존 책과 합쳐요. 파일 내용은
+                    서버로 전송하지 않아요.
+                  </p>
+                  <button
+                    className="cw-primary"
+                    onClick={() => void importBackup()}
+                  >
+                    확인하고 가져오기
+                  </button>
+                  <button
+                    className="cw-outline"
+                    onClick={() => setPendingBackup(null)}
+                  >
+                    취소
+                  </button>
+                </div>
+              )}
+              {blocked && (
+                <>
+                  <p>
+                    자동 저장을 멈춰 기존 기록을 보호하고 있어요. 현재 창의
+                    변경을 먼저 백업한 뒤 다시 불러오세요.
+                  </p>
+                  <button
+                    className="cw-outline"
+                    onClick={() => {
+                      try {
+                        const original =
+                          window.localStorage.getItem(COMPANION_SAVE_KEY);
+                        if (!original) throw new Error();
+                        downloadLocalFile(
+                          '그림친구-복구용-원본기록.json',
+                          original,
+                        );
+                        setBackupStatus(
+                          '기기의 원본 기록을 복구용 파일로 보관했어요. 그림 파일은 포함되지 않으며, 손상된 형식이라면 자동 가져오기는 되지 않아요.',
+                        );
+                      } catch {
+                        setBackupStatus(
+                          '기기의 원본 기록을 읽지 못했어요. 브라우저 저장 공간 설정을 확인해 주세요.',
+                        );
+                      }
+                    }}
+                  >
+                    기기의 원본 기록 파일 보관
+                  </button>
+                  <button
+                    className="cw-outline"
+                    onClick={() => void reloadLatest()}
+                  >
+                    현재 창 변경을 내려놓고 저장된 기록 다시 불러오기
+                  </button>
+                </>
+              )}
+            </section>
             {consent && (
               <button
                 className="cw-outline"
@@ -1366,15 +1905,48 @@ export default function CompanionExperience({
                 </label>
                 <button
                   className="cw-danger"
-                  disabled={resetAnswer !== '지우기'}
-                  onClick={() => {
-                    if (resetAnswer !== '지우기') return;
-                    const result = clearCompanionSave();
+                  disabled={
+                    resetAnswer !== '지우기' || artworkBusy || backupBusy
+                  }
+                  onClick={async () => {
+                    if (
+                      resetAnswer !== '지우기' ||
+                      artworkBusy ||
+                      backupOperation.current
+                    )
+                      return;
+                    backupOperation.current = true;
+                    setBackupBusy(true);
+                    artworkEpoch.current++;
+                    const result = await reset();
                     if (!result.ok) {
-                      setSaveError(result.error);
+                      setBackupStatus(result.error);
+                      backupOperation.current = false;
+                      setBackupBusy(false);
                       return;
                     }
-                    commitSave(createCompanionSave());
+                    setPendingBackup(null);
+                    onArtworkAccepted?.();
+                    acceptedArtwork.current = null;
+                    try {
+                      const cleared = readCompanionSave();
+                      if (
+                        cleared.status !== 'ready' &&
+                        cleared.status !== 'empty'
+                      )
+                        throw new Error();
+                      await clearDrawingAssets({
+                        expectedGeneration: cleared.snapshot.generation,
+                        preserveCurrentGeneration: true,
+                      });
+                      setArtLibrary(await listDrawingAssets());
+                    } catch {
+                      setBackupStatus(
+                        '놀이 기록은 지웠지만 그림 보관함 삭제를 완료하지 못했어요. 다시 확인해 주세요.',
+                      );
+                    }
+                    backupOperation.current = false;
+                    setBackupBusy(false);
                     colorRequest.current++;
                     timers.current.forEach(clearTimeout);
                     timers.current = [];

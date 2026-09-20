@@ -12,6 +12,9 @@ export type CreatureAppearance = {
   /** Optional so companions saved before personalization keep their original look. */
   pattern?: CreaturePattern;
   earStyle?: CreatureEarStyle;
+  drawingAssetId?: string;
+  /** Runtime-only, decoded from the local artwork vault; never in the small save record. */
+  drawingImage?: string;
 };
 
 export const DEFAULT_APPEARANCE: CreatureAppearance = {
@@ -21,7 +24,14 @@ export const DEFAULT_APPEARANCE: CreatureAppearance = {
   accessory: 'star',
 };
 
-export type CreatureAction = 'idle' | 'wave' | 'hop' | 'celebrate' | 'curious' | 'pet' | 'sleep';
+export type CreatureAction =
+  | 'idle'
+  | 'wave'
+  | 'hop'
+  | 'celebrate'
+  | 'curious'
+  | 'pet'
+  | 'sleep';
 
 export type CreatureFrame = {
   moving: boolean;
@@ -30,4 +40,5 @@ export type CreatureFrame = {
   lookX?: number;
   lookY?: number;
   reducedMotion?: boolean;
+  actionId?: number;
 };

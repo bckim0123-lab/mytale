@@ -2,6 +2,40 @@
 @import 'tw-animate-css';
 @import 'shadcn/tailwind.css';
 
+.chat-transmission-consent {
+  margin: 12px 24px;
+  padding: 15px 18px;
+  border-radius: 16px;
+  border: 1px solid #dce7db;
+  background: #f3f8ef;
+  color: #536c5b;
+  font-size: 13px;
+  line-height: 1.8;
+}
+.chat-transmission-consent label {
+  cursor: pointer;
+}
+.book-archive-status {
+  display: block;
+  max-width: 800px;
+  margin: 12px auto 24px;
+  padding: 16px 22px;
+  border: 1px solid #d2e4d1;
+  border-radius: 16px;
+  background: #eff7eb;
+  color: #496153;
+  font-size: 14px;
+  line-height: 1.8;
+  text-align: center;
+}
+.chat-transmission-consent input {
+  width: 19px;
+  height: 19px;
+  margin-right: 7px;
+  accent-color: #387660;
+  vertical-align: middle;
+}
+
 :root {
   --ink: #243831;
   --muted: #71817a;

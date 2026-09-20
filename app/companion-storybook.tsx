@@ -7,6 +7,7 @@ import {
   Volume2,
   Square,
   Printer,
+  Download,
   BookOpen,
   Heart,
   X,
@@ -17,6 +18,12 @@ import {
   type CompanionPortraitState,
 } from './companion-portrait';
 import type { CompanionAppearance, CompanionStoryBook } from './companion-save';
+import {
+  exportStorybookHtml,
+  storybookChapterTitle,
+  storybookWorldSvg,
+} from './storybook-export';
+import { downloadLocalFile } from './drawing-assets';
 import './companion-storybook.css';
 
 type StorybookProps = {
@@ -25,14 +32,6 @@ type StorybookProps = {
   fallbackAppearance: CompanionAppearance;
   onClose?: () => void;
 };
-
-const chapterNames = [
-  '숲이 우리를 불렀어',
-  '작은 손으로 만든 길',
-  '마음이 닿은 노래',
-  '반짝, 우리가 켠 불빛',
-  '또 만나, 달빛 숲',
-];
 
 function companionWith(name: string): string {
   const last = name.codePointAt(name.length - 1) ?? 0;
@@ -264,10 +263,11 @@ function StoryPage({
   portrait: CompanionPortraitState;
   print?: boolean;
 }) {
-  const title = chapterNames[Math.min(page, chapterNames.length - 1)];
+  const title = storybookChapterTitle(book, page);
+  const theme = book.illustrationTheme;
   return (
     <section
-      className={`csb-spread csb-page-${page}${print ? ' csb-print-page' : ''}`}
+      className={`csb-spread csb-page-${page}${theme ? ` csb-world-book csb-world-${theme}` : ''}${print ? ' csb-print-page' : ''}`}
       aria-label={`${page + 1}장 ${title}`}
     >
       <div className="csb-illustration">
@@ -275,18 +275,20 @@ function StoryPage({
         {/* eslint-disable-next-line next/no-img-element */}
         <img
           className="csb-background"
-          src={`/moon-forest-scene-${Math.min(page + 1, 5)}.webp`}
+          src={
+            theme
+              ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(storybookWorldSvg(theme, page))}`
+              : `/moon-forest-scene-${Math.min(page + 1, 5)}.webp`
+          }
           alt=""
           loading={print ? 'eager' : undefined}
         />
         <div className="csb-art-wash" />
-        <SceneDetails page={page} book={book} />
+        {!theme && <SceneDetails page={page} book={book} />}
         <CompanionPortrait portrait={portrait} name={name} />
         <div className="csb-illustration-title">
           <span>
-            {page === 0
-              ? '내가 만든 친구가 주인공인 이야기'
-              : `${name}의 달빛 숲 모험`}
+            {page === 0 ? '내가 만든 친구가 주인공인 이야기' : book.title}
           </span>
           <strong>{page === 0 ? book.title : title}</strong>
         </div>
@@ -295,7 +297,7 @@ function StoryPage({
         </span>
       </div>
       <div className="csb-paper">
-        <span className="csb-chapter">달빛 숲 이야기 · {page + 1}장</span>
+        <span className="csb-chapter">우리의 이야기 · {page + 1}장</span>
         <h3>{title}</h3>
         <p>{book.pages[page]}</p>
         <div className="csb-page-signature">
@@ -376,6 +378,8 @@ function CompanionStorybookReader({
   const [speaking, setSpeaking] = useState(false);
   const [speechAvailable, setSpeechAvailable] = useState(false);
   const [speechError, setSpeechError] = useState('');
+  const [exporting, setExporting] = useState(false);
+  const [exportStatus, setExportStatus] = useState('');
   const speech = useRef<SpeechSynthesisUtterance | null>(null);
   const localVoice = useRef<SpeechSynthesisVoice | null>(null);
   const frame = useRef<HTMLDivElement>(null);
@@ -425,7 +429,7 @@ function CompanionStorybookReader({
     }
     if (!speechAvailable || !localVoice.current) return;
     const utterance = new SpeechSynthesisUtterance(
-      `${chapterNames[Math.min(activePage, 4)]}. ${book.pages[activePage]}`,
+      `${storybookChapterTitle(book, activePage)}. ${book.pages[activePage]}`,
     );
     utterance.lang = 'ko-KR';
     utterance.rate = 0.86;
@@ -466,6 +470,57 @@ function CompanionStorybookReader({
     frame.current?.scrollIntoView({ behavior: 'instant', block: 'nearest' });
   }
 
+  async function keepBook() {
+    if (exporting) return;
+    setExporting(true);
+    setExportStatus(
+      `친구와 ${book.pages.length}장의 이야기를 한 권에 담고 있어요…`,
+    );
+    try {
+      const illustrations = book.illustrationTheme
+        ? []
+        : await Promise.all(
+            book.pages.map(async (_, index) => {
+              try {
+                const response = await fetch(
+                  `/moon-forest-scene-${Math.min(index + 1, 5)}.webp`,
+                );
+                if (!response.ok) return null;
+                const blob = await response.blob();
+                return await new Promise<string>((resolve, reject) => {
+                  const reader = new FileReader();
+                  reader.onload = () =>
+                    typeof reader.result === 'string'
+                      ? resolve(reader.result)
+                      : reject(new TypeError('그림 파일을 읽지 못했어요.'));
+                  reader.onerror = reject;
+                  reader.readAsDataURL(blob);
+                });
+              } catch {
+                return null;
+              }
+            }),
+          );
+      const html = exportStorybookHtml(book, {
+        name,
+        image: portrait.src || undefined,
+        illustrations,
+      });
+      downloadLocalFile(
+        `${book.title.replace(/[\\/:*?"<>|]/g, '')}.html`,
+        html,
+        'text/html;charset=utf-8',
+      );
+      setExportStatus(
+        '책 파일을 내려받았어요. 인터넷 없이 열어 읽고, 브라우저에서 인쇄하거나 PDF로 저장할 수 있어요.',
+      );
+    } catch {
+      setExportStatus('책 파일을 만들지 못했어요. 잠시 뒤 다시 눌러 주세요.');
+    } finally {
+      setExporting(false);
+    }
+  }
+
   return (
     <article className="csb-reader">
       <header className="csb-toolbar">
@@ -473,6 +528,14 @@ function CompanionStorybookReader({
           <BookOpen size={17} /> 우리의 동화책
         </span>
         <div>
+          <button
+            type="button"
+            disabled={exporting || (!portrait.src && !portrait.unavailable)}
+            onClick={() => void keepBook()}
+          >
+            <Download size={17} />
+            {exporting ? '책을 담는 중' : '동화책 파일 저장'}
+          </button>
           <button
             type="button"
             onClick={readPage}
@@ -521,6 +584,9 @@ function CompanionStorybookReader({
           portrait={portrait}
         />
       </div>
+      {exportStatus && (
+        <output className="csb-privacy-note">{exportStatus}</output>
+      )}
       <nav className="csb-navigation" aria-label="동화책 페이지">
         <button
           type="button"
@@ -573,7 +639,7 @@ function CompanionStorybookReader({
           <span>우리가 만든 동화책</span>
           <h1>{book.title}</h1>
           <CompanionPortrait portrait={portrait} name={name} />
-          <p>나와 {name}의 달빛 숲 모험</p>
+          <p>나와 {name}, 우리가 고른 이야기</p>
           <small>
             우리의 선택이 이야기가 된 날 ·{' '}
             {new Date(book.createdAt).toLocaleDateString('ko-KR')}

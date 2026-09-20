@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import type { CompanionAppearance } from './companion-save';
+import { useDrawingAsset } from './use-drawing-asset';
 
 export type CompanionPortraitState = {
   src: string | null;
@@ -12,6 +13,7 @@ export type CompanionPortraitState = {
 export function useCompanionPortrait(
   appearance: CompanionAppearance,
 ): CompanionPortraitState {
+  const drawing = useDrawingAsset(appearance.drawingAssetId);
   const signature = JSON.stringify(appearance);
   const [portrait, setPortrait] = useState<CompanionPortraitState>({
     src: null,
@@ -19,6 +21,7 @@ export function useCompanionPortrait(
   });
 
   useEffect(() => {
+    if ((JSON.parse(signature) as CompanionAppearance).drawingAssetId) return;
     let canceled = false;
     let dispose: (() => void) | undefined;
     queueMicrotask(() => {
@@ -116,7 +119,9 @@ export function useCompanionPortrait(
     };
   }, [signature]);
 
-  return portrait;
+  return appearance.drawingAssetId
+    ? { src: drawing.png ?? null, unavailable: !!drawing.error }
+    : portrait;
 }
 
 export function CompanionPortrait({

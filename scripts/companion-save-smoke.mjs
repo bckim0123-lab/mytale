@@ -31,9 +31,18 @@ try {
     saveCompanionSave,
     clearCompanionSave,
     safeAppearance,
+    readCompanionSave,
+    persistCompanionSave,
+    resetCompanionSave,
+    serializeCompanionBackup,
+    parseCompanionBackup,
+    MAX_COMPANION_SAVE_BYTES,
   } = await server.ssrLoadModule('/app/companion-save.ts');
   const { initialForestState, transitionForest } = await server.ssrLoadModule(
     '/app/forest-story.ts',
+  );
+  const { CompanionStorageSession } = await server.ssrLoadModule(
+    '/app/companion-storage-session.ts',
   );
   const storage = new MemoryStorage();
   const fresh = createCompanionSave();
@@ -54,6 +63,8 @@ try {
     'SSR clears report unavailable storage.',
   );
   assert.equal(COMPANION_SAVE_KEY, 'drawing-friend-companion-v1');
+  assert.equal(readCompanionSave(storage).status, 'empty');
+  assert.equal(readCompanionSave().status, 'unavailable');
 
   const custom = createCompanionSave({
     name: '별이',
@@ -266,7 +277,7 @@ try {
       ...custom,
       storyBooks: [{ ...custom.storyBooks[0], pages: [42] }],
     }),
-    ' '.repeat(64 * 1024 + 1),
+    ' '.repeat(MAX_COMPANION_SAVE_BYTES + 1),
   ]) {
     storage.setItem(COMPANION_SAVE_KEY, corrupted);
     assert.equal(
@@ -279,6 +290,14 @@ try {
       corrupted,
       'Reading invalid data must not destroy it.',
     );
+    const status = readCompanionSave(storage);
+    assert.ok(status.status === 'corrupt' || status.status === 'future');
+    assert.equal(
+      saveCompanionSave(custom, storage).ok,
+      false,
+      'Autosave cannot overwrite an unreadable record.',
+    );
+    assert.equal(storage.getItem(COMPANION_SAVE_KEY), corrupted);
   }
 
   storage.setItem(COMPANION_SAVE_KEY, previous);
@@ -301,7 +320,7 @@ try {
   const books = Array.from({ length: 14 }, (_, index) => ({
     id: `book-${index}`,
     title: '새로운 모험',
-    pages: Array.from({ length: 15 }, () => '작은 친구와 함께 걸었어요.'),
+    pages: Array.from({ length: 12 }, () => '작은 친구와 함께 걸었어요.'),
     ending: '또 만나자!',
     createdAt: index,
   }));
@@ -310,17 +329,18 @@ try {
     unlockedAccessories: ['star', 'flower', 'flower', 'unknown'],
     equippedAccessory: 'scarf',
     storyBooks: books,
+    completedAdventures: 14,
   });
   assert.equal(
     [...bounded.name].length,
     24,
     'Long nicknames truncate without broken Unicode.',
   );
-  assert.equal(bounded.storyBooks.length, 10);
+  assert.equal(bounded.storyBooks.length, 14);
   assert.equal(
     bounded.storyBooks[0].id,
     'book-13',
-    'Only the newest ten books are kept.',
+    'All fourteen books are kept, newest first.',
   );
   assert.equal(
     bounded.storyBooks.every((book) => book.pages.length === 12),
@@ -333,6 +353,7 @@ try {
     'A locked accessory cannot be equipped by tampering.',
   );
   assert.equal(bounded.appearance.accessory, bounded.equippedAccessory);
+  storage.setItem(COMPANION_SAVE_KEY, JSON.stringify(bounded));
   assert.equal(saveCompanionSave(bounded, storage).ok, true);
   assert.deepEqual(loadCompanionSave(storage), bounded);
 
@@ -345,8 +366,9 @@ try {
   const beforeOversizedSave = storage.getItem(COMPANION_SAVE_KEY);
   const oversized = {
     ...custom,
-    storyBooks: books.slice(0, 10).map((book) => ({
-      ...book,
+    storyBooks: Array.from({ length: 30 }, (_, index) => ({
+      ...books[0],
+      id: `large-${index}`,
       pages: Array.from({ length: 12 }, () => '별'.repeat(600)),
     })),
   };
@@ -356,6 +378,315 @@ try {
     'Large UTF-8 content is rejected before storage.',
   );
   assert.equal(storage.getItem(COMPANION_SAVE_KEY), beforeOversizedSave);
+
+  // Independent tab snapshots, interleaved writes: neither books nor unrelated
+  // customizations may be replaced by stale state from the other tab.
+  const shared = new MemoryStorage();
+  const initialA = readCompanionSave(shared).snapshot;
+  const initialB = readCompanionSave(shared).snapshot;
+  const firstA = await persistCompanionSave(
+    createCompanionSave({ name: '반짝' }),
+    { base: initialA, storage: shared },
+  );
+  assert.equal(firstA.ok, true);
+  const firstB = await persistCompanionSave(
+    createCompanionSave({
+      appearance: { ...fresh.appearance, bodyColor: '#abcabc' },
+    }),
+    { base: initialB, storage: shared },
+  );
+  assert.equal(firstB.ok, true);
+  assert.equal(firstB.save.name, '반짝');
+  assert.equal(firstB.save.appearance.bodyColor, '#abcabc');
+  const baseA = readCompanionSave(shared).snapshot;
+  const baseB = readCompanionSave(shared).snapshot;
+  const nextA = { ...baseA.save, storyBooks: [books[0]], name: '달콩' };
+  const nextB = {
+    ...baseB.save,
+    storyBooks: [books[1]],
+    appearance: { ...baseB.save.appearance, pattern: 'heart' },
+  };
+  assert.equal(
+    (await persistCompanionSave(nextA, { base: baseA, storage: shared })).ok,
+    true,
+  );
+  const mergedB = await persistCompanionSave(nextB, {
+    base: baseB,
+    storage: shared,
+  });
+  assert.equal(mergedB.ok, true);
+  assert.equal(mergedB.merged, true);
+  assert.deepEqual(
+    mergedB.save.storyBooks.map((book) => book.id),
+    ['book-1', 'book-0'],
+  );
+  assert.equal(mergedB.save.name, '달콩');
+  assert.equal(mergedB.save.appearance.pattern, 'heart');
+  assert.equal(mergedB.save.completedAdventures, 2);
+
+  const clashA = readCompanionSave(shared).snapshot;
+  const clashB = readCompanionSave(shared).snapshot;
+  assert.equal(
+    (
+      await persistCompanionSave(
+        { ...clashA.save, name: '첫 번째 이름' },
+        { base: clashA, storage: shared },
+      )
+    ).ok,
+    true,
+  );
+  const beforeClash = shared.getItem(COMPANION_SAVE_KEY);
+  const collision = await persistCompanionSave(
+    { ...clashB.save, name: '두 번째 이름' },
+    { base: clashB, storage: shared },
+  );
+  assert.equal(collision.ok, false);
+  assert.equal(collision.code, 'conflict');
+  assert.equal(
+    shared.getItem(COMPANION_SAVE_KEY),
+    beforeClash,
+    'Same-field conflicts need an explicit user choice.',
+  );
+
+  const deletedTab = readCompanionSave(shared).snapshot;
+  assert.equal((await resetCompanionSave(shared)).ok, true);
+  const tombstone = shared.getItem(COMPANION_SAVE_KEY);
+  assert.equal(readCompanionSave(shared).status, 'empty');
+  const resurrection = await persistCompanionSave(deletedTab.save, {
+    base: deletedTab,
+    storage: shared,
+  });
+  assert.equal(resurrection.ok, false);
+  assert.equal(resurrection.code, 'reset');
+  assert.equal(
+    shared.getItem(COMPANION_SAVE_KEY),
+    tombstone,
+    'A stale tab cannot resurrect deleted books.',
+  );
+  assert.equal(
+    saveCompanionSave(deletedTab.save, shared).ok,
+    false,
+    'The legacy writer also respects a reset tombstone.',
+  );
+  const afterReset = readCompanionSave(shared).snapshot;
+  assert.equal(
+    (await persistCompanionSave(fresh, { base: afterReset, storage: shared }))
+      .ok,
+    true,
+    'A newly hydrated tab may explicitly start again.',
+  );
+
+  const fullSave = createCompanionSave({
+    storyBooks: Array.from({ length: 100 }, (_, index) => ({
+      ...books[0],
+      id: `full-${index}`,
+      createdAt: index,
+    })),
+    completedAdventures: 100,
+  });
+  const fullStorage = new MemoryStorage();
+  const fullResult = await persistCompanionSave(fullSave, {
+    base: readCompanionSave(fullStorage).snapshot,
+    storage: fullStorage,
+  });
+  assert.equal(fullResult.ok, true);
+  const beforeFull = fullStorage.getItem(COMPANION_SAVE_KEY);
+  const overFull = await persistCompanionSave(
+    {
+      ...fullSave,
+      storyBooks: [...fullSave.storyBooks, { ...books[0], id: 'one-too-many' }],
+    },
+    { base: fullResult.snapshot, storage: fullStorage },
+  );
+  assert.equal(overFull.ok, false);
+  assert.equal(overFull.code, 'full');
+  assert.equal(fullStorage.getItem(COMPANION_SAVE_KEY), beforeFull);
+  assert.equal(loadCompanionSave(fullStorage).storyBooks.length, 100);
+
+  const portable = serializeCompanionBackup(changedFriend);
+  assert.equal(portable.ok, true);
+  assert.deepEqual(parseCompanionBackup(portable.json), {
+    ok: true,
+    save: changedFriend,
+  });
+  for (const invalidImport of [
+    '{bad',
+    'null',
+    JSON.stringify({
+      format: 'drawing-friend-backup',
+      version: 2,
+      save: custom,
+    }),
+    JSON.stringify({
+      format: 'drawing-friend-backup',
+      version: 1,
+      save: {
+        ...custom,
+        storyBooks: [{ ...books[0], pages: Array(13).fill('긴 책') }],
+      },
+    }),
+  ]) {
+    assert.equal(parseCompanionBackup(invalidImport).ok, false);
+  }
+  const personaSave = createCompanionSave({
+    persona: {
+      likes: '숲',
+      traits: '용감해',
+      ability: '작은 빛',
+      quirk: '쫑긋',
+      email: 'PRIVATE_EMAIL',
+    },
+    appearance: {
+      ...fresh.appearance,
+      drawingAssetId: 'a'.repeat(64),
+      image: 'PRIVATE_IMAGE',
+    },
+  });
+  assert.equal(personaSave.appearance.drawingAssetId, 'a'.repeat(64));
+  assert.equal(
+    safeAppearance({ ...fresh.appearance, drawingAssetId: 'javascript:bad' })
+      .drawingAssetId,
+    undefined,
+  );
+  assert.equal(JSON.stringify(personaSave).includes('PRIVATE_'), false);
+  assert.equal(serializeCompanionBackup(personaSave).ok, true);
+
+  // A real session queue with a delayed transaction, an edit typed mid-flight,
+  // and another tab's intervening update exercises the React hook's controller.
+  const queuedStorage = new MemoryStorage();
+  saveCompanionSave(custom, queuedStorage);
+  const otherTabBase = readCompanionSave(queuedStorage).snapshot;
+  let releaseWrite;
+  const gate = new Promise((resolve) => {
+    releaseWrite = resolve;
+  });
+  let queuedCalls = 0;
+  const queuedSession = new CompanionStorageSession({
+    storage: queuedStorage,
+    persist: async (data, options) => {
+      if (queuedCalls++ === 0) await gate;
+      return persistCompanionSave(data, options);
+    },
+  });
+  queuedSession.hydrate();
+  queuedSession.commitSave((save) => ({ ...save, name: '쓰는 중인 이름' }));
+  await Promise.resolve();
+  const otherTab = await persistCompanionSave(
+    {
+      ...otherTabBase.save,
+      appearance: { ...otherTabBase.save.appearance, pattern: 'heart' },
+      storyBooks: [...otherTabBase.save.storyBooks, books[2]],
+    },
+    { base: otherTabBase, storage: queuedStorage },
+  );
+  assert.equal(otherTab.ok, true);
+  queuedSession.handleStorageChange();
+  queuedSession.commitSave((save) => ({
+    ...save,
+    appearance: { ...save.appearance, accentColor: '#123456' },
+    storyBooks: [...save.storyBooks, books[3]],
+  }));
+  releaseWrite();
+  await queuedSession.flush();
+  assert.equal(queuedCalls, 2);
+  assert.equal(queuedSession.getState().blocked, false);
+  assert.equal(queuedSession.getState().save.name, '쓰는 중인 이름');
+  assert.equal(queuedSession.getState().save.appearance.accentColor, '#123456');
+  assert.equal(queuedSession.getState().save.appearance.pattern, 'heart');
+  assert.deepEqual(
+    queuedSession
+      .getState()
+      .save.storyBooks.map((book) => book.id)
+      .sort(),
+    ['book-2', 'book-3', 'first'],
+  );
+  assert.deepEqual(
+    loadCompanionSave(queuedStorage),
+    queuedSession.getState().save,
+  );
+
+  const sessionConflictBase = readCompanionSave(queuedStorage).snapshot;
+  await persistCompanionSave(
+    { ...sessionConflictBase.save, name: '다른 창에서 정한 이름' },
+    { base: sessionConflictBase, storage: queuedStorage },
+  );
+  queuedSession.commitSave((save) => ({
+    ...save,
+    name: '아직 내 화면의 이름',
+  }));
+  await queuedSession.flush();
+  assert.equal(queuedSession.getState().blocked, true);
+  assert.equal(
+    queuedSession.getState().save.name,
+    '아직 내 화면의 이름',
+    'A conflict preserves unsaved edits for backup.',
+  );
+  assert.equal(loadCompanionSave(queuedStorage).name, '다른 창에서 정한 이름');
+  await queuedSession.reloadLatest();
+  assert.equal(queuedSession.getState().save.name, '다른 창에서 정한 이름');
+  assert.equal(queuedSession.getState().blocked, false);
+  queuedSession.commitSave((save) => ({ ...save, name: '' }));
+  await queuedSession.flush();
+  assert.equal(
+    queuedSession.getState().save.name,
+    '',
+    'A temporarily empty text input stays editable.',
+  );
+  assert.equal(
+    loadCompanionSave(queuedStorage).name,
+    '몽글',
+    'The persisted record still has a valid nickname.',
+  );
+
+  const corruptSessionStorage = new MemoryStorage();
+  corruptSessionStorage.setItem(COMPANION_SAVE_KEY, '{broken');
+  const corruptSession = new CompanionStorageSession({
+    storage: corruptSessionStorage,
+  });
+  corruptSession.hydrate();
+  assert.equal(corruptSession.getState().blocked, true);
+  corruptSession.commitSave((save) => ({ ...save, name: '메모리에만 남겨요' }));
+  await corruptSession.flush();
+  assert.equal(corruptSessionStorage.getItem(COMPANION_SAVE_KEY), '{broken');
+  assert.equal(
+    (await corruptSession.restoreSave(custom)).ok,
+    false,
+    'Import never overwrites an unreadable record implicitly.',
+  );
+  assert.equal(
+    (await corruptSession.reset()).ok,
+    true,
+    'Only an explicit reset clears unreadable data.',
+  );
+  assert.equal(corruptSession.getState().blocked, false);
+  assert.equal((await corruptSession.restoreSave(custom)).ok, true);
+  assert.deepEqual(loadCompanionSave(corruptSessionStorage), custom);
+
+  const resetStorage = new MemoryStorage();
+  saveCompanionSave(custom, resetStorage);
+  let releaseResetWrite;
+  const resetGate = new Promise((resolve) => {
+    releaseResetWrite = resolve;
+  });
+  const resetSession = new CompanionStorageSession({
+    storage: resetStorage,
+    persist: async (data, options) => {
+      await resetGate;
+      return persistCompanionSave(data, options);
+    },
+  });
+  resetSession.hydrate();
+  resetSession.commitSave((save) => ({ ...save, name: '삭제 직전 변경' }));
+  await Promise.resolve();
+  const resetPending = resetSession.reset();
+  releaseResetWrite();
+  assert.equal((await resetPending).ok, true);
+  assert.equal(
+    readCompanionSave(resetStorage).status,
+    'empty',
+    'Reset waits for a started transaction, then leaves a tombstone.',
+  );
+  assert.equal(resetSession.getState().save.storyBooks.length, 0);
 
   const safe = safeAppearance({
     kind: 'dragon',
@@ -384,7 +715,7 @@ try {
     'Reset removes this game only.',
   );
   console.log(
-    'Companion persistence smoke passed: roundtrip, permanent book heroes/choices, legacy compatibility, bounds, privacy allowlists, corruption, quota and SSR.',
+    'Companion persistence smoke passed: immutable snapshots, two-tab merges/conflicts, queued edits, reset tombstones, 100-book preservation, validated portability, corruption/future-version guards, quota and SSR.',
   );
 } finally {
   await server.close();

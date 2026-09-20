@@ -19,6 +19,17 @@ import {
   sceneQuests,
 } from './adventure-play';
 import { AdventureWorld3D } from './adventure-world-3d';
+import {
+  createCompanionSave,
+  readCompanionSave,
+  persistCompanionSave,
+  type CompanionStoryBook,
+} from './companion-save';
+import {
+  keepDrawingAsset,
+  portableArtwork,
+  type DrawingAssetPersona,
+} from './drawing-assets';
 const CompanionExperience = lazy(() => import('./companion-experience'));
 import {
   createLocalCharacterPreview,
@@ -81,24 +92,46 @@ type CharacterErrorPayload = {
   code?: string;
   retryable?: boolean;
   retryAfterMs?: number;
+  retryMode?: 'review-only';
+  reviewTicket?: string;
+  reviewTicketExpiresAt?: number;
 };
 
 class CharacterRequestError extends Error {
   code?: string;
   retryable: boolean;
   retryAfterMs?: number;
+  retryMode?: 'review-only';
+  reviewTicket?: string;
+  reviewTicketExpiresAt?: number;
 
   constructor(
     message: string,
     code?: string,
     retryable = false,
     retryAfterMs?: number,
+    details?: CharacterErrorPayload,
   ) {
     super(message);
     this.name = 'CharacterRequestError';
     this.code = code;
     this.retryable = retryable;
     this.retryAfterMs = retryAfterMs;
+    if (
+      (code === 'quality_review_failed' || code === 'quality_review_timeout') &&
+      details?.retryMode === 'review-only' &&
+      typeof details.reviewTicket === 'string' &&
+      details.reviewTicket.length >= 44 &&
+      details.reviewTicket.length <= 3_800_000 &&
+      /^[A-Za-z0-9+/]+={0,2}$/.test(details.reviewTicket) &&
+      typeof details.reviewTicketExpiresAt === 'number' &&
+      Number.isSafeInteger(details.reviewTicketExpiresAt) &&
+      details.reviewTicketExpiresAt > Date.now()
+    ) {
+      this.retryMode = 'review-only';
+      this.reviewTicket = details.reviewTicket;
+      this.reviewTicketExpiresAt = details.reviewTicketExpiresAt;
+    }
   }
 }
 type AdventurePhase =
@@ -126,6 +159,9 @@ type SavedStorybook = {
   image: string | null;
   theme: number;
   title: string;
+  heroName?: string;
+  heroPersona?: DrawingAssetPersona;
+  imageSource?: 'ai' | 'local';
 };
 const flow: { id: Step; label: string }[] = [
   { id: 'upload', label: '그림 올리기' },
@@ -260,23 +296,28 @@ async function readCharacterStream<T>(
         event.data?.retryable ??
           (typeof event.status === 'number' ? event.status >= 500 : true),
         event.data?.retryAfterMs,
+        event.data,
       );
     return undefined;
   };
-  while (true) {
-    const { done, value } = await reader.read();
-    buffer += decoder.decode(value, { stream: !done });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || '';
-    for (const line of lines) {
-      const result = readLine(line);
-      if (result !== undefined) return result;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        const result = readLine(line);
+        if (result !== undefined) return result;
+      }
+      if (done) {
+        const result = readLine(buffer);
+        if (result !== undefined) return result;
+        break;
+      }
     }
-    if (done) {
-      const result = readLine(buffer);
-      if (result !== undefined) return result;
-      break;
-    }
+  } finally {
+    reader.releaseLock();
   }
   throw new CharacterRequestError(
     'AI 작업실의 응답이 일찍 끝났어요.',
@@ -303,12 +344,14 @@ function characterFailureMessage(error: unknown) {
     return 'AI 작업실을 준비하고 있어요. 기기에서 만든 임시 친구로 먼저 놀아 주세요.';
   if (error.code === 'rate_limited')
     return 'AI 친구들이 잠깐 숨을 고르고 있어요. 네 그림에는 문제가 없어요. 잠시 뒤 이 스타일만 다시 불러 주세요.';
+  if (error.retryMode === 'review-only' && error.reviewTicket)
+    return '그림은 만들었지만 마지막 검사가 잠시 멈췄어요. 5분 안에 이 스타일을 다시 누르면 같은 그림의 검사만 이어가요. 새 이미지를 만들지 않아요.';
   if (
-    error.code === 'alpha_failed' ||
-    error.code === 'quality_failed' ||
     error.code === 'quality_review_failed' ||
     error.code === 'quality_review_timeout'
   )
+    return '마지막 검사를 끝내지 못해 결과는 아직 보여 주지 않았어요. 검사 이어하기 정보를 받지 못했으니 원한다면 새 모습으로 다시 시도해 주세요.';
+  if (error.code === 'alpha_failed' || error.code === 'quality_failed')
     return '첫 결과가 투명 배경과 귀여움 기준을 통과하지 못해 보여 주지 않았어요. 기기 미리보기로 놀거나 이 스타일만 새로 만들어 주세요.';
   return error.retryable
     ? 'AI 작업실이 잠깐 쉬고 있어요. 네 그림에는 문제가 없어요. 기기 미리보기로 놀거나 잠시 뒤 이 스타일만 다시 불러 주세요.'
@@ -615,6 +658,25 @@ export default function Home() {
   const [age, setAge] = useState<(typeof ageChoices)[number]>('7–9세');
   const [photoConsent, setPhotoConsent] = useState(false);
   const [guardianVerified, setGuardianVerified] = useState(false);
+  const [chatConsent, setChatConsent] = useState(false);
+  const [companionArtwork, setCompanionArtwork] = useState<{
+    png: string;
+    name: string;
+    persona: typeof defaultPersona;
+  } | null>(null);
+  const reviewTickets = useRef<Record<number, string>>({});
+  useEffect(() => {
+    reviewTickets.current = {};
+  }, [
+    image,
+    age,
+    favoriteColor,
+    preserveFocus,
+    characterWish,
+    characterMood,
+    favoriteWorld,
+    childGender,
+  ]);
   const [previousStep, setPreviousStep] = useState<Step>('welcome');
   const [adventureTrail, setAdventureTrail] = useState<AdventureDecision[]>([]);
   const [choiceResult, setChoiceResult] = useState<AdventureDecision | null>(
@@ -643,6 +705,9 @@ export default function Home() {
   const [readingAloud, setReadingAloud] = useState(false);
   const [adventureSpeaking, setAdventureSpeaking] = useState(false);
   const [savedStorybooks, setSavedStorybooks] = useState<SavedStorybook[]>([]);
+  const [bookArchiveStatus, setBookArchiveStatus] = useState('');
+  const [bookArchiving, setBookArchiving] = useState(false);
+  const archivingBook = useRef(false);
   const [persona, setPersona] = useState(defaultPersona);
   const [messages, setMessages] = useState<
     Array<{ role: 'user' | 'assistant'; content: string }>
@@ -1025,6 +1090,12 @@ export default function Home() {
     signal?: AbortSignal,
     highQuality = false,
   ) => {
+    const requestRun = generationRun.current;
+    const ticketStore = reviewTickets.current;
+    const isCurrentRequest = () =>
+      !signal?.aborted &&
+      generationRun.current === requestRun &&
+      reviewTickets.current === ticketStore;
     const form = new FormData();
     form.append('drawing', blob, 'drawing.jpg');
     form.append('styleIndex', String(index));
@@ -1036,6 +1107,17 @@ export default function Home() {
     form.append('characterMood', characterMood);
     form.append('favoriteWorld', favoriteWorld);
     if (highQuality) form.append('qualityTier', 'high');
+    if (ticketStore[index]) {
+      const ticketBytes = Uint8Array.from(
+        atob(ticketStore[index]),
+        (character) => character.charCodeAt(0),
+      );
+      form.append(
+        'reviewTicket',
+        new Blob([ticketBytes], { type: 'application/octet-stream' }),
+        'review-ticket.bin',
+      );
+    }
     if (index === 2) {
       let reference = styleReferenceBlob.current;
       if (!reference) {
@@ -1071,32 +1153,47 @@ export default function Home() {
           'cute-3d-style-reference.webp',
         );
     }
-    const response = await fetch('/api/character', {
-      method: 'POST',
-      headers: { Accept: 'application/x-ndjson' },
-      body: form,
-      signal,
-    });
-    type CharacterResponse = CharacterErrorPayload & {
-      image?: string;
-      quality?: CharacterQuality;
-    };
-    const data = response.headers
-      .get('content-type')
-      ?.includes('application/x-ndjson')
-      ? await readCharacterStream<CharacterResponse>(response, () => {
-          if (!signal?.aborted) setGenerationLastActivityAt(Date.now());
-        })
-      : await readJson<CharacterResponse>(response);
-    if (!response.ok || !data?.image) {
-      throw new CharacterRequestError(
-        apiErrorMessage(response, data?.error),
-        data?.code,
-        data?.retryable,
-        data?.retryAfterMs,
-      );
+    if (!isCurrentRequest()) throw new DOMException('Aborted', 'AbortError');
+    try {
+      const response = await fetch('/api/character', {
+        method: 'POST',
+        headers: { Accept: 'application/x-ndjson' },
+        body: form,
+        signal,
+      });
+      type CharacterResponse = CharacterErrorPayload & {
+        image?: string;
+        quality?: CharacterQuality;
+      };
+      const data = response.headers
+        .get('content-type')
+        ?.includes('application/x-ndjson')
+        ? await readCharacterStream<CharacterResponse>(response, () => {
+            if (isCurrentRequest()) setGenerationLastActivityAt(Date.now());
+          })
+        : await readJson<CharacterResponse>(response);
+      if (!isCurrentRequest()) throw new DOMException('Aborted', 'AbortError');
+      if (!response.ok || !data?.image) {
+        throw new CharacterRequestError(
+          apiErrorMessage(response, data?.error),
+          data?.code,
+          data?.retryable,
+          data?.retryAfterMs,
+          data ?? undefined,
+        );
+      }
+      delete ticketStore[index];
+      return { index, image: data.image, quality: data.quality || null };
+    } catch (error) {
+      if (!isCurrentRequest()) throw new DOMException('Aborted', 'AbortError');
+      if (error instanceof CharacterRequestError) {
+        if (error.reviewTicket) ticketStore[index] = error.reviewTicket;
+        else if (!error.retryable) delete ticketStore[index];
+      }
+      // NDJSON errors throw before returning data. Capture the receipt here,
+      // without allowing a canceled/old source request to pollute a newer run.
+      throw error;
     }
-    return { index, image: data.image, quality: data.quality || null };
   };
   const rememberGenerationFailure = (error: unknown) => {
     const requestError =
@@ -1323,39 +1420,58 @@ export default function Home() {
   };
   const sendChat = async () => {
     const text = chatInput.trim();
-    if (!text || chatting) return;
+    if (!text || chatting || !chatConsent) return;
     const next = [...messages, { role: 'user' as const, content: text }];
     setMessages(next);
     setChatInput('');
     setChatting(true);
     setChatError('');
     chatRequest.current?.abort();
-    chatRequest.current = new AbortController();
+    const controller = new AbortController();
+    chatRequest.current = controller;
     try {
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          consent: true,
           message: text,
-          history: messages,
+          history: messages.slice(-8),
           persona,
           age,
         }),
-        signal: chatRequest.current.signal,
+        signal: controller.signal,
       });
-      const data = await readJson<{ text?: string }>(response);
+      const data = await readJson<{
+        text?: string;
+        safety?: string;
+        clearHistory?: boolean;
+      }>(response);
+      if (chatRequest.current !== controller || controller.signal.aborted)
+        return;
       if (!response.ok || !data) throw new Error('답장을 가져오지 못했어요.');
+      if (data.clearHistory) {
+        setMessages([]);
+        setChatError(data.text || '개인정보 없이 상상 이야기를 해 볼까요?');
+        return;
+      }
       setMessages([
-        ...next,
+        ...(data.safety === 'redirected' || data.safety === 'urgent'
+          ? messages
+          : next),
         {
           role: 'assistant',
           content: data.text || '잠시 생각을 고르고 있어. 다시 말해 줄래?',
         },
       ]);
     } catch {
-      setChatError('답장을 가져오지 못했어요. 잠시 후 다시 보내 주세요.');
+      if (!controller.signal.aborted && chatRequest.current === controller)
+        setChatError('답장을 가져오지 못했어요. 잠시 후 다시 보내 주세요.');
     } finally {
-      setChatting(false);
+      if (chatRequest.current === controller) {
+        setChatting(false);
+        chatRequest.current = null;
+      }
     }
   };
   const getDominantTrait = (trail: AdventureDecision[]): AdventureTrait => {
@@ -1739,8 +1855,19 @@ export default function Home() {
       image: storyCharacterImage,
       theme,
       title: completedPages[0]?.title || activeAdventure.title,
+      heroName: persona.name,
+      heroPersona: {
+        likes: persona.likes,
+        traits: persona.traits,
+        ability: persona.ability,
+        quirk: persona.quirk,
+      },
+      imageSource: playImageSource === 'ai' ? 'ai' : 'local',
     };
-    setSavedStorybooks((current) => [...current, completedBook].slice(-4));
+    setSavedStorybooks((current) => [...current, completedBook]);
+    setBookArchiveStatus(
+      '이 책은 아직 이 화면에만 있어요. 아래 ‘책장에 보관하기’를 누르면 다음에도 읽을 수 있어요.',
+    );
     setStorybook(completedPages);
     setStorybookImage(storyCharacterImage);
     setStorybookTheme(theme);
@@ -1759,6 +1886,82 @@ export default function Home() {
     transitionTimer.current = window.setTimeout(finishAdventureTransition, 820);
   };
   const storyPages = storybook || buildStoryPages(adventureTrail);
+  async function archiveIllustratedBook() {
+    const source = savedStorybooks.find((item) => item.pages === storybook);
+    if (!source || archivingBook.current) return;
+    archivingBook.current = true;
+    setBookArchiving(true);
+    setBookArchiveStatus('우리 이야기를 책장에 담고 있어요…');
+    try {
+      const current = readCompanionSave();
+      if (current.status !== 'ready' && current.status !== 'empty')
+        throw new Error(current.error);
+      const saved =
+        current.status === 'ready' ? current.save : createCompanionSave();
+      const id = `illustrated-${source.id}`;
+      if (saved.storyBooks.some((book) => book.id === id)) {
+        setBookArchiveStatus(
+          '이미 책장에 보관한 책이에요. 친구의 집 → 우리 책장에서 다시 읽을 수 있어요.',
+        );
+        return;
+      }
+      if (saved.storyBooks.length >= 100)
+        throw new Error(
+          '책장이 가득 찼어요. 기존 책은 지우지 않았어요. 인쇄·PDF로 먼저 간직해 주세요.',
+        );
+      const asset =
+        source.image && source.imageSource === 'ai'
+          ? await keepDrawingAsset(
+              await portableArtwork(source.image),
+              source.heroName,
+              {
+                expectedGeneration: current.snapshot.generation,
+                persona: source.heroPersona,
+              },
+            )
+          : null;
+      const completed: CompanionStoryBook = {
+        id,
+        title: source.title,
+        createdAt: Date.now(),
+        ending: adventureStories[source.theme]?.reward || '우리의 모험',
+        pages: source.pages.map(
+          (item) =>
+            `${item.body}${item.quote ? `\n\n“${item.quote}”` : ''}${item.clue ? `\n\n모은 단서: ${item.clue}` : ''}`,
+        ),
+        chapterTitles: source.pages.map((item) => item.title),
+        illustrationTheme: adventureStories[source.theme]
+          ?.color as CompanionStoryBook['illustrationTheme'],
+        heroName: source.heroName || '그림친구',
+        ...(asset
+          ? {
+              heroAppearance: { ...saved.appearance, drawingAssetId: asset.id },
+            }
+          : {}),
+      };
+      const result = await persistCompanionSave(
+        {
+          ...saved,
+          storyBooks: [completed, ...saved.storyBooks],
+          updatedAt: Date.now(),
+        },
+        { base: current.snapshot },
+      );
+      if (!result.ok) throw new Error(result.error);
+      setBookArchiveStatus(
+        `책장에 보관했어요! 친구의 집 → 우리 책장에서 다시 읽고 파일로 저장할 수 있어요.${asset ? '' : ' 원본 사진은 저장하지 않았어요. 저장된 얼굴이 없어 다시 읽을 때는 현재 친구가 함께해요.'}`,
+      );
+    } catch (error) {
+      setBookArchiveStatus(
+        error instanceof Error
+          ? error.message
+          : '책을 저장하지 못했어요. 지금 화면은 그대로예요.',
+      );
+    } finally {
+      archivingBook.current = false;
+      setBookArchiving(false);
+    }
+  }
   const bookAdventure =
     adventureStories[storybook ? storybookTheme : theme] || adventureStories[0];
   const currentStoryPage =
@@ -1958,6 +2161,8 @@ export default function Home() {
           onDrawing={() => setStep(guardianVerified ? 'upload' : 'guardian')}
           sourceImage={image}
           age={age}
+          incomingArtwork={companionArtwork}
+          onArtworkAccepted={() => setCompanionArtwork(null)}
         />
       </Suspense>
     );
@@ -2939,11 +3144,29 @@ export default function Home() {
           <button
             type="button"
             className="button secondary"
-            onClick={() => setStep('companion')}
+            onClick={() => {
+              if (selectedHasAiCharacter && chosenImage)
+                setCompanionArtwork({
+                  png: chosenImage,
+                  name: persona.name,
+                  persona,
+                });
+              setStep('companion');
+            }}
             style={{ marginTop: 16 }}
           >
-            <Sparkles size={18} /> 이 그림의 색으로 입체 모험친구 꾸미기
+            <Sparkles size={18} />{' '}
+            {selectedHasAiCharacter
+              ? '이 친구 그대로 보관하고 숲으로'
+              : '색으로 봉제 친구 꾸미기'}
           </button>
+          {selectedHasAiCharacter && (
+            <p className="hint">
+              완성된 캐릭터만 이 기기에 보관해요. 원본 사진은 보관하지 않아요.
+              그림친구는 모습이 유지되는 입체 그림인형으로, 봉제 친구는 자유롭게
+              꾸미는 3D 모델로 만나요.
+            </p>
+          )}
         </section>
       )}
 
@@ -2999,9 +3222,17 @@ export default function Home() {
               <button
                 type="button"
                 className="button secondary"
-                onClick={() => setStep('companion')}
+                onClick={() => {
+                  if (playImageSource === 'ai' && storyCharacterImage)
+                    setCompanionArtwork({
+                      png: storyCharacterImage,
+                      name: persona.name,
+                      persona,
+                    });
+                  setStep('companion');
+                }}
               >
-                <Sparkles size={18} /> 입체 친구와 달빛 숲으로
+                <Sparkles size={18} /> 이 친구와 달빛 숲으로
               </button>
               <Button
                 secondary
@@ -3053,6 +3284,35 @@ export default function Home() {
                 {chatError}
               </div>
             )}
+            <div className="chat-transmission-consent">
+              {!chatConsent ? (
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={chatConsent}
+                    onChange={(event) => setChatConsent(event.target.checked)}
+                  />{' '}
+                  보호자가 확인했어요. 답변을 만들기 위해 대화와 최근 대화 기록,
+                  친구 설정을 OpenAI에 전송하는 데 동의해요. 실제
+                  이름·학교·주소는 입력하지 마세요. 대화는 기기에 저장하지
+                  않아요.
+                </label>
+              ) : (
+                <button
+                  type="button"
+                  className="button secondary"
+                  onClick={() => {
+                    chatRequest.current?.abort();
+                    setChatConsent(false);
+                    setChatInput('');
+                    setMessages([]);
+                    setChatError('');
+                  }}
+                >
+                  대화 전송 동의 해제 · 대화 비우기
+                </button>
+              )}
+            </div>
             <div className="quick-prompts">
               {[
                 '오늘 기분이 어때?',
@@ -3076,9 +3336,10 @@ export default function Home() {
                 value={chatInput}
                 onChange={(e) => setChatInput(e.target.value)}
                 maxLength={400}
+                disabled={!chatConsent}
               />
               <button
-                disabled={!chatInput.trim() || chatting}
+                disabled={!chatInput.trim() || chatting || !chatConsent}
                 aria-label="메시지 보내기"
               >
                 <Send />
@@ -3680,6 +3941,20 @@ export default function Home() {
           <div className="book-toolbar" aria-label="동화책 도구">
             <button
               type="button"
+              disabled={
+                bookArchiving ||
+                !savedStorybooks.some((item) => item.pages === storybook)
+              }
+              onClick={() => void archiveIllustratedBook()}
+            >
+              <BookOpen />
+              {bookArchiving ? '책장에 담는 중…' : '책장에 보관하기'}
+            </button>
+            <button type="button" onClick={() => setStep('companion')}>
+              친구의 집 · 보관한 책 보기
+            </button>
+            <button
+              type="button"
               className={readingAloud ? 'reading' : ''}
               aria-pressed={readingAloud}
               onClick={toggleReadAloud}
@@ -3691,6 +3966,9 @@ export default function Home() {
               <Printer /> 인쇄·PDF로 간직하기
             </button>
           </div>
+          {bookArchiveStatus && (
+            <output className="book-archive-status">{bookArchiveStatus}</output>
+          )}
           <div className={`storybook-stage theme-${bookAdventure.color}`}>
             <div className="storybook-shell">
               <button
@@ -3738,7 +4016,7 @@ export default function Home() {
           {savedStorybooks.length > 0 && (
             <section className="storybook-library" aria-label="내 동화 보관함">
               <span>
-                <BookOpen /> 내 동화 보관함
+                <BookOpen /> 이번에 만든 책 · 창을 닫기 전 책장에 보관해 주세요
               </span>
               <div>
                 {savedStorybooks.map((savedBook, index) => (

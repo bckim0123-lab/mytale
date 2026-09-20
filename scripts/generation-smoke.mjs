@@ -163,20 +163,25 @@ assert.match(
   /code: 'quality_failed',[\s\S]{0,80}retryable: false/,
   '무섭거나 복수 캐릭터인 결과는 비용이 드는 자동 재생성을 반복하면 안 됩니다.',
 );
+assert.match(
+  route,
+  /if \(!alpha\.transparent \|\| !passesCharacterQuality\(review\)\)[\s\S]{0,80}return qualityFailure\(\)/,
+  '모든 정상 결과는 서버의 숫자 품질 기준과 투명 알파 검사를 통과해야 합니다.',
+);
+assert.match(
+  route,
+  /retryMode: 'review-only',[\s\S]{0,150}reviewTicket: bytesToBase64\(ticket\)/,
+  '검수 장애는 미검수 이미지를 표시하지 않고 암호화된 재검사 티켓만 전달해야 합니다.',
+);
+assert.match(
+  route,
+  /passed: true,[\s\S]{0,80}tier: 'premium'/,
+  '엄격한 품질 기준에 실패한 결과를 ready 등급으로 낮추어 통과시키면 안 됩니다.',
+);
 assert.doesNotMatch(
   route,
-  /if \(!review\.passed/,
-  '안전 검사를 통과한 완성 이미지를 미관 점수만으로 폐기하면 안 됩니다.',
-);
-assert.match(
-  route,
-  /reviewOutcome\.status !== 'reviewed'[\s\S]{0,900}code:[\s\S]{0,160}quality_review_timeout[\s\S]{0,160}quality_review_failed/,
-  '아동 안전 검사를 완료하지 못한 AI 결과는 화면에 노출하면 안 됩니다.',
-);
-assert.match(
-  route,
-  /tier: review\.passed \? 'premium' : 'ready'/,
-  '검사 완료 결과만 프리미엄 또는 사용 가능한 완성본으로 전달해야 합니다.',
+  /tier:[^\n]*'ready'/,
+  '기준 미달 캐릭터를 완성본으로 보내는 우회 등급은 없어야 합니다.',
 );
 assert.match(
   route,
@@ -236,14 +241,17 @@ assert.match(
 assert.equal(
   route.match(/api\.openai\.com\/v1\/images\/edits/g)?.length,
   1,
-  '서버의 사용자 요청 한 건에는 GPT Image 호출 경로가 하나만 있어야 합니다.',
+  '최초 생성과 한 번의 보정은 같은 예산 제한 이미지 호출 함수만 사용해야 합니다.',
 );
-const postStart = route.indexOf('async function handleCharacterRequest');
-const postRoute = route.slice(postStart);
-assert.equal(
-  postRoute.match(/await reviewCuteness\(/g)?.length,
-  1,
-  '품질 검사도 숨은 자동 재시도 없이 한 번만 실행해야 합니다.',
+assert.match(
+  route,
+  /!passesCharacterQuality\(reviewOutcome.review\)[\s\S]{0,160}!isHardQualityFailure\(reviewOutcome.review\)[\s\S]{0,160}CORRECTION_RESERVE_MS/,
+  '보정은 검수가 끝난 기준 미달 결과에만, 안전 조건과 남은 시간 예산을 확인한 뒤 해야 합니다.',
+);
+assert.match(
+  route,
+  /generationStage = 'review-correction'[\s\S]{0,200}await reviewCuteness\(/,
+  '보정된 결과는 원본 검사 결과를 재사용하지 않고 다시 검사해야 합니다.',
 );
 
 const server = await createServer({
@@ -262,6 +270,8 @@ try {
     isHardQualityFailure,
     trusted3dReference,
   } = await server.ssrLoadModule('/app/api/character/route.ts');
+  const { passesCharacterQuality, CHARACTER_QUALITY_THRESHOLDS } =
+    await server.ssrLoadModule('/app/character-quality.ts');
   const usableReview = {
     score: 68,
     sourceFidelity: 65,
@@ -279,7 +289,12 @@ try {
   assert.equal(
     isHardQualityFailure(usableReview),
     false,
-    '안전한 결과는 미관 점수가 프리미엄 기준보다 낮아도 보여 줘야 합니다.',
+    '심각한 안전 실패가 아닌 낮은 점수는 한 번 보정할 수 있는 대상입니다.',
+  );
+  assert.equal(
+    passesCharacterQuality(usableReview),
+    false,
+    '보정 가능한 결과라도 품질 기준 미달이면 아이에게 완성본으로 보여 주면 안 됩니다.',
   );
   assert.equal(
     isHardQualityFailure({ ...usableReview, scaryOrUncanny: true }),
@@ -294,8 +309,25 @@ try {
   assert.equal(
     isHardQualityFailure({ ...usableReview, backgroundArtifact: true }),
     false,
-    '투명 알파 검사를 통과한 작은 접지 그림자 오탐은 완성본을 폐기하면 안 됩니다.',
+    '배경 아티팩트는 한 번 보정할 수 있지만 정상 결과의 조건은 아닙니다.',
   );
+  const passingReview = {
+    ...usableReview,
+    ...CHARACTER_QUALITY_THRESHOLDS,
+    passed: true,
+  };
+  assert.equal(passesCharacterQuality(passingReview), true);
+  assert.equal(
+    passesCharacterQuality({ ...passingReview, backgroundArtifact: true }),
+    false,
+  );
+  for (const [key, minimum] of Object.entries(CHARACTER_QUALITY_THRESHOLDS)) {
+    assert.equal(
+      passesCharacterQuality({ ...passingReview, [key]: minimum - 0.01 }),
+      false,
+      `${key} 점수를 반올림하거나 무시하여 통과시키면 안 됩니다.`,
+    );
+  }
   const guideBytes = await readFile('public/style-plush-3d-guide.webp');
   const guideHash = createHash('sha256').update(guideBytes).digest('hex');
   assert.match(
@@ -391,5 +423,5 @@ try {
 }
 
 console.log(
-  'generation smoke passed: instant safe cutout, one initial AI request, on-demand variants',
+  'generation smoke passed: instant safe cutout, one initial client request, strict server quality gate, bounded reviewed correction contract, encrypted review-only retry, on-demand variants',
 );

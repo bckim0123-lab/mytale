@@ -23,6 +23,7 @@ export type CompanionWorldHandle = {
   walkTo: (id: string) => void;
   react: (action: WorldAction) => void;
   turn: (direction: number) => void;
+  stop: () => void;
 };
 type Props = {
   mode: 'home' | 'forest';
@@ -84,7 +85,7 @@ export const CompanionWorld = forwardRef<CompanionWorldHandle, Props>(
       ) {
         stick.current.releasePointerCapture(activePointer);
       }
-      withWorld((world) => world.steer(0, 0));
+      withWorld((world) => world.stop());
       setStickOffset({ x: 0, y: 0 });
     }, [withWorld]);
 
@@ -107,8 +108,9 @@ export const CompanionWorld = forwardRef<CompanionWorldHandle, Props>(
         walkTo: (id) => withWorld((world) => world.walkTo(id)),
         react: (action) => withWorld((world) => world.react(action)),
         turn: (direction) => withWorld((world) => world.turn(direction)),
+        stop,
       }),
-      [withWorld],
+      [withWorld, stop],
     );
 
     useEffect(() => {

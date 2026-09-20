@@ -25,9 +25,12 @@
   outline-offset: 4px;
 }
 .csb-toolbar {
-  position: relative;
-  top: auto;
-  z-index: 0;
+  height: auto;
+  min-height: 70px;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: #fbf7ee;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -43,8 +46,12 @@
   font-weight: 800;
   letter-spacing: -0.02em;
 }
+.csb-screen-page {
+  scroll-margin-top: 145px;
+}
 .csb-toolbar > div {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
 }
@@ -123,6 +130,36 @@
   width: 65%;
   left: 18%;
 }
+.csb-world-book .csb-art-wash {
+  background: linear-gradient(180deg, #152b463d, transparent 45%, #25433108);
+}
+.csb-world-book.csb-spread .csb-illustration > .csb-hero {
+  left: 17%;
+  width: 66%;
+  bottom: 1%;
+  height: 76%;
+}
+.csb-world-ocean .csb-paper {
+  background: #f4fbf7;
+}
+.csb-world-cloud .csb-paper {
+  background: #fff8f4;
+}
+.csb-world-space .csb-paper {
+  background: #f7f5ff;
+}
+.csb-world-dino .csb-paper {
+  background: #fff8ee;
+}
+.csb-world-candy .csb-paper {
+  background: #fff4f5;
+}
+.csb-world-aurora .csb-paper {
+  background: #f3fafa;
+}
+.csb-world-garden .csb-paper {
+  background: #f7faee;
+}
 .csb-illustration-title {
   position: absolute;
   top: 31px;
@@ -147,6 +184,7 @@
   line-height: 1.42;
   letter-spacing: -0.055em;
   word-break: keep-all;
+  overflow-wrap: anywhere;
   text-wrap: balance;
   font-weight: 850;
 }
@@ -265,6 +303,7 @@
   background: #fbf7ee;
 }
 .csb-navigation > button {
+  flex-shrink: 0;
   min-height: 44px;
   border: 1px solid #e3dccc;
   border-radius: 13px;
@@ -313,6 +352,7 @@
 }
 .csb-privacy-note,
 .csb-speech-note {
+  display: block;
   max-width: 720px;
   padding: 0 25px;
   margin: 0 auto 20px;
@@ -595,11 +635,12 @@
   .csb-print-page {
     display: flex !important;
     flex-direction: column;
-    height: 265mm;
-    min-height: 0;
+    height: auto;
+    min-height: 265mm;
+    overflow: visible;
     page-break-after: always;
     break-after: page;
-    break-inside: avoid;
+    break-inside: auto;
     border: 1px solid #e2d9c3;
     border-radius: 4mm;
   }
@@ -607,6 +648,7 @@
     height: 151mm;
     min-height: 151mm;
     flex: none;
+    break-inside: avoid;
   }
   .csb-print-page .csb-illustration-title {
     top: 12mm;

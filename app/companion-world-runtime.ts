@@ -11,6 +11,52 @@ import {
 } from './forest-story';
 
 export type ForestPoint = { x: number; z: number };
+
+/** A painted puppet has one authored face. In the forest keep that face toward
+ * the camera, with a small movement-led turn, rather than exposing a thin edge.
+ * Real plush rigs and the freely orbitable home view do not use this helper. */
+export function getDrawingForestFacing(input: {
+  cameraOffset: ForestPoint;
+  movement: ForestPoint;
+  moving: boolean;
+  yaw: number;
+  pitch: number;
+  dt: number;
+  reducedMotion?: boolean;
+}) {
+  const baseYaw = Math.atan2(input.cameraOffset.x, input.cameraOffset.z);
+  const maxLean = input.reducedMotion ? 0.12 : 0.45;
+  const length = Math.hypot(input.movement.x, input.movement.z);
+  const horizontal =
+    input.moving && length > 0.00001
+      ? (input.movement.x * Math.cos(baseYaw) -
+          input.movement.z * Math.sin(baseYaw)) /
+        length
+      : 0;
+  const wantedLean = T.MathUtils.clamp(horizontal, -1, 1) * maxLean;
+  const relativeYaw = Math.atan2(
+    Math.sin(input.yaw - baseYaw),
+    Math.cos(input.yaw - baseYaw),
+  );
+  // Clamp the previous view too: changing from a 360-degree plush at the same
+  // position must never produce a transient edge-on painted character.
+  const currentLean = T.MathUtils.clamp(relativeYaw, -maxLean, maxLean);
+  const delta = T.MathUtils.clamp(
+    Number.isFinite(input.dt) ? input.dt : 0,
+    0,
+    0.05,
+  );
+  const ease = 1 - Math.exp(-delta * 10);
+  return {
+    yaw: baseYaw + T.MathUtils.lerp(currentLean, wantedLean, ease),
+    pitch: T.MathUtils.lerp(
+      Number.isFinite(input.pitch) ? input.pitch : 0,
+      -0.2,
+      ease,
+    ),
+  };
+}
+
 type WaterBounds = { minX: number; maxX: number; minZ: number; maxZ: number };
 const BRIDGE_X = FOREST_LOCATIONS['river-bridge'].x;
 const CREEK_Z = -1.875;
@@ -958,6 +1004,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
   let pendingId: string | null = null;
   let pathQueue: T.Vector3[] = [];
   let action: WorldAction = 'idle';
+  let actionId = 0;
   let actionUntil = 0;
   let elapsed = 0;
   let bridgeStartedAt: number | null = null;
@@ -976,6 +1023,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
   const groundPlane = new T.Plane(new T.Vector3(0, 1, 0), 0);
   function react(next: WorldAction) {
     action = next;
+    actionId += 1;
     actionUntil = elapsed + (next === 'sleep' ? 4 : 1.7);
   }
   function burst(
@@ -1142,6 +1190,11 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
   }
   function keyDown(e: KeyboardEvent) {
     if (home) return;
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      stop();
+      return;
+    }
     if (/^(ArrowUp|ArrowDown|ArrowLeft|ArrowRight|[wasdWASD])$/.test(e.key)) {
       e.preventDefault();
       keys.add(e.key.toLowerCase());
@@ -1155,10 +1208,18 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
   function keyUp(e: KeyboardEvent) {
     keys.delete(e.key.toLowerCase());
   }
-  function blur() {
+  function stop() {
     keys.clear();
     joystick.set(0, 0);
     down.active = false;
+    destination = null;
+    pendingId = null;
+    journeyTarget = null;
+    pathQueue = [];
+    cursor.visible = false;
+  }
+  function blur() {
+    stop();
   }
   renderer.domElement.addEventListener('pointerdown', pointerDown);
   renderer.domElement.addEventListener('pointermove', pointerMove);
@@ -1171,6 +1232,15 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
   let frame = 0;
   let last = performance.now();
   let disposed = false;
+  function watchDrawing(rig: ReturnType<typeof createCreature>) {
+    void rig.ready?.then((ready) => {
+      if (!ready && !disposed && creature === rig)
+        options.onStatus(
+          '그림인형을 불러오지 못했어요. 친구의 집에서 다시 열어 주세요.',
+        );
+    });
+  }
+  watchDrawing(creature);
   let visible = true;
   let width = 1;
   let height = 1;
@@ -1291,7 +1361,11 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
       yaw +=
         Math.atan2(Math.sin(targetYaw - yaw), Math.cos(targetYaw - yaw)) *
         Math.min(1, dt * 12);
-      creature.root.rotation.y = yaw;
+      const drawingPuppet = creature.root.userData.rigType === 'alpha-cushion';
+      if (!drawingPuppet) {
+        creature.root.rotation.y = yaw;
+        creature.root.rotation.x = 0;
+      }
       const narrow = width < 650;
       cameraTarget.set(
         creature.root.position.x * (narrow ? 0.96 : 0.9),
@@ -1306,6 +1380,22 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
       );
       camera.position.lerp(camPosition, Math.min(1, dt * 4.2));
       camera.lookAt(lookAt);
+      if (drawingPuppet) {
+        const facing = getDrawingForestFacing({
+          cameraOffset: {
+            x: camera.position.x - creature.root.position.x,
+            z: camera.position.z - creature.root.position.z,
+          },
+          movement: moveVector,
+          moving,
+          yaw: creature.root.rotation.y,
+          pitch: creature.root.rotation.x,
+          dt,
+          reducedMotion: reduced.matches,
+        });
+        creature.root.rotation.y = facing.yaw;
+        creature.root.rotation.x = facing.pitch;
+      }
     } else {
       const homeRadius = width < 650 ? 6.1 : 7.8;
       camera.position.set(
@@ -1319,6 +1409,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
       moving,
       speed: 3,
       action: elapsed < actionUntil ? action : 'idle',
+      actionId,
       reducedMotion: reduced.matches,
     });
     const travelled = Math.hypot(
@@ -1669,6 +1760,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
   return {
     walkTo,
     react,
+    stop,
     turn(direction: number) {
       orbit += direction * 0.5;
     },
@@ -1682,6 +1774,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
       scene.remove(old.root);
       old.dispose();
       creature = createCreature(appearance);
+      watchDrawing(creature);
       creature.root.scale.setScalar(home ? 1 : 0.8);
       creature.root.position.copy(position);
       creature.root.rotation.copy(rotation);
