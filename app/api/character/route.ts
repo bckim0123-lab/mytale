@@ -672,7 +672,20 @@ async function handleCharacterRequest(
         },
         413,
       );
-    const form = await request.formData();
+    let form: FormData;
+    try {
+      form = await request.formData();
+    } catch {
+      operationSignal.throwIfAborted();
+      return json(
+        {
+          error: '그림 업로드 정보를 읽지 못했어요. 파일을 다시 골라 주세요.',
+          code: 'invalid_multipart',
+          retryable: false,
+        },
+        400,
+      );
+    }
     operationSignal.throwIfAborted();
     const formBytes = Array.from(form.values()).reduce(
       (total, part) =>
@@ -1124,6 +1137,22 @@ async function handleCharacterRequest(
 }
 
 export function POST(request: Request) {
+  const mediaType = request.headers
+    .get('content-type')
+    ?.split(';', 1)[0]
+    .trim()
+    .toLowerCase();
+  // Reject unsupported media before opening a success-status NDJSON stream.
+  // The upload UI supplies its own multipart boundary through FormData.
+  if (mediaType !== 'multipart/form-data')
+    return json(
+      {
+        error: '그림 파일을 업로드하는 형식으로 다시 보내 주세요.',
+        code: 'unsupported_media_type',
+        retryable: false,
+      },
+      415,
+    );
   if (!request.headers.get('accept')?.includes('application/x-ndjson'))
     return handleCharacterRequest(request);
 

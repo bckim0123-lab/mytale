@@ -271,6 +271,82 @@ function exhausted() {
   assert.equal(planned.length, 0, 'Every planned call occurred');
 }
 
+// Reject format errors before they can reach image generation or paid review.
+for (const stream of [false, true]) {
+  for (const contentType of [
+    undefined,
+    'application/json',
+    'text/plain',
+    'application/x-www-form-urlencoded',
+  ]) {
+    plan();
+    const headers = {};
+    if (contentType) headers['content-type'] = contentType;
+    if (stream) headers.accept = 'application/x-ndjson';
+    const response = await route.POST(
+      new Request('http://local.test/api/character', {
+        method: 'POST',
+        headers,
+        body: new TextEncoder().encode('{}'),
+      }),
+    );
+    assert.equal(
+      response.status,
+      415,
+      'Unsupported media is rejected before a stream opens.',
+    );
+    assert.match(response.headers.get('content-type'), /application\/json/);
+    const data = await response.json();
+    assert.equal(data.code, 'unsupported_media_type');
+    assert.equal(data.retryable, false);
+    assert.equal(data.image, undefined);
+    assert.equal(data.reviewTicket, undefined);
+    assert.equal(calls.length, 0);
+    exhausted();
+  }
+  for (const [contentType, body] of [
+    ['multipart/form-data', '{}'],
+    [
+      'multipart/form-data; boundary=broken-upload',
+      '--broken-upload\r\nContent-Disposition: form-data; name="drawing"; filename="drawing.png"\r\nContent-Type: image/png\r\n\r\ntruncated',
+    ],
+    ['multipart/form-data; boundary=missing-body', ''],
+  ]) {
+    plan();
+    const response = await route.POST(
+      new Request('http://local.test/api/character', {
+        method: 'POST',
+        headers: {
+          'content-type': contentType,
+          ...(stream ? { accept: 'application/x-ndjson' } : {}),
+        },
+        body,
+      }),
+    );
+    let data;
+    if (stream) {
+      const events = (await response.text())
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      assert.equal(events[0].type, 'accepted');
+      assert.equal(events.at(-1).type, 'error');
+      assert.equal(events.at(-1).status, 400);
+      assert.equal(events.filter((event) => event.type === 'result').length, 0);
+      data = events.at(-1).data;
+    } else {
+      assert.equal(response.status, 400);
+      data = await response.json();
+    }
+    assert.equal(data.code, 'invalid_multipart');
+    assert.equal(data.retryable, false);
+    assert.equal(data.image, undefined);
+    assert.equal(data.reviewTicket, undefined);
+    assert.equal(calls.length, 0);
+    exhausted();
+  }
+}
+
 plan({ kind: 'image' }, { kind: 'review' });
 let result = await request();
 assert.equal(result.response.status, 200);
