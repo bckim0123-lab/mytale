@@ -15,11 +15,19 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   metadataBase: new URL('https://drawing-friend.bckim0123.chatgpt.site'),
   title: '그림친구 — 내 그림이 살아나는 모험',
-  description: '아이의 그림이 AI 이야기 친구가 되어 함께 모험하고 현재 세션에서 동화책으로 만나는 창작 체험',
+  description:
+    '나만의 입체 친구를 꾸미고 직접 탐험하는 달빛 숲. 아이의 선택으로 바뀐 숲이 한 권의 동화책으로 남아요.',
   openGraph: {
     title: '그림친구',
     description: '내 그림이 살아나는 모험',
-    images: [{ url: '/og.png', width: 1200, height: 630, alt: '그림친구 — 내 그림이 살아나는 모험' }],
+    images: [
+      {
+        url: '/og.png',
+        width: 1200,
+        height: 630,
+        alt: '그림친구 — 내 그림이 살아나는 모험',
+      },
+    ],
   },
   twitter: {
     card: 'summary_large_image',

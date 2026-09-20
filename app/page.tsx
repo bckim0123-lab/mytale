@@ -1,7 +1,7 @@
 'use client';
 /* eslint-disable next/no-img-element */
 
-import { useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import {
   adventureStories,
   traitMeta,
@@ -19,6 +19,7 @@ import {
   sceneQuests,
 } from './adventure-play';
 import { AdventureWorld3D } from './adventure-world-3d';
+const CompanionExperience = lazy(() => import('./companion-experience'));
 import {
   createLocalCharacterPreview,
   type LocalCharacterPreview,
@@ -56,6 +57,7 @@ import {
 } from 'lucide-react';
 
 type Step =
+  | 'companion'
   | 'welcome'
   | 'guardian'
   | 'upload'
@@ -1935,6 +1937,31 @@ export default function Home() {
     setStep('welcome');
   };
 
+  if (step === 'companion')
+    return (
+      <Suspense
+        fallback={
+          <main
+            className="app"
+            style={{
+              display: 'grid',
+              placeItems: 'center',
+              minHeight: '100vh',
+            }}
+          >
+            <output>친구의 집으로 가는 중…</output>
+          </main>
+        }
+      >
+        <CompanionExperience
+          onExit={() => setStep('welcome')}
+          onDrawing={() => setStep(guardianVerified ? 'upload' : 'guardian')}
+          sourceImage={image}
+          age={age}
+        />
+      </Suspense>
+    );
+
   return (
     <main
       className={`app ${generationFloatsOverPlay ? 'has-generation-floating' : ''}`}
@@ -2124,33 +2151,35 @@ export default function Home() {
               <Sparkles size={15} /> 아이의 그림이 살아나는 시간
             </span>
             <h1>
-              내가 그린 그림이
+              나만의 작은 친구와
               <br />
               <span>
-                <em>AI 이야기 친구</em>가 돼요
+                <em>살아 움직이는 숲</em>으로
               </span>
             </h1>
             <p>
-              사진·그림·카메라로 보여 주고 취향을 고르면, <br />
-              내 그림을 닮은 2D·스티커·보송 3D 친구가 태어나요.
+              동글동글 입체 친구를 꾸미고, 직접 걸어 다니며 놀아요.
+              <br />
+              우리가 바꾼 숲은 한 권의 동화가 되어 남아요.
             </p>
             <div className="welcome-action">
-              <Button onClick={() => setStep('guardian')}>
-                <WandSparkles size={21} /> 그림친구 만들기 <ChevronRight />
+              <Button onClick={() => setStep('companion')}>
+                <Sparkles size={21} /> 입체 친구 만나러 가기 <ChevronRight />
               </Button>
               <span>
-                <ShieldCheck size={18} /> 보호자와 함께 시작해요
+                <ShieldCheck size={18} /> 가입 없이 바로 · API 대기 없이 입체
+                친구 완성
               </span>
             </div>
             <div className="magic-steps" aria-label="그림친구 만들기 과정">
               <span>
-                <b>1</b>그림 올리기
+                <b>1</b>친구 꾸미기
               </span>
               <span>
-                <b>2</b>친구 탄생
+                <b>2</b>직접 탐험
               </span>
               <span>
-                <b>3</b>대화와 모험
+                <b>3</b>선택으로 바뀌는 숲
               </span>
               <span>
                 <b>4</b>동화책 완성
@@ -2164,8 +2193,9 @@ export default function Home() {
                 alt="아이의 색연필 그림이 귀여운 별귀 캐릭터가 되어 모험 세계로 걸어가는 모습"
               />
               <span>
-                낙서의 모양과 색을 간직한 채<br />
-                <b>AI 이야기 친구로 변신해요</b>
+                작은 친구와 함께 걷고, 심고, 노래해요.
+                <br />
+                <b>우리의 첫 번째 달빛 숲 모험</b>
               </span>
             </div>
           </div>
@@ -2906,6 +2936,14 @@ export default function Home() {
           <Button onClick={startChat}>
             <MessageCircle /> {persona.name}와 대화 시작하기 <ChevronRight />
           </Button>
+          <button
+            type="button"
+            className="button secondary"
+            onClick={() => setStep('companion')}
+            style={{ marginTop: 16 }}
+          >
+            <Sparkles size={18} /> 이 그림의 색으로 입체 모험친구 꾸미기
+          </button>
         </section>
       )}
 
@@ -2958,6 +2996,13 @@ export default function Home() {
                   <small>{age} 맞춤 · 아동 안전 규칙 적용</small>
                 </span>
               </div>
+              <button
+                type="button"
+                className="button secondary"
+                onClick={() => setStep('companion')}
+              >
+                <Sparkles size={18} /> 입체 친구와 달빛 숲으로
+              </button>
               <Button
                 secondary
                 onClick={() => {
@@ -2968,7 +3013,7 @@ export default function Home() {
                   setStep('adventure');
                 }}
               >
-                <Compass /> 모험 고르기
+                <Compass /> 그림 동화 모험
               </Button>
             </header>
             <div
