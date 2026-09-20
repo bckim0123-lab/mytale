@@ -248,6 +248,7 @@ assert.equal(
 
 const server = await createServer({
   configFile: false,
+  cacheDir: 'node_modules/.vite-generation-test',
   root: process.cwd(),
   appType: 'custom',
   logLevel: 'error',

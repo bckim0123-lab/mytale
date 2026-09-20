@@ -12,6 +12,7 @@ const sceneIndexes = [0, 1, 2, 3, 4];
 
 const server = await createServer({
   configFile: false,
+  cacheDir: 'node_modules/.vite-adventure-test',
   root: process.cwd(),
   appType: 'custom',
   logLevel: 'error',

@@ -228,6 +228,155 @@
   flex-direction: column;
   gap: 20px;
 }
+.cw-personality-options {
+  display: flex;
+  gap: 7px;
+}
+.cw-personality-options button {
+  flex: 1;
+  min-height: 44px;
+  padding: 8px 4px;
+  background: #fffdf8;
+  border: 1px solid #dbdfcf;
+  border-radius: 13px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #63775f;
+}
+.cw-personality-options button span {
+  display: block;
+  font-size: 24px;
+  line-height: 1.2;
+  margin-bottom: 5px;
+  color: #b88389;
+}
+.cw-personality-options button[aria-pressed='true'] {
+  background: #edf3e3;
+  border-color: #7c9d6b;
+  box-shadow: 0 0 0 2px #9bb78425;
+  color: #31573a;
+}
+.cw-keepsake {
+  position: absolute;
+  bottom: 135px;
+  left: 22px;
+  z-index: 2;
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  border: 1px solid #dacbab;
+  border-radius: 15px;
+  background: #fff9eade;
+  padding: 10px 13px;
+  text-align: left;
+  box-shadow: 0 8px 20px #6b583414;
+}
+.cw-keepsake > span:first-child {
+  font-size: 32px;
+  color: #b6843f;
+}
+.cw-keepsake small,
+.cw-keepsake strong {
+  display: block;
+}
+.cw-keepsake small {
+  font-size: 9px;
+  color: #978261;
+  margin-bottom: 3px;
+}
+.cw-keepsake strong {
+  font-size: 12px;
+}
+.cw-parent-memory {
+  background: #eef1e3;
+  padding: 22px;
+  border: 1px solid #dce2cd;
+  border-radius: 19px;
+  margin-bottom: 24px;
+}
+.cw-parent-memory h3 {
+  font-size: 16px;
+  margin: 10px 0;
+  font-weight: 750;
+}
+.cw-parent-memory p,
+.cw-parent-memory small {
+  font-size: 12px;
+  line-height: 1.9;
+  word-break: keep-all;
+}
+.cw-parent-memory .cw-outline {
+  margin: 14px 0;
+}
+.cw-parent-memory small {
+  display: block;
+  color: #6d795e;
+}
+.cw-chat-consent > strong {
+  display: block;
+  font-size: 15px;
+}
+.cw-chat-consent .cw-guardian-check {
+  gap: 12px;
+  line-height: 1.7;
+  justify-content: flex-start;
+  align-items: flex-start;
+}
+.cw-guardian-check input {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  margin-top: 1px;
+  accent-color: #416a50;
+}
+.cw-chat-consent input[inputmode='numeric'] {
+  width: 135px;
+  border: 1px solid #bac8ae;
+  border-radius: 10px;
+  padding: 11px;
+  font-size: 13px;
+  background: white;
+}
+.cw-chat-consent > small {
+  display: block;
+  font-size: 11px;
+  line-height: 1.7;
+  color: #748368;
+}
+.cw-gift {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  background: #fff9e8;
+  border: 1px solid #dbc292;
+  border-radius: 14px;
+  min-height: 50px;
+  font-size: 12px;
+  font-weight: 750;
+  color: #76613c;
+}
+.cw-gift span {
+  font-size: 25px;
+}
+@media (max-width: 760px) {
+  .cw-keepsake {
+    bottom: auto;
+    top: 165px;
+    left: 16px;
+    padding: 8px 10px;
+    max-width: 165px;
+  }
+  .cw-keepsake > svg {
+    display: none;
+  }
+  .cw-keepsake strong {
+    font-size: 10px;
+  }
+  .cw-chat-consent input[inputmode='numeric'] {
+    width: 110px;
+  }
+}
 .cw-tabs {
   display: flex;
   border-bottom: 1px solid #dfe3d4;
@@ -999,6 +1148,20 @@
 .cw-reset-confirm > p {
   width: 100%;
 }
+.cw-reset-confirm label {
+  display: block;
+  width: 100%;
+  line-height: 1.8;
+}
+.cw-reset-confirm input {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  border: 1px solid #cfac96;
+  border-radius: 9px;
+  padding: 10px;
+  background: #fffbf6;
+}
 .cw-danger {
   border: 0;
   background: #a96d52;
@@ -1202,42 +1365,62 @@
     gap: 16px;
   }
   .cw-home-stage {
-    height: 530px;
-    min-height: 530px;
+    position: sticky;
+    top: 8px;
+    z-index: 4;
+    height: 340px;
+    min-height: 340px;
+    flex-shrink: 0;
     border-radius: 27px;
+    box-shadow: 0 8px 22px #354b3020;
   }
   .cw-home-heading {
-    top: 24px;
-    left: 23px;
+    top: 14px;
+    left: 18px;
   }
   .cw-home-heading h1 {
-    font-size: 36px;
-    margin: 12px 0;
-    letter-spacing: -1.5px;
+    font-size: 22px;
+    margin: 7px 0;
+    letter-spacing: -1px;
   }
   .cw-home-heading p {
-    font-size: 11px;
+    display: none;
   }
   .cw-home-heading .cw-eyebrow {
     font-size: 8px;
   }
   .cw-home-stage .cw-world {
-    inset: 70px -15px 55px;
+    inset: 16px -15px 42px;
   }
   .cw-bubble {
     top: auto;
-    bottom: 105px;
-    right: 20px;
-    max-width: 185px;
-    font-size: 10px;
-    padding: 10px 14px;
+    bottom: 64px;
+    right: 12px;
+    max-width: 150px;
+    font-size: 9px;
+    padding: 8px 11px;
   }
   .cw-pet-controls {
-    bottom: 52px;
+    bottom: 12px;
   }
   .cw-stage-hint {
-    bottom: 21px;
-    font-size: 10px;
+    display: none;
+  }
+  .cw-keepsake {
+    top: 100px;
+    left: 13px;
+    max-width: 120px;
+    padding: 6px 8px;
+    gap: 5px;
+  }
+  .cw-keepsake > span:first-child {
+    font-size: 24px;
+  }
+  .cw-keepsake strong {
+    font-size: 9px;
+  }
+  .cw-keepsake small {
+    font-size: 8px;
   }
   .cw-home-side {
     padding: 0 5px;
@@ -1311,10 +1494,15 @@
     height: 80px;
     left: 14px;
     bottom: 33px;
+    border: 2px solid #ffffffb0;
+    background: #e7f0d8b5;
+    box-shadow: 0 5px 20px #35573b25;
   }
   .cw-stick span {
     width: 37px;
     height: 37px;
+    background: #709461;
+    color: #fffce6;
   }
   .cw-story-panel {
     padding: 9px 9px;

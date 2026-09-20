@@ -1,12 +1,17 @@
 export type CreatureKind = 'sprout' | 'bunny' | 'cat' | 'bear';
 
 export type CreatureAccessory = 'star' | 'flower' | 'scarf';
+export type CreaturePattern = 'plain' | 'heart' | 'spots';
+export type CreatureEarStyle = 'upright' | 'floppy';
 
 export type CreatureAppearance = {
   kind: CreatureKind;
   bodyColor: string;
   accentColor: string;
   accessory: CreatureAccessory;
+  /** Optional so companions saved before personalization keep their original look. */
+  pattern?: CreaturePattern;
+  earStyle?: CreatureEarStyle;
 };
 
 export const DEFAULT_APPEARANCE: CreatureAppearance = {

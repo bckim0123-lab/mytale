@@ -3,6 +3,7 @@ import { createServer } from 'vite';
 
 const server = await createServer({
   configFile: false,
+  cacheDir: 'node_modules/.vite-save-test',
   root: process.cwd(),
   appType: 'custom',
   logLevel: 'error',
@@ -88,6 +89,106 @@ try {
   );
   assert.equal(custom.appearance.bodyColor, '#ffaaee');
   assert.equal(custom.appearance.accentColor, '#9900cc');
+
+  const heroSnapshot = {
+    kind: 'cat',
+    bodyColor: '#f4dfc1',
+    accentColor: '#b69dcb',
+    accessory: 'flower',
+    pattern: 'heart',
+    earStyle: 'floppy',
+  };
+  const personalized = createCompanionSave({
+    ...custom,
+    storyBooks: [
+      {
+        ...custom.storyBooks[0],
+        heroName: '그날의 별이',
+        heroAppearance: heroSnapshot,
+        choices: { route: 'garden', owl: 'invite', ending: 'home' },
+      },
+    ],
+  });
+  assert.equal(saveCompanionSave(personalized, storage).ok, true);
+  const changedFriend = createCompanionSave({
+    ...personalized,
+    name: '새로운 이름',
+    appearance: {
+      ...custom.appearance,
+      kind: 'bear',
+      pattern: 'spots',
+      earStyle: 'upright',
+    },
+  });
+  assert.deepEqual(changedFriend.storyBooks[0].heroAppearance, heroSnapshot);
+  assert.equal(changedFriend.storyBooks[0].heroName, '그날의 별이');
+  assert.deepEqual(changedFriend.storyBooks[0].choices, {
+    route: 'garden',
+    owl: 'invite',
+    ending: 'home',
+  });
+  assert.notEqual(
+    changedFriend.storyBooks[0].heroAppearance,
+    heroSnapshot,
+    'Books receive their own sanitized hero snapshot.',
+  );
+  assert.equal(saveCompanionSave(changedFriend, storage).ok, true);
+  assert.deepEqual(
+    loadCompanionSave(storage),
+    changedFriend,
+    'Book hero and branch snapshots survive reload and current-avatar changes.',
+  );
+  const sanitizedSnapshot = createCompanionSave({
+    ...custom,
+    storyBooks: [
+      {
+        ...custom.storyBooks[0],
+        heroName: '별이',
+        heroAppearance: {
+          ...heroSnapshot,
+          sourcePhoto: 'PRIVATE_HERO_PHOTO',
+          pattern: 'url(secret)',
+          earStyle: 'evil',
+        },
+        choices: {
+          route: 'garden',
+          owl: 'invite',
+          ending: 'home',
+          email: 'PRIVATE_EMAIL',
+        },
+        portrait: 'data:image/png;base64,PRIVATE_PORTRAIT',
+      },
+    ],
+  });
+  assert.equal(sanitizedSnapshot.storyBooks[0].heroAppearance.pattern, 'plain');
+  assert.equal(
+    sanitizedSnapshot.storyBooks[0].heroAppearance.earStyle,
+    'upright',
+  );
+  assert.equal(
+    JSON.stringify(sanitizedSnapshot).includes('PRIVATE_'),
+    false,
+    'Snapshots must never persist images, email or unknown choice data.',
+  );
+  const invalidChoices = createCompanionSave({
+    ...custom,
+    storyBooks: [
+      {
+        ...custom.storyBooks[0],
+        choices: { route: 'other', owl: 'invite', ending: 'home' },
+      },
+    ],
+  });
+  assert.equal(
+    invalidChoices.storyBooks[0].choices,
+    undefined,
+    'Invalid optional choices are removed while the legacy book remains readable.',
+  );
+  assert.equal(
+    custom.storyBooks[0].heroAppearance,
+    undefined,
+    'Legacy books are accepted without invented snapshots.',
+  );
 
   const leaked = {
     ...custom,
@@ -244,12 +345,10 @@ try {
   const beforeOversizedSave = storage.getItem(COMPANION_SAVE_KEY);
   const oversized = {
     ...custom,
-    storyBooks: books
-      .slice(0, 10)
-      .map((book) => ({
-        ...book,
-        pages: Array.from({ length: 12 }, () => '별'.repeat(600)),
-      })),
+    storyBooks: books.slice(0, 10).map((book) => ({
+      ...book,
+      pages: Array.from({ length: 12 }, () => '별'.repeat(600)),
+    })),
   };
   assert.equal(
     saveCompanionSave(oversized, storage).ok,
@@ -267,6 +366,8 @@ try {
   assert.equal(safe.kind, 'sprout');
   assert.equal(safe.bodyColor, '#ff00ff');
   assert.equal(safe.accessory, 'star');
+  assert.equal(safe.pattern, 'plain');
+  assert.equal(safe.earStyle, 'upright');
   assert.match(safe.accentColor, /^#[\da-f]{6}$/);
   assert.equal(
     createCompanionSave().appearance === createCompanionSave().appearance,
@@ -283,7 +384,7 @@ try {
     'Reset removes this game only.',
   );
   console.log(
-    'Companion persistence smoke passed: roundtrip, bounds, privacy allowlists, corruption, quota and SSR.',
+    'Companion persistence smoke passed: roundtrip, permanent book heroes/choices, legacy compatibility, bounds, privacy allowlists, corruption, quota and SSR.',
   );
 } finally {
   await server.close();

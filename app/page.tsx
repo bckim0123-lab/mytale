@@ -2190,7 +2190,7 @@ export default function Home() {
             <div className="hero-art">
               <img
                 src="/hero-story-v2.webp"
-                alt="아이의 색연필 그림이 귀여운 별귀 캐릭터가 되어 모험 세계로 걸어가는 모습"
+                alt="색연필 그림과 포근한 친구가 함께 있는 달빛 숲의 상상 장면"
               />
               <span>
                 작은 친구와 함께 걷고, 심고, 노래해요.

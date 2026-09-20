@@ -13,7 +13,7 @@
     "test:safety": "node scripts/safety-smoke.mjs",
     "test:adventure": "node scripts/adventure-smoke.mjs",
     "test:generation": "node scripts/generation-smoke.mjs",
-    "test:companion": "node scripts/forest-story-smoke.mjs && node scripts/companion-save-smoke.mjs && node scripts/forest-navigation-smoke.mjs",
+    "test:companion": "node scripts/forest-story-smoke.mjs && node scripts/companion-save-smoke.mjs && node scripts/forest-navigation-smoke.mjs && node scripts/companion-palette-smoke.mjs",
     "assets:creatures": "node scripts/build-creature-assets.mjs",
     "quality": "npm run typecheck && npm run build && npm run test:safety && npm run test:adventure && npm run test:generation && npm run test:companion",
     "start": "wrangler dev --config dist/server/wrangler.json",

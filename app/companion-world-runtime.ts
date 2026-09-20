@@ -196,8 +196,8 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
   scene.background = new T.Color(home ? '#f4ecda' : '#b8d6c5');
   scene.fog = new T.Fog(home ? '#f4ecda' : '#b8d6c5', 27, 52);
   const camera = new T.PerspectiveCamera(38, 1, 0.1, 100);
-  camera.position.set(home ? 3.5 : 0, home ? 2.8 : 12.9, home ? 7.4 : 15.5);
-  const lookAt = new T.Vector3(0, home ? 1.3 : 0, home ? 0 : -1);
+  camera.position.set(home ? 3.5 : 0, home ? 2.8 : 10.3, home ? 7.4 : 14.95);
+  const lookAt = new T.Vector3(0, home ? 1.3 : 0.45, home ? 0 : 1.95);
   camera.lookAt(lookAt);
   const pmrem = new T.PMREMGenerator(renderer);
   const room = new RoomEnvironment();
@@ -580,10 +580,155 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
   const fireflies = lightParticles(36, '#eaffb6', 5);
   const skyLights = lightParticles(44, '#ffe9a5', 11);
   skyLights.points.visible = false;
+  // One bounded particle buffer serves every interaction instead of allocating effects per click.
+  const effectCapacity = 112;
+  type EffectKind = 'collect' | 'soil' | 'water' | 'petal' | 'spark';
+  const effectSlots = Array.from({ length: effectCapacity }, () => ({
+    active: false,
+    kind: 'spark' as EffectKind,
+    born: 0,
+    life: 0.8,
+    x: 0,
+    y: 0,
+    z: 0,
+    vx: 0,
+    vy: 0,
+    vz: 0,
+    phase: 0,
+  }));
+  const effectPositions = new Float32Array(effectCapacity * 3);
+  const effectColors = new Float32Array(effectCapacity * 3);
+  const effectAlphas = new Float32Array(effectCapacity);
+  const effectSizes = new Float32Array(effectCapacity);
+  const effectGeometry = geo(new T.BufferGeometry());
+  effectGeometry.setAttribute(
+    'position',
+    new T.BufferAttribute(effectPositions, 3).setUsage(T.DynamicDrawUsage),
+  );
+  effectGeometry.setAttribute(
+    'effectColor',
+    new T.BufferAttribute(effectColors, 3).setUsage(T.DynamicDrawUsage),
+  );
+  effectGeometry.setAttribute(
+    'effectAlpha',
+    new T.BufferAttribute(effectAlphas, 1).setUsage(T.DynamicDrawUsage),
+  );
+  effectGeometry.setAttribute(
+    'effectSize',
+    new T.BufferAttribute(effectSizes, 1).setUsage(T.DynamicDrawUsage),
+  );
+  const effectMaterial = new T.ShaderMaterial({
+    vertexShader:
+      'attribute vec3 effectColor;attribute float effectAlpha;attribute float effectSize;varying vec3 vColor;varying float vAlpha;void main(){vColor=effectColor;vAlpha=effectAlpha;vec4 p=modelViewMatrix*vec4(position,1.0);gl_Position=projectionMatrix*p;gl_PointSize=clamp(effectSize*(35.0/-p.z),0.0,20.0);}',
+    fragmentShader:
+      'varying vec3 vColor;varying float vAlpha;void main(){float d=distance(gl_PointCoord,vec2(0.5));if(d>0.5||vAlpha<0.01)discard;float a=smoothstep(0.5,0.05,d);gl_FragColor=vec4(vColor,a*vAlpha);}',
+    transparent: true,
+    depthWrite: false,
+    blending: T.AdditiveBlending,
+  });
+  materials.add(effectMaterial);
+  const effectPoints = new T.Points(effectGeometry, effectMaterial);
+  effectPoints.frustumCulled = false;
+  effectPoints.visible = !home;
+  scene.add(effectPoints);
+  let nextEffectSlot = 0;
+  const rippleGeometry = geo(new T.RingGeometry(0.4, 0.46, 40));
+  const ripples = Array.from({ length: 5 }, () => {
+    const material = new T.MeshBasicMaterial({
+      color: '#ffe3a0',
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      side: T.DoubleSide,
+    });
+    materials.add(material);
+    const object = mesh(rippleGeometry, material, scene, [0, 0.08, 0]);
+    object.castShadow = false;
+    object.receiveShadow = false;
+    object.visible = false;
+    return { object, material, born: -10, life: 1, vertical: false };
+  });
+  let nextRipple = 0;
+
+  // Grounded pawprints share one draw call and a fixed instance pool.
+  const pawShapes: T.Shape[] = [];
+  [
+    [0, -0.025, 0.058, 0.075],
+    [-0.066, 0.067, 0.028, 0.036],
+    [0, 0.098, 0.03, 0.038],
+    [0.066, 0.067, 0.028, 0.036],
+  ].forEach(([x, y, rx, ry]) => {
+    const shape = new T.Shape();
+    shape.absellipse(x, y, rx, ry, 0, Math.PI * 2, false, 0);
+    pawShapes.push(shape);
+  });
+  const pawGeometry = geo(new T.ShapeGeometry(pawShapes, 10));
+  pawGeometry.rotateX(-Math.PI / 2);
+  const pawMaterial = new T.MeshBasicMaterial({
+    color: '#faf0c5',
+    transparent: true,
+    opacity: 0.48,
+    depthWrite: false,
+    side: T.DoubleSide,
+  });
+  materials.add(pawMaterial);
+  const pawprints = new T.InstancedMesh(pawGeometry, pawMaterial, 20);
+  pawprints.instanceMatrix.setUsage(T.DynamicDrawUsage);
+  pawprints.frustumCulled = false;
+  pawprints.visible = !home;
+  scene.add(pawprints);
+  const pawSlots = Array.from({ length: 20 }, () => ({
+    born: -10,
+    x: 0,
+    z: 0,
+    yaw: 0,
+  }));
+  const pawMatrix = new T.Object3D();
+  let nextPaw = 0;
+  let stepDistance = 0;
+  const lastStepPosition = new T.Vector3(0, 0, 3.3);
   let creature = createCreature(options.appearance);
   scene.add(creature.root);
   creature.root.scale.setScalar(home ? 1 : 0.8);
   creature.root.position.set(0, 0, home ? 0 : 3.3);
+  const owlBeakGeometry = geo(new T.ConeGeometry(0.075, 0.15, 12));
+  function createOwlActor(parent: T.Object3D) {
+    const root = new T.Group();
+    parent.add(root);
+    ball(root, bark, [0, 0.53, 0], [0.39, 0.5, 0.31]);
+    ball(root, cream, [0, 0.57, 0.21], [0.3, 0.35, 0.13]);
+    const eyes = new T.Group();
+    eyes.position.set(0, 0.79, 0.3);
+    root.add(eyes);
+    const wings: T.Group[] = [];
+    [-1, 1].forEach((side) => {
+      ball(root, cream, [side * 0.15, 0.81, 0.26], [0.17, 0.19, 0.08]);
+      ball(eyes, dark, [side * 0.15, 0, 0.047], [0.072, 0.092, 0.042]);
+      ball(
+        eyes,
+        cream,
+        [side * 0.15 - 0.018, 0.031, 0.081],
+        [0.02, 0.024, 0.012],
+      );
+      ball(root, pink, [side * 0.24, 0.66, 0.31], [0.075, 0.041, 0.025]);
+      ball(root, gold, [side * 0.12, 0.06, 0.13], [0.095, 0.049, 0.115]);
+      const wing = new T.Group();
+      wing.position.set(side * 0.31, 0.61, 0);
+      root.add(wing);
+      ball(wing, bark, [side * 0.075, -0.13, 0], [0.14, 0.32, 0.18]);
+      wings.push(wing);
+    });
+    mesh(owlBeakGeometry, gold, root, [0, 0.63, 0.35]).rotation.x = Math.PI / 2;
+    return { root, wings, eyes };
+  }
+  const owlFollower = createOwlActor(scene);
+  owlFollower.root.position.set(
+    FOREST_LOCATIONS['owl-grove'].x,
+    0,
+    FOREST_LOCATIONS['owl-grove'].z,
+  );
+  owlFollower.root.visible = false;
+  const owlTarget = new T.Vector3();
   const cursorMat = new T.MeshBasicMaterial({
     color: '#fff6c5',
     transparent: true,
@@ -612,19 +757,24 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
   scene.add(persistent);
   const bridgeGroup = new T.Group();
   persistent.add(bridgeGroup);
+  const bridgePlanks: T.Mesh[] = [];
   for (let i = 0; i < 9; i++)
-    mesh(
-      cube,
-      bark,
-      bridgeGroup,
-      [BRIDGE_X, 0.08, -0.55 - i * 0.33],
-      [1.5, 0.18, 0.29],
+    bridgePlanks.push(
+      mesh(
+        cube,
+        bark,
+        bridgeGroup,
+        [BRIDGE_X, 0.08, -0.55 - i * 0.33],
+        [1.5, 0.18, 0.29],
+      ),
     );
+  const bridgeRails = new T.Group();
+  bridgeGroup.add(bridgeRails);
   [BRIDGE_X - 0.74, BRIDGE_X + 0.74].forEach((x) => {
     [-0.48, -3.28].forEach((z) =>
-      mesh(cylinder, bark, bridgeGroup, [x, 0.45, z], [0.07, 0.9, 0.07]),
+      mesh(cylinder, bark, bridgeRails, [x, 0.45, z], [0.07, 0.9, 0.07]),
     );
-    mesh(cube, bark, bridgeGroup, [x, 0.77, CREEK_Z], [0.07, 0.08, 2.8]);
+    mesh(cube, bark, bridgeRails, [x, 0.77, CREEK_Z], [0.07, 0.08, 2.8]);
   });
   const garden = new T.Group();
   persistent.add(garden);
@@ -684,6 +834,13 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
   let forest = options.forest;
   let view = getForestView(forest);
   const hotObjects: T.Object3D[] = [];
+  const bellObjects = new Map<string, T.Group>();
+  const sharedHaloGeometry = geo(new T.TorusGeometry(0.38, 0.025, 6, 28));
+  const sharedBellGeometry = geo(new T.ConeGeometry(0.24, 0.34, 20, 1, true));
+  const sharedPortalGeometry = geo(
+    new T.TorusGeometry(0.65, 0.1, 12, 32, Math.PI),
+  );
+  const sharedHeartGeometry = geo(new T.ConeGeometry(0.24, 0.3, 3));
   const tags: { node: HTMLButtonElement; position: T.Vector3; id: string }[] =
     [];
   const labelLayer = document.createElement('div');
@@ -694,6 +851,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
     view = getForestView(forest);
     hotGroup.clear();
     hotObjects.length = 0;
+    bellObjects.clear();
     labelDisposers.splice(0).forEach((fn) => fn());
     labelLayer.replaceChildren();
     tags.length = 0;
@@ -731,27 +889,13 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
       if (hot.id === 'festival-tree') {
         ball(g, glow, [-0.11, 0.62, 0], [0.18, 0.19, 0.12]);
         ball(g, glow, [0.11, 0.62, 0], [0.18, 0.19, 0.12]);
-        const heartTip = mesh(
-          geo(new T.ConeGeometry(0.24, 0.3, 3)),
-          glow,
-          g,
-          [0, 0.42, 0],
-        );
+        const heartTip = mesh(sharedHeartGeometry, glow, g, [0, 0.42, 0]);
         heartTip.rotation.z = Math.PI;
       } else if (hot.kind === 'npc') {
-        ball(g, bark, [0, 0.5, 0], [0.38, 0.5, 0.3]);
-        ball(g, cream, [0, 0.65, 0.21], [0.29, 0.31, 0.13]);
-        [-1, 1].forEach((s) => {
-          ball(g, cream, [s * 0.14, 0.81, 0.28], [0.16, 0.18, 0.07]);
-          ball(g, dark, [s * 0.14, 0.81, 0.34], [0.065, 0.085, 0.05]);
-          ball(g, bark, [s * 0.31, 0.45, 0], [0.12, 0.32, 0.23]);
-        });
-        mesh(
-          geo(new T.ConeGeometry(0.07, 0.15, 12)),
-          gold,
-          g,
-          [0, 0.61, 0.35],
-        ).rotation.x = Math.PI / 2;
+        if (hot.id === 'owl-grove' && forest.owlChoice === 'invite') {
+          // The invited owl is beside the player; this marker replays its song.
+          ball(g, glow, [0, 0.75, 0], [0.12, 0.15, 0.12]);
+        } else createOwlActor(g);
       } else if (hot.kind === 'wood' || hot.kind === 'bridge') {
         for (let i = 0; i < 3; i++) {
           const log = mesh(
@@ -766,22 +910,17 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
         }
       } else if (hot.kind === 'bell') {
         mesh(cylinder, bark, g, [0, 0.65, 0], [0.05, 1.3, 0.05]);
-        mesh(
-          geo(new T.ConeGeometry(0.24, 0.34, 20, 1, true)),
-          gold,
-          g,
-          [0, 1.1, 0],
-        ).rotation.z = Math.PI;
-        ball(g, glow, [0, 0.92, 0], [0.07, 0.07, 0.07]);
+        const bellSwing = new T.Group();
+        bellSwing.position.y = 1.29;
+        g.add(bellSwing);
+        bellObjects.set(hot.id, bellSwing);
+        mesh(sharedBellGeometry, gold, bellSwing, [0, -0.19, 0]).rotation.z =
+          Math.PI;
+        ball(bellSwing, glow, [0, -0.37, 0], [0.07, 0.07, 0.07]);
       } else if (hot.kind === 'flower') {
         // Soil, planted shoots and opened petals live in persistent beds.
       } else if (hot.kind === 'portal') {
-        const arch = mesh(
-          geo(new T.TorusGeometry(0.65, 0.1, 12, 32, Math.PI)),
-          gold,
-          g,
-          [0, 0.52, 0],
-        );
+        const arch = mesh(sharedPortalGeometry, gold, g, [0, 0.52, 0]);
         arch.castShadow = false;
         ball(g, glow, [0, 0.5, 0], [0.15, 0.2, 0.15]);
       } else if (hot.kind === 'lantern') {
@@ -795,12 +934,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
         );
         ball(g, leaf, [0.1, 0.43, 0], [0.15, 0.055, 0.07]);
       }
-      const halo = mesh(
-        geo(new T.TorusGeometry(0.38, 0.025, 6, 28)),
-        glow,
-        g,
-        [0, 0.06, 0],
-      );
+      const halo = mesh(sharedHaloGeometry, glow, g, [0, 0.06, 0]);
       halo.rotation.x = Math.PI / 2;
       halo.castShadow = false;
       const button = document.createElement('button');
@@ -826,6 +960,9 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
   let action: WorldAction = 'idle';
   let actionUntil = 0;
   let elapsed = 0;
+  let bridgeStartedAt: number | null = null;
+  const bellStrikes = new Map<string, number>();
+  const sproutStarts = new Map<string, number>();
   let endingStartedAt = options.forest.ending ? 0 : (null as number | null);
   let yaw = 0;
   let targetYaw = 0;
@@ -840,6 +977,89 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
   function react(next: WorldAction) {
     action = next;
     actionUntil = elapsed + (next === 'sleep' ? 4 : 1.7);
+  }
+  function burst(
+    kind: EffectKind,
+    point: ForestPoint,
+    tint: string,
+    count = 18,
+    delay = 0,
+  ) {
+    if (home || reduced.matches) return;
+    const color = new T.Color(tint);
+    for (let index = 0; index < count; index++) {
+      const slotIndex = nextEffectSlot++ % effectCapacity;
+      const slot = effectSlots[slotIndex];
+      const angle = index * 2.399;
+      const radius = 0.08 + (index % 5) * 0.025;
+      slot.active = true;
+      slot.kind = kind;
+      slot.born = elapsed + delay + (index % 3) * 0.025;
+      slot.life = kind === 'collect' ? 0.82 : kind === 'water' ? 0.72 : 0.9;
+      slot.x = point.x + Math.cos(angle) * radius;
+      slot.y =
+        kind === 'water'
+          ? 1.12 + (index % 4) * 0.06
+          : kind === 'collect'
+            ? 0.3
+            : 0.12;
+      slot.z = point.z + Math.sin(angle) * radius;
+      slot.phase = angle;
+      slot.vx =
+        Math.cos(angle) * (kind === 'water' ? 0.13 : 0.3 + (index % 4) * 0.12);
+      slot.vz =
+        Math.sin(angle) * (kind === 'water' ? 0.13 : 0.3 + (index % 4) * 0.12);
+      slot.vy =
+        kind === 'water'
+          ? -1.15
+          : kind === 'soil'
+            ? 0.7
+            : 1.05 + (index % 4) * 0.16;
+      effectColors[slotIndex * 3] = color.r;
+      effectColors[slotIndex * 3 + 1] = color.g;
+      effectColors[slotIndex * 3 + 2] = color.b;
+      effectSizes[slotIndex] = kind === 'soil' ? 4 : kind === 'water' ? 6 : 8;
+      effectAlphas[slotIndex] = 0;
+    }
+    effectGeometry.attributes.effectColor.needsUpdate = true;
+    effectGeometry.attributes.effectSize.needsUpdate = true;
+  }
+  function ripple(point: ForestPoint, color: string, vertical = false) {
+    if (home) return;
+    const effect = ripples[nextRipple++ % ripples.length];
+    effect.born = elapsed;
+    effect.life = vertical ? 0.95 : 0.85;
+    effect.vertical = vertical;
+    effect.object.position.set(point.x, vertical ? 1.04 : 0.075, point.z);
+    effect.object.visible = true;
+    effect.object.scale.setScalar(1);
+    effect.material.color.set(color);
+    effect.material.opacity = 0.8;
+    if (vertical) effect.object.quaternion.copy(camera.quaternion);
+    else effect.object.rotation.set(-Math.PI / 2, 0, 0);
+  }
+  function arrivalFeedback(id: string) {
+    const hot = view.hotspots.find(
+      (item) => item.id === id && item.available && !item.complete,
+    );
+    if (!hot) return;
+    const position = FOREST_LOCATIONS[id];
+    if (hot.kind === 'bell') {
+      bellStrikes.set(id, elapsed);
+      ripple(
+        position,
+        id === 'bell-dew'
+          ? '#9de9fa'
+          : id === 'bell-leaf'
+            ? '#b9eca7'
+            : '#ffe19a',
+        true,
+      );
+      react('wave');
+    } else if (hot.kind === 'flower' || hot.kind === 'water') react('curious');
+    else if (hot.kind === 'bridge') react('celebrate');
+    else if (hot.kind === 'npc') react('wave');
+    else react('hop');
   }
   function navigate(point: T.Vector3, id: string | null) {
     const safeStart = nearestWalkablePoint(
@@ -1023,7 +1243,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
             const id = pendingId;
             pendingId = null;
             if (id) {
-              react('hop');
+              arrivalFeedback(id);
               options.onInteract(id);
             }
           }
@@ -1074,20 +1294,25 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
       creature.root.rotation.y = yaw;
       const narrow = width < 650;
       cameraTarget.set(
-        creature.root.position.x * (narrow ? 0.72 : 0.18),
-        0,
-        -1.7 + creature.root.position.z * (narrow ? 0.55 : 0.12),
+        creature.root.position.x * (narrow ? 0.96 : 0.9),
+        0.45,
+        -0.95 + creature.root.position.z * (narrow ? 0.94 : 0.88),
       );
-      lookAt.lerp(cameraTarget, Math.min(1, dt * 3));
+      lookAt.lerp(cameraTarget, Math.min(1, dt * 5));
       camPosition.set(
         lookAt.x,
-        narrow ? 11.2 : 12.9,
-        lookAt.z + (narrow ? 13.8 : 16),
+        narrow ? 10 : 10.3,
+        lookAt.z + (narrow ? 12 : 13),
       );
-      camera.position.lerp(camPosition, Math.min(1, dt * 3));
+      camera.position.lerp(camPosition, Math.min(1, dt * 4.2));
       camera.lookAt(lookAt);
     } else {
-      camera.position.set(Math.sin(orbit) * 7.8, 2.9, Math.cos(orbit) * 7.8);
+      const homeRadius = width < 650 ? 6.1 : 7.8;
+      camera.position.set(
+        Math.sin(orbit) * homeRadius,
+        2.9,
+        Math.cos(orbit) * homeRadius,
+      );
       camera.lookAt(0, 1.32, 0);
     }
     creature.update(dt, elapsed, {
@@ -1096,6 +1321,186 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
       action: elapsed < actionUntil ? action : 'idle',
       reducedMotion: reduced.matches,
     });
+    const travelled = Math.hypot(
+      creature.root.position.x - lastStepPosition.x,
+      creature.root.position.z - lastStepPosition.z,
+    );
+    lastStepPosition.copy(creature.root.position);
+    if (!home && moving && !reduced.matches) {
+      stepDistance += Math.min(travelled, 0.2);
+      if (stepDistance > 0.34) {
+        stepDistance = 0;
+        const side = nextPaw % 2 ? 1 : -1;
+        const paw = pawSlots[nextPaw++ % pawSlots.length];
+        paw.born = elapsed;
+        paw.yaw = yaw + Math.PI;
+        paw.x = creature.root.position.x + Math.cos(yaw) * side * 0.14;
+        paw.z = creature.root.position.z - Math.sin(yaw) * side * 0.14;
+      }
+    }
+    pawprints.visible = !home && !reduced.matches;
+    pawSlots.forEach((paw, index) => {
+      const age = elapsed - paw.born;
+      const size =
+        age < 2.5 ? Math.max(0.001, 1 - Math.max(0, age - 1) / 1.5) : 0.001;
+      pawMatrix.position.set(paw.x, 0.048, paw.z);
+      pawMatrix.rotation.set(0, paw.yaw, 0);
+      pawMatrix.scale.setScalar(size);
+      pawMatrix.updateMatrix();
+      pawprints.setMatrixAt(index, pawMatrix.matrix);
+    });
+    pawprints.instanceMatrix.needsUpdate = true;
+
+    let liveEffects = 0;
+    effectSlots.forEach((slot, index) => {
+      if (reduced.matches) slot.active = false;
+      if (!slot.active) {
+        effectAlphas[index] = 0;
+        return;
+      }
+      const age = elapsed - slot.born;
+      if (age < 0) {
+        effectAlphas[index] = 0;
+        liveEffects++;
+        return;
+      }
+      const fraction = age / slot.life;
+      if (fraction >= 1) {
+        slot.active = false;
+        effectAlphas[index] = 0;
+        return;
+      }
+      liveEffects++;
+      if (slot.kind === 'collect') {
+        const arc = Math.sin(fraction * Math.PI);
+        const ease = fraction * fraction * (3 - 2 * fraction);
+        effectPositions[index * 3] =
+          T.MathUtils.lerp(slot.x, creature.root.position.x, ease) +
+          Math.cos(slot.phase) * arc * 0.28;
+        effectPositions[index * 3 + 1] =
+          T.MathUtils.lerp(slot.y, 1.1, ease) + arc * 0.67;
+        effectPositions[index * 3 + 2] =
+          T.MathUtils.lerp(slot.z, creature.root.position.z, ease) +
+          Math.sin(slot.phase) * arc * 0.28;
+      } else {
+        effectPositions[index * 3] = slot.x + slot.vx * age;
+        effectPositions[index * 3 + 1] = Math.max(
+          0.08,
+          slot.y +
+            slot.vy * age -
+            (slot.kind === 'water' ? 0.95 : 0.65) * age * age,
+        );
+        effectPositions[index * 3 + 2] = slot.z + slot.vz * age;
+      }
+      effectAlphas[index] =
+        Math.min(1, age * 9) *
+        (1 - fraction) *
+        (slot.kind === 'soil' ? 0.7 : 0.95);
+    });
+    effectPoints.visible = !home && liveEffects > 0;
+    effectGeometry.attributes.position.needsUpdate = true;
+    effectGeometry.attributes.effectAlpha.needsUpdate = true;
+    ripples.forEach((effect) => {
+      const fraction = (elapsed - effect.born) / effect.life;
+      effect.object.visible = !home && fraction >= 0 && fraction < 1;
+      if (!effect.object.visible) return;
+      effect.object.scale.setScalar(
+        reduced.matches ? 1.1 : 0.75 + fraction * 2.5,
+      );
+      effect.material.opacity = (1 - fraction) * 0.65;
+      if (effect.vertical) effect.object.quaternion.copy(camera.quaternion);
+    });
+    bellObjects.forEach((bell, id) => {
+      const strike = bellStrikes.get(id);
+      const age = strike === undefined ? 10 : elapsed - strike;
+      bell.rotation.z =
+        reduced.matches || age > 1.7
+          ? 0
+          : Math.sin(age * 19) * Math.exp(-age * 2.7) * 0.36;
+    });
+    if (forest.bridges) {
+      const bridgeAge =
+        reduced.matches || bridgeStartedAt === null
+          ? 10
+          : elapsed - bridgeStartedAt;
+      bridgePlanks.forEach((plank, index) => {
+        const fraction = T.MathUtils.clamp(
+          (bridgeAge - index * 0.065) / 0.23,
+          0,
+          1,
+        );
+        const remainder = Math.pow(1 - fraction, 3);
+        plank.visible = fraction > 0;
+        plank.position.y = 0.08 + remainder * 0.78;
+        plank.rotation.z = remainder * (index % 2 ? 0.17 : -0.17);
+        if (
+          fraction === 1 &&
+          bridgeStartedAt !== null &&
+          !plank.userData.landingPlayed
+        ) {
+          plank.userData.landingPlayed = true;
+          burst('soil', { x: BRIDGE_X, z: plank.position.z }, '#ffe0a5', 4);
+        }
+      });
+      bridgeRails.visible = bridgeAge > 0.45;
+      bridgeRails.scale.y = T.MathUtils.clamp(
+        (bridgeAge - 0.45) / 0.32,
+        0.001,
+        1,
+      );
+      if (bridgeAge > 1.4) bridgeStartedAt = null;
+    }
+    owlFollower.root.visible = !home && forest.owlChoice === 'invite';
+    if (owlFollower.root.visible) {
+      const trailing = moving ? 0.95 : 0.68;
+      owlTarget.set(
+        creature.root.position.x -
+          Math.sin(yaw) * trailing +
+          Math.cos(yaw) * 0.8,
+        0,
+        creature.root.position.z -
+          Math.cos(yaw) * trailing -
+          Math.sin(yaw) * 0.8,
+      );
+      const owlDistance = Math.hypot(
+        owlTarget.x - owlFollower.root.position.x,
+        owlTarget.z - owlFollower.root.position.z,
+      );
+      const flying = moving || owlDistance > 0.6;
+      owlTarget.y = reduced.matches
+        ? 0.38
+        : flying
+          ? 0.55 + Math.sin(elapsed * 5) * 0.075
+          : 0.11 + Math.sin(elapsed * 2.4) * 0.018;
+      owlFollower.root.position.lerp(
+        owlTarget,
+        Math.min(1, dt * (flying ? 3.4 : 2.4)),
+      );
+      const owlYaw = flying
+        ? yaw
+        : Math.atan2(
+            creature.root.position.x - owlFollower.root.position.x,
+            creature.root.position.z - owlFollower.root.position.z,
+          );
+      owlFollower.root.rotation.y +=
+        Math.atan2(
+          Math.sin(owlYaw - owlFollower.root.rotation.y),
+          Math.cos(owlYaw - owlFollower.root.rotation.y),
+        ) * Math.min(1, dt * 5);
+      owlFollower.wings.forEach((wing, index) => {
+        wing.rotation.z = reduced.matches
+          ? 0
+          : (index ? -1 : 1) *
+            (flying
+              ? 0.38 + Math.sin(elapsed * 16) * 0.54
+              : 0.05 + Math.sin(elapsed * 2.3) * 0.025);
+      });
+      const blink = elapsed % 4.7;
+      owlFollower.eyes.scale.y =
+        !reduced.matches && blink < 0.16
+          ? 0.12 + Math.abs(blink - 0.08) * 11
+          : 1;
+    }
     cursor.scale.setScalar(
       reduced.matches ? 1 : 1 + Math.sin(elapsed * 4) * 0.08,
     );
@@ -1149,7 +1554,38 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
       : forest.owlChoice === 'listen'
         ? 0.75
         : 0.35;
+    const guideHotspot =
+      forest.owlChoice === 'listen'
+        ? forest.chapter === 'grove'
+          ? view.hotspots.find(
+              (hot) => hot.id === view.melody[view.melodyIndex],
+            )
+          : forest.chapter === 'festival'
+            ? view.hotspots.find(
+                (hot) =>
+                  hot.kind === 'lantern' && hot.available && !hot.complete,
+              )
+            : null
+        : null;
     for (let index = 0; index < 36; index++) {
+      if (guideHotspot && index < 12) {
+        const fraction = reduced.matches
+          ? (index + 1) / 13
+          : (elapsed * 0.28 + index / 12) % 1;
+        fireflies.positions[index * 3] = T.MathUtils.lerp(
+          creature.root.position.x,
+          guideHotspot.x,
+          fraction,
+        );
+        fireflies.positions[index * 3 + 1] =
+          0.72 + Math.sin(fraction * Math.PI) * 0.46;
+        fireflies.positions[index * 3 + 2] = T.MathUtils.lerp(
+          creature.root.position.z,
+          guideHotspot.z,
+          fraction,
+        );
+        continue;
+      }
       const angle = index * 2.399;
       const radius = 1.3 + (index % 6) * 0.83;
       fireflies.positions[index * 3] =
@@ -1204,7 +1640,17 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
     );
     if (reduced.matches) garden.scale.setScalar(1);
     else garden.scale.lerp(new T.Vector3(1, 1, 1), dt * 3);
-    gardenBeds.forEach((bed) => {
+    gardenBeds.forEach((bed, id) => {
+      const sproutStart = sproutStarts.get(id);
+      if (bed.sprout.visible) {
+        const progress =
+          reduced.matches || sproutStart === undefined
+            ? 1
+            : T.MathUtils.clamp((elapsed - sproutStart) / 0.58, 0, 1);
+        bed.sprout.scale.setScalar(
+          0.12 + (1 - Math.pow(1 - progress, 3)) * 0.88,
+        );
+      }
       if (!bed.bloom.visible) return;
       if (reduced.matches) bed.bloom.scale.setScalar(1);
       else bed.bloom.scale.lerp(new T.Vector3(1, 1, 1), Math.min(1, dt * 4));
@@ -1244,11 +1690,84 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
     },
     setForest(next: ForestState) {
       const bloomed = !forest.gardenBloom && next.gardenBloom;
+      const built = !forest.bridges && next.bridges;
+      const newItems = next.collected.filter(
+        (id) => !forest.collected.includes(id),
+      );
+      const newSeeds = next.planted.filter(
+        (id) => !forest.planted.includes(id),
+      );
+      const newLanterns = next.lanterns.filter(
+        (id) => !forest.lanterns.includes(id),
+      );
       const newFlowers = next.watered.filter(
         (id) => !forest.watered.includes(id),
       );
       if (next.ending !== forest.ending)
         endingStartedAt = next.ending ? elapsed : null;
+      if (built) {
+        bridgeStartedAt = elapsed;
+        bridgePlanks.forEach((plank) => {
+          plank.userData.landingPlayed = false;
+        });
+      }
+      if (!next.bridges) bridgeStartedAt = null;
+      if (next.owlChoice === 'invite' && forest.owlChoice !== 'invite') {
+        const position = FOREST_LOCATIONS['owl-grove'];
+        owlFollower.root.position.set(position.x, 0.12, position.z);
+        burst('spark', position, '#ffd69f', 18);
+      }
+      if (next.owlChoice === 'listen' && forest.owlChoice !== 'listen')
+        ripple(FOREST_LOCATIONS['owl-grove'], '#d9f5a3');
+      newItems.forEach((id) => {
+        burst(
+          'collect',
+          FOREST_LOCATIONS[id],
+          id.startsWith('seed') ? '#ffd0bd' : '#ffe2a0',
+          15,
+        );
+        ripple(FOREST_LOCATIONS[id], '#fff1bb');
+      });
+      newSeeds.forEach((id) => {
+        sproutStarts.set(id, elapsed);
+        burst('soil', FOREST_LOCATIONS[id], '#d7b987', 12);
+      });
+      newFlowers.forEach((id) => {
+        burst('water', FOREST_LOCATIONS[id], '#9edbff', 24);
+        burst(
+          'petal',
+          FOREST_LOCATIONS[id],
+          id.includes('peach')
+            ? '#ffc1cd'
+            : id.includes('mint')
+              ? '#b9f0ce'
+              : '#ffe29f',
+          14,
+          0.25,
+        );
+        ripple(FOREST_LOCATIONS[id], '#cceaba');
+      });
+      newLanterns.forEach((id) => {
+        burst('spark', FOREST_LOCATIONS[id], '#ffe19a', 22);
+        ripple(FOREST_LOCATIONS[id], '#ffe4a8');
+      });
+      if (!forest.hasWater && next.hasWater)
+        burst('water', FOREST_LOCATIONS['garden-water'], '#9edbff', 18);
+      if (next.chapter === 'arrival' && forest.chapter !== 'arrival') {
+        effectSlots.forEach((slot) => {
+          slot.active = false;
+        });
+        effectAlphas.fill(0);
+        ripples.forEach((effect) => {
+          effect.object.visible = false;
+          effect.born = -10;
+        });
+        pawSlots.forEach((paw) => {
+          paw.born = -10;
+        });
+        sproutStarts.clear();
+        bellStrikes.clear();
+      }
       forest = next;
       rebuild();
       newFlowers.forEach((id) =>

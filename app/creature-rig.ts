@@ -3,7 +3,7 @@ import { DEFAULT_APPEARANCE } from './creature-types';
 import type { CreatureAppearance, CreatureFrame, CreatureKind } from './creature-types';
 
 export { DEFAULT_APPEARANCE } from './creature-types';
-export type { CreatureAppearance, CreatureAction, CreatureFrame, CreatureKind } from './creature-types';
+export type { CreatureAppearance, CreatureAction, CreatureFrame, CreatureKind, CreaturePattern, CreatureEarStyle } from './creature-types';
 
 export type CreatureRig = {
   root: THREE.Group;
@@ -88,6 +88,8 @@ export function createCreature(appearance: CreatureAppearance = DEFAULT_APPEARAN
   materials.add(white);
   const gold = makeMaterial('#f9c571', { roughness: .3, metalness: .28, clearcoat: .4 });
   const seam = makeMaterial('#705947', { roughness: .95, sheen: 0 });
+  const marking = makeMaterial(new THREE.Color(appearance.accentColor).lerp(new THREE.Color(appearance.bodyColor), .12));
+  addPlushSurface(marking);
 
   function ellipsoid(parent: THREE.Object3D, name: string, mat: THREE.Material, position: [number, number, number], size: [number, number, number], detail = false) {
     const mesh = new THREE.Mesh(detail ? detailSphere : sphere, mat);
@@ -107,9 +109,66 @@ export function createCreature(appearance: CreatureAppearance = DEFAULT_APPEARAN
     const mesh = new THREE.Mesh(geometry(new THREE.TubeGeometry(curve, 20, radius, 6, false)), mat);
     mesh.name = name; mesh.castShadow = true; parent.add(mesh); return mesh;
   }
+  // Curved appliqués follow the actual plush surface. Concentric subdivisions
+  // avoid the flat polygon / floating sticker look of an ordinary ShapeGeometry.
+  function surfacePatch(parent: THREE.Object3D, name: string, mat: THREE.Material,
+    outline: (angle: number) => [number, number], surface: (x: number, y: number) => THREE.Vector3) {
+    const segments = 48, rings = 10;
+    const positions: number[] = [...surface(0, 0).toArray()];
+    const indices: number[] = [];
+    for (let ring = 1; ring <= rings; ring++) {
+      for (let segment = 0; segment < segments; segment++) {
+        const [x, y] = outline(segment / segments * Math.PI * 2);
+        positions.push(...surface(x * ring / rings, y * ring / rings).toArray());
+      }
+    }
+    for (let segment = 0; segment < segments; segment++) {
+      const next = (segment + 1) % segments;
+      indices.push(0, 1 + segment, 1 + next);
+      for (let ring = 1; ring < rings; ring++) {
+        const a = 1 + (ring - 1) * segments + segment;
+        const b = 1 + (ring - 1) * segments + next;
+        const c = a + segments, d = b + segments;
+        indices.push(a, c, b, b, c, d);
+      }
+    }
+    const g = geometry(new THREE.BufferGeometry());
+    g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    g.setIndex(indices);
+    g.computeVertexNormals();
+    // Outlines can have either winding (the heart runs clockwise). Keep the
+    // outward-facing normal consistent without using expensive double-sided fur.
+    if (g.attributes.normal.getZ(0) < 0) {
+      for (let i = 0; i < indices.length; i += 3) [indices[i + 1], indices[i + 2]] = [indices[i + 2], indices[i + 1]];
+      g.setIndex(indices); g.computeVertexNormals();
+    }
+    const mesh = new THREE.Mesh(g, mat);
+    mesh.name = name;
+    mesh.receiveShadow = true;
+    parent.add(mesh);
+    return mesh;
+  }
+  const circle = (rx: number, ry: number) => (angle: number): [number, number] => [Math.cos(angle) * rx, Math.sin(angle) * ry];
+  function tummySurface(cx: number, cy: number) {
+    return (x: number, y: number) => {
+      const px = x + cx, py = y + cy;
+      const z = .335 + .135 * Math.sqrt(Math.max(0, 1 - (px / .37) ** 2 - ((py + .045) / .40) ** 2));
+      return new THREE.Vector3(px, py, z + .0025);
+    };
+  }
   const bodyPivot = pivot(root, 'BodyPivot', 0, .83, 0);
   ellipsoid(bodyPivot, 'PearBody', fur, [0, 0, 0], [.57, .66, .43]);
   ellipsoid(bodyPivot, 'SoftTummy', cream, [0, -.045, .335], [.37, .40, .135]);
+  if (appearance.pattern === 'heart') {
+    surfacePatch(bodyPivot, 'HeartTummy', marking, angle => [
+      16 * Math.sin(angle) ** 3 / 18 * .23,
+      (13 * Math.cos(angle) - 5 * Math.cos(2 * angle) - 2 * Math.cos(3 * angle) - Math.cos(4 * angle)) / 18 * .23,
+    ], tummySurface(0, -.12));
+  } else if (appearance.pattern === 'spots') {
+    surfacePatch(bodyPivot, 'TummySpotL', marking, circle(.079, .092), tummySurface(-.14, -.055));
+    surfacePatch(bodyPivot, 'TummySpotR', marking, circle(.092, .085), tummySurface(.12, -.18));
+    surfacePatch(bodyPivot, 'TummySpotTiny', marking, circle(.049, .045), tummySurface(-.066, -.285));
+  }
   const head = pivot(bodyPivot, 'HeadPivot', 0, .88, .015);
   const headGeometry = geometry(new THREE.SphereGeometry(1, 40, 28));
   const headPositions = headGeometry.attributes.position;
@@ -130,6 +189,17 @@ export function createCreature(appearance: CreatureAppearance = DEFAULT_APPEARAN
   }
   const headMesh = new THREE.Mesh(headGeometry, fur);
   headMesh.name = 'CloudHead'; headMesh.scale.set(.86, .70, .64); headMesh.castShadow = true; headMesh.receiveShadow = true; head.add(headMesh);
+  if (appearance.pattern === 'spots') {
+    surfacePatch(head, 'ForeheadSpot', marking, circle(.17, .14), (dx, dy) => {
+      const x = dx - .53, y = dy + .48;
+      const z = Math.sqrt(Math.max(0, 1 - x * x - y * y));
+      // Same sculpt as CloudHead, in final scaled coordinates.
+      const lowerCheek = Math.sin(clamp(-y, 0, 1) * Math.PI);
+      const cheekFront = .08 * Math.exp(-((Math.abs(x) - .52) ** 2 / .08 + (y + .30) ** 2 / .12)) * Math.max(z, 0);
+      return new THREE.Vector3(x * (1 + lowerCheek * .09 - Math.max(y, 0) * .035) * .86,
+        y * .70, (z * (1 + lowerCheek * .035) + cheekFront) * .64 + .003);
+    });
+  }
   ellipsoid(head, 'MuzzleL', cream, [-.113, -.25, .592], [.19, .139, .095], true);
   ellipsoid(head, 'MuzzleR', cream, [.113, -.25, .592], [.19, .139, .095], true);
   ellipsoid(head, 'BlushL', pink, [-.53, -.17, .539], [.135, .083, .023], true).rotation.y = -.30;
@@ -158,13 +228,81 @@ export function createCreature(appearance: CreatureAppearance = DEFAULT_APPEARAN
   ellipsoid(openMouth, 'TinyTongue', pink, [0, -.035, .020], [.045, .022, .009], true);
   openMouth.scale.setScalar(.001);
 
+  const floppy = appearance.earStyle === 'floppy';
   const earPivots: THREE.Group[] = [];
+  function addLopEar(ear: THREE.Group, side: number) {
+    const long = appearance.kind === 'bunny';
+    const length = long ? 1 : .68;
+    const width = long ? .178 : .216;
+    const depth = long ? .112 : .134;
+    const curve = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(0, -.06, 0),
+      new THREE.Vector3(side * .17 * length, .15 * length, .025),
+      new THREE.Vector3(side * .36 * length, .06 * length, .070),
+      new THREE.Vector3(side * .40 * length, -.24 * length, .130),
+      new THREE.Vector3(side * .33 * length, -.45 * length, .150),
+    ]);
+    function bend(x: number, y: number, z: number) {
+      const u = clamp((y + 1) / 2, 0, 1);
+      const center = curve.getPoint(u), tangent = curve.getTangent(u);
+      // The transverse direction follows the whole curved ear, making one
+      // continuous silhouette rather than a chain of disconnected spheres.
+      const transverse = new THREE.Vector3(tangent.y, -tangent.x, 0).normalize();
+      return center.addScaledVector(transverse, x * width).add(new THREE.Vector3(0, 0, z * depth));
+    }
+    const g = geometry(new THREE.SphereGeometry(1, 28, 24));
+    const p = g.attributes.position;
+    for (let i = 0; i < p.count; i++) {
+      const v = bend(p.getX(i), p.getY(i), p.getZ(i));
+      p.setXYZ(i, v.x, v.y, v.z);
+    }
+    g.computeVertexNormals();
+    const mesh = new THREE.Mesh(g, fur);
+    mesh.name = `LopEar${side}`; mesh.castShadow = true; mesh.receiveShadow = true; ear.add(mesh);
+    surfacePatch(ear, `LopEarInner${side}`, innerEar, circle(.56, .81), (x, y) => {
+      const v = bend(x, y, Math.sqrt(Math.max(0, 1 - x * x - y * y)));
+      v.z += .003;
+      return v;
+    });
+  }
   for (const side of [-1, 1]) {
     const ear = pivot(head, side === -1 ? 'EarL' : 'EarR', side * .57, .44, -.055);
-    ear.rotation.z = side * -.23;
-    if (appearance.kind === 'bunny') {
+    ear.rotation.z = floppy ? 0 : side * -.23;
+    if (floppy && appearance.kind !== 'cat') {
+      addLopEar(ear, side);
+    } else if (appearance.kind === 'bunny') {
       ellipsoid(ear, `BunnyEar${side}`, fur, [0, .28, 0], [.18, .49, .145]);
       ellipsoid(ear, `BunnyEarInner${side}`, innerEar, [0, .29, .115], [.10, .355, .045], true);
+    } else if (appearance.kind === 'cat' && floppy) {
+      // A folded cat ear is a thick, closed cushion, not a flattened extruded
+      // triangle. Bend a tapered sphere gently forward so every viewing angle
+      // retains a soft rim and rounded tip, with no hard crease or hollow back.
+      const foldPoint = (x: number, y: number, z: number) => {
+        const upper = Math.max(0, y), bend = upper * upper;
+        return new THREE.Vector3(x * .22 * (1 - upper * .30),
+          .075 + y * .23 - bend * .11, .025 + z * .17 + bend * .18);
+      };
+      const g = geometry(new THREE.SphereGeometry(1, 32, 24));
+      const positions = g.attributes.position;
+      const originalNormals = g.attributes.normal.clone();
+      for (let i = 0; i < positions.count; i++) {
+        const p = foldPoint(positions.getX(i), positions.getY(i), positions.getZ(i));
+        positions.setXYZ(i, p.x, p.y, p.z);
+      }
+      g.computeVertexNormals();
+      const normals = g.attributes.normal;
+      for (let i = 0; i < normals.count; i++) {
+        const normal = new THREE.Vector3().fromBufferAttribute(normals, i);
+        if (normal.lengthSq() < .5) normal.fromBufferAttribute(originalNormals, i);
+        normal.normalize(); normals.setXYZ(i, normal.x, normal.y, normal.z);
+      }
+      const mesh = new THREE.Mesh(g, fur);
+      mesh.name = `FoldedCatEar${side}`; mesh.castShadow = true; mesh.receiveShadow = true; ear.add(mesh);
+      surfacePatch(ear, `FoldedCatEarInner${side}`, innerEar, circle(.54, .59), (x, y) => {
+        const py = y - .07;
+        const p = foldPoint(x, py, Math.sqrt(Math.max(0, 1 - x * x - py * py)));
+        p.z += .003; return p;
+      });
     } else if (appearance.kind === 'cat') {
       const shape = new THREE.Shape(); shape.moveTo(-.20, -.07); shape.quadraticCurveTo(-.16, .20, -.035, .37); shape.quadraticCurveTo(.005, .42, .05, .35); shape.quadraticCurveTo(.22, .15, .22, -.07); shape.closePath();
       const g = geometry(new THREE.ExtrudeGeometry(shape, { depth: .12, bevelEnabled: true, bevelSegments: 3, steps: 1, bevelSize: .065, bevelThickness: .06, curveSegments: 10 }));
@@ -263,14 +401,16 @@ export function createCreature(appearance: CreatureAppearance = DEFAULT_APPEARAN
     bodyPivot.rotation.x = moveBlend * .07 - expressionBlend * .09;
     bodyPivot.scale.set(1 + breathing * .36, 1 + breathing, 1 + breathing * .6);
     const curious = action === 'curious';
-    const targetX = clamp(input.lookY ?? 0, -.5, .5) * .21 + (sleeping ? .17 : pet ? -.10 : 0);
-    const targetY = clamp(input.lookX ?? 0, -1, 1) * .34 + (curious ? Math.sin(actionTime * 1.7) * .15 : 0);
-    const targetZ = curious ? -.17 : pet ? Math.sin(actionTime * 2.3) * .09 : 0;
+    const resting = action === 'idle' && !input.moving ? reduced : 0;
+    const targetX = clamp(input.lookY ?? 0, -.5, .5) * .21 + (sleeping ? .17 : pet ? -.10 : 0) + Math.sin(localTime * .67) * .020 * resting;
+    const targetY = clamp(input.lookX ?? 0, -1, 1) * .34 + (curious ? Math.sin(actionTime * 1.7) * .15 : 0) + Math.sin(localTime * .48) * .035 * resting;
+    const targetZ = curious ? -.17 : pet ? Math.sin(actionTime * 2.3) * .09 : Math.sin(localTime * .78) * .018 * resting;
     headX = mix(headX, targetX, eased * .65); headY = mix(headY, targetY, eased * .65); headZ = mix(headZ, targetZ, eased * .65);
     head.rotation.set(headX - gait * .025, headY, headZ - gait * .027);
-    // Deterministic double blinks. The whole glossy eye squashes into a smile.
-    const blinkCycle = localTime % 4.7;
-    const blink = blinkCycle < .14 ? Math.sin(blinkCycle / .14 * Math.PI) : blinkCycle > .29 && blinkCycle < .39 ? Math.sin((blinkCycle - .29) / .1 * Math.PI) : 0;
+    // Unevenly spaced single / double blinks feel less like a repeating toy loop.
+    const blinkCycle = localTime % 11.6;
+    const blinkAt = (start: number, duration: number) => blinkCycle >= start && blinkCycle < start + duration ? Math.sin((blinkCycle - start) / duration * Math.PI) : 0;
+    const blink = Math.max(blinkAt(1.9, .15), blinkAt(6.2, .14), blinkAt(6.49, .10), blinkAt(9.75, .16));
     const happyEyes = pet ? .57 + Math.sin(actionTime * 3) * .05 : 1;
     const eyeScale = Math.max(.065, (1 - blink * .93) * happyEyes * (1 - expressionBlend * .92));
     for (const eye of eyes) eye.scale.y = eyeScale;
@@ -302,10 +442,15 @@ export function createCreature(appearance: CreatureAppearance = DEFAULT_APPEARAN
     legR.position.y = -.42 + Math.max(0, -gait) * .042;
     tail.rotation.y = Math.sin(localTime * (pet || joy ? 9 : 3.1)) * (pet || joy ? .40 : .13) * reduced;
     const earWiggle = (Math.sin(localTime * 2.6) * .027 + Math.abs(gait) * .09) * reduced;
-    earPivots[0].rotation.z = .23 + earWiggle;
-    earPivots[1].rotation.z = -.23 - earWiggle;
-    earPivots[0].rotation.x = appearance.kind === 'bunny' ? -.12 + gait * .09 : 0;
-    earPivots[1].rotation.x = appearance.kind === 'bunny' ? .05 - gait * .09 : 0;
+    const earEase = 1 - Math.exp(-delta * (floppy ? 5.5 : 12));
+    const earBase = floppy ? .035 : .23;
+    // Soft ears lag behind steps and turns, instead of being rigidly synchronized.
+    const earLag = floppy ? Math.sin(gaitPhase - .6) * moveBlend * .16 * reduced : 0;
+    earPivots[0].rotation.z = mix(earPivots[0].rotation.z, earBase + earWiggle + earLag, earEase);
+    earPivots[1].rotation.z = mix(earPivots[1].rotation.z, -earBase - earWiggle + earLag * .78, earEase);
+    const earX = appearance.kind === 'bunny' ? -.07 : 0;
+    earPivots[0].rotation.x = mix(earPivots[0].rotation.x, earX + gait * (floppy ? .18 : .09) - headX * .16, earEase);
+    earPivots[1].rotation.x = mix(earPivots[1].rotation.x, -earX * .4 - gait * (floppy ? .18 : .09) - headX * .16, earEase);
     tuft.rotation.z = Math.sin(localTime * 2.9) * .045 * reduced + gait * .05;
     accessory.rotation.z = Math.sin(localTime * 3.4) * .025 * reduced + gait * .09;
   }

@@ -12,6 +12,14 @@ export type CompanionAppearance = {
   bodyColor: string;
   accentColor: string;
   accessory: CompanionAccessory;
+  pattern?: 'plain' | 'heart' | 'spots';
+  earStyle?: 'upright' | 'floppy';
+};
+
+export type CompanionStoryChoices = {
+  route: 'river' | 'garden';
+  owl: 'listen' | 'invite';
+  ending: 'sky' | 'home';
 };
 
 export type CompanionStoryBook = {
@@ -20,6 +28,10 @@ export type CompanionStoryBook = {
   pages: string[];
   createdAt: number;
   ending: string;
+  /** A book remembers its own hero, even after the current friend is restyled. */
+  heroName?: string;
+  heroAppearance?: CompanionAppearance;
+  choices?: CompanionStoryChoices;
 };
 
 /** Only game choices and an optional local nickname belong in this record. */
@@ -88,6 +100,11 @@ export function safeAppearance(input: unknown): CompanionAppearance {
     accessory: isAccessory(value.accessory)
       ? value.accessory
       : defaultAppearance.accessory,
+    pattern:
+      value.pattern === 'heart' || value.pattern === 'spots'
+        ? value.pattern
+        : 'plain',
+    earStyle: value.earStyle === 'floppy' ? 'floppy' : 'upright',
   };
 }
 
@@ -138,12 +155,32 @@ function sanitizeBook(input: unknown): CompanionStoryBook | null {
   if (!id || !title || !ending || input.pages.length === 0) return null;
   const pages = input.pages.slice(0, 12).map((page) => text(page, 600));
   if (pages.some((page) => !page)) return null;
+  const heroName = text(input.heroName, 24);
+  const choices = isRecord(input.choices) ? input.choices : null;
+  const validChoices =
+    choices &&
+    (choices.route === 'river' || choices.route === 'garden') &&
+    (choices.owl === 'listen' || choices.owl === 'invite') &&
+    (choices.ending === 'sky' || choices.ending === 'home');
   return {
     id,
     title,
     pages: pages as string[],
     createdAt: input.createdAt,
     ending,
+    ...(heroName ? { heroName } : {}),
+    ...(isRecord(input.heroAppearance)
+      ? { heroAppearance: safeAppearance(input.heroAppearance) }
+      : {}),
+    ...(validChoices
+      ? {
+          choices: {
+            route: choices.route as CompanionStoryChoices['route'],
+            owl: choices.owl as CompanionStoryChoices['owl'],
+            ending: choices.ending as CompanionStoryChoices['ending'],
+          },
+        }
+      : {}),
   };
 }
 

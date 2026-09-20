@@ -49,6 +49,40 @@ try {
     rig.dispose();
     loaded.scene.traverse(node => { if (node.isMesh) { node.geometry.dispose(); for (const mat of Array.isArray(node.material) ? node.material : [node.material]) mat.dispose(); } });
   }
+  // New personalization must work on every species, not just the marketing pose.
+  // Keep the four default downloadable assets backward-compatible, then exercise
+  // every optional shape in the live rig used by the game and the storybook.
+  let checked = 0;
+  for (const [kind, appearance] of Object.entries(CREATURE_VARIANTS)) {
+    for (const pattern of ['plain', 'heart', 'spots']) {
+      for (const earStyle of ['upright', 'floppy']) {
+        const rig = createCreature({ ...appearance, pattern, earStyle });
+        const label = `${kind}/${pattern}/${earStyle}`;
+        try {
+          if (pattern === 'heart' && !rig.root.getObjectByName('HeartTummy')) throw new Error(`Missing heart: ${label}`);
+          if (pattern === 'spots' && !rig.root.getObjectByName('ForeheadSpot')) throw new Error(`Missing spots: ${label}`);
+          let meshes = 0;
+          rig.root.traverse(node => {
+            if (!node.isMesh) return;
+            meshes++;
+            for (const component of node.geometry.attributes.position.array) {
+              if (!Number.isFinite(component)) throw new Error(`Non-finite geometry: ${label}/${node.name}`);
+            }
+          });
+          if (meshes > 80) throw new Error(`Personalized rig draw-call budget exceeded: ${label}`);
+          for (let frame = 0; frame < 180; frame++) {
+            rig.update(1 / 60, frame / 60, { moving: frame < 90, speed: 1.5, action: frame < 90 ? 'idle' : 'wave' });
+          }
+          const size = new Box3().setFromObject(rig.root).getSize(new Vector3());
+          if (![size.x, size.y, size.z].every(value => Number.isFinite(value) && value > 0 && value < 4)) {
+            throw new Error(`Invalid personalized rig bounds: ${label}`);
+          }
+          checked++;
+        } finally { rig.dispose(); }
+      }
+    }
+  }
+  console.log(`Personalization QA: ${checked} species/pattern/ear combinations, geometry and animated bounds passed`);
 } finally {
   if (path.dirname(tempDir) === scriptsDir && path.basename(tempDir).startsWith('.creature-build-')) {
     await fs.rm(tempDir, { recursive: true, force: true });

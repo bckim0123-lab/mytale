@@ -3,6 +3,7 @@ import { createServer } from 'vite';
 
 const server = await createServer({
   configFile: false,
+  cacheDir: 'node_modules/.vite-navigation-test',
   root: process.cwd(),
   appType: 'custom',
   logLevel: 'error',
