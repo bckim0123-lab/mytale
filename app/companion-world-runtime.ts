@@ -1,6 +1,10 @@
 import * as T from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { createCreature } from './creature-rig';
+import {
+  createForestVisuals,
+  forestCameraFrame,
+} from './forest-diorama-visuals';
 import type { CreatureAppearance } from './creature-types';
 import {
   FOREST_BED_IDS,
@@ -11,6 +15,157 @@ import {
 } from './forest-story';
 
 export type ForestPoint = { x: number; z: number };
+
+export function forestPlushTargetYaw(
+  moving: boolean,
+  movement: ForestPoint,
+  cameraOffset: ForestPoint,
+  previous: number,
+  faceViewer: boolean,
+) {
+  if (moving) return Math.atan2(movement.x, movement.z);
+  return faceViewer ? Math.atan2(cameraOffset.x, cameraOffset.z) : previous;
+}
+
+/** Commit a moving world label at press time, before the camera can reframe it.
+ * Keyboard/screen-reader clicks retain native button activation. */
+export function bindForestHotspotButton(
+  button: HTMLButtonElement,
+  activate: () => void,
+) {
+  const press = (event: PointerEvent) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    activate();
+  };
+  const click = (event: MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.detail === 0) activate();
+  };
+  const release = (event: Event) => event.stopPropagation();
+  button.addEventListener('pointerdown', press);
+  button.addEventListener('pointerup', release);
+  button.addEventListener('pointercancel', release);
+  button.addEventListener('click', click);
+  return () => {
+    button.removeEventListener('pointerdown', press);
+    button.removeEventListener('pointerup', release);
+    button.removeEventListener('pointercancel', release);
+    button.removeEventListener('click', click);
+  };
+}
+
+/** Fade only scenery between the lens and a living friend, not the whole forest. */
+export function forestTreeOpacity(
+  camera: { x: number; y: number; z: number },
+  target: { x: number; y: number; z: number },
+  tree: { x: number; z: number; radius: number; height: number },
+) {
+  const dx = target.x - camera.x;
+  const dz = target.z - camera.z;
+  const lengthSquared = dx * dx + dz * dz;
+  if (lengthSquared < 0.01) return 1;
+  const t =
+    ((tree.x - camera.x) * dx + (tree.z - camera.z) * dz) / lengthSquared;
+  if (t <= 0 || t >= 1.08) return 1;
+  const y = camera.y + (target.y - camera.y) * t;
+  if (y < -0.2 || y > tree.height + 0.55) return 1;
+  const distance = Math.hypot(
+    tree.x - (camera.x + dx * t),
+    tree.z - (camera.z + dz * t),
+  );
+  return distance < tree.radius + 0.65 ? 0.1 : 1;
+}
+
+type ForestLabel = {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  onscreen: boolean;
+  distance: number;
+};
+/** Screen-space placement respects the real HUD and packs separate hit targets.
+ * The closest real destination remains reachable even at an empty map edge. */
+export function layoutForestLabels(
+  labels: ForestLabel[],
+  width: number,
+  height: number,
+) {
+  const right = Math.max(100, width - (width >= 1000 ? 340 : 14));
+  const bottom = Math.max(80, height - 108);
+  const top = Math.min(width < 650 ? 172 : 188, bottom - 34);
+  const visible = labels.filter((label) => label.onscreen);
+  const isSecret = (label: ForestLabel) => label.id.startsWith('secret-');
+  const nearestRequired = [...labels]
+    .filter((label) => !isSecret(label))
+    .sort((a, b) => a.distance - b.distance)[0];
+  const chosen = [...visible];
+  // Optional discoveries never replace the destination needed to finish a chapter.
+  if (!visible.some((label) => !isSecret(label)) && nearestRequired)
+    chosen.push(nearestRequired);
+  else if (!chosen.length)
+    chosen.push(
+      ...[...labels].sort((a, b) => a.distance - b.distance).slice(0, 1),
+    );
+  chosen.sort(
+    (a, b) =>
+      Number(isSecret(a)) - Number(isSecret(b)) || a.distance - b.distance,
+  );
+  const placed: {
+    id: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    edge: boolean;
+  }[] = [];
+  for (const label of chosen) {
+    const labelWidth = Math.min(label.width, right - 28);
+    const minX = 14 + labelWidth / 2,
+      maxX = right - labelWidth / 2;
+    const minY = top + label.height,
+      maxY = bottom;
+    const desired = {
+      x: T.MathUtils.clamp(label.x, minX, maxX),
+      y: T.MathUtils.clamp(label.y, minY, maxY),
+    };
+    const candidates = [desired];
+    for (let y = minY; y <= maxY; y += label.height + 9) {
+      candidates.push({ x: desired.x, y });
+      for (let x = minX; x <= maxX; x += 24) candidates.push({ x, y });
+      candidates.push({ x: maxX, y });
+    }
+    candidates.sort(
+      (a, b) =>
+        (a.x - desired.x) ** 2 +
+        (a.y - desired.y) ** 2 -
+        (b.x - desired.x) ** 2 -
+        (b.y - desired.y) ** 2,
+    );
+    const position = candidates.find((candidate) =>
+      placed.every(
+        (other) =>
+          Math.abs(candidate.x - other.x) >=
+            (labelWidth + other.width) / 2 + 8 ||
+          candidate.y <= other.y - other.height - 8 ||
+          candidate.y - label.height >= other.y + 8,
+      ),
+    );
+    if (!position) continue;
+    placed.push({
+      id: label.id,
+      ...position,
+      width: labelWidth,
+      height: label.height,
+      edge: !label.onscreen,
+    });
+  }
+  return placed;
+}
 
 /** A painted puppet has one authored face. In the forest keep that face toward
  * the camera, with a small movement-led turn, rather than exposing a thin edge.
@@ -239,17 +394,21 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
   host.appendChild(renderer.domElement);
   const scene = new T.Scene();
   const home = options.mode === 'home';
-  scene.background = new T.Color(home ? '#f4ecda' : '#b8d6c5');
-  scene.fog = new T.Fog(home ? '#f4ecda' : '#b8d6c5', 27, 52);
+  scene.background = new T.Color(home ? '#f4ecda' : '#c8dacf');
+  scene.fog = new T.Fog(
+    home ? '#f4ecda' : '#c8dacf',
+    home ? 27 : 18,
+    home ? 52 : 40,
+  );
   const camera = new T.PerspectiveCamera(38, 1, 0.1, 100);
-  camera.position.set(home ? 3.5 : 0, home ? 2.8 : 10.3, home ? 7.4 : 14.95);
-  const lookAt = new T.Vector3(0, home ? 1.3 : 0.45, home ? 0 : 1.95);
+  camera.position.set(home ? 3.5 : 0, home ? 2.8 : 6.9, home ? 7.4 : 12.85);
+  const lookAt = new T.Vector3(0, home ? 1.3 : 0.94, home ? 0 : 2.85);
   camera.lookAt(lookAt);
   const pmrem = new T.PMREMGenerator(renderer);
   const room = new RoomEnvironment();
   const env = pmrem.fromScene(room, 0.04);
   scene.environment = env.texture;
-  scene.environmentIntensity = 0.35;
+  scene.environmentIntensity = 0.45;
   room.dispose();
   pmrem.dispose();
   const hemisphere = new T.HemisphereLight('#ffeed5', '#6a967f', 1);
@@ -287,7 +446,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
   const sphere = geo(new T.SphereGeometry(1, 20, 14));
   const cylinder = geo(new T.CylinderGeometry(1, 1, 1, 20));
   const cube = geo(new T.BoxGeometry(1, 1, 1));
-  const groundMat = mat(home ? '#d8dbb2' : '#89ad82');
+  const groundMat = mat(home ? '#d8dbb2' : '#87a57c');
   const pathMat = mat('#e3ceab');
   const cream = mat('#fff1c9');
   const bark = mat('#a98765');
@@ -336,7 +495,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
   );
   const terrain = mesh(
     geo(new T.PlaneGeometry(160, 160)),
-    mat(home ? '#f4ecda' : '#b8d6c5'),
+    mat(home ? '#f4ecda' : '#c8dacf'),
     scene,
     [0, -1.01, 0],
   );
@@ -356,6 +515,12 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
     stone.rotation.y = i * 0.7;
     stone.castShadow = false;
   }
+  const forestTrees: {
+    root: T.Group;
+    materials: T.MeshStandardMaterial[];
+    radius: number;
+    height: number;
+  }[] = [];
   function tree(x: number, z: number, size: number, alternate = false) {
     const group = new T.Group();
     group.position.set(x, 0, z);
@@ -371,6 +536,28 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
       [0.72, 0.93, 0.74],
     );
     ball(group, color, [0.62, 2.2, 0], [0.67, 0.9, 0.72]);
+    if (!home) {
+      // Shared forest materials must not fade with a foreground tree.
+      const unique = new Map<T.Material, T.MeshStandardMaterial>();
+      group.traverse((item) => {
+        if (!(item instanceof T.Mesh)) return;
+        const source = item.material as T.MeshStandardMaterial;
+        let material = unique.get(source);
+        if (!material) {
+          material = source.clone();
+          material.transparent = true;
+          unique.set(source, material);
+          materials.add(material);
+        }
+        item.material = material;
+      });
+      forestTrees.push({
+        root: group,
+        materials: [...unique.values()],
+        radius: size * 1.45,
+        height: size * 4.1,
+      });
+    }
   }
   if (home) {
     tree(-3.1, -2.5, 0.85, true);
@@ -737,6 +924,13 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
   scene.add(creature.root);
   creature.root.scale.setScalar(home ? 1 : 0.8);
   creature.root.position.set(0, 0, home ? 0 : 3.3);
+  const diorama = home ? null : createForestVisuals(options.forest);
+  if (diorama) scene.add(diorama.root);
+  const routeFriends = diorama
+    ? ['MomoOtter', 'PopoRabbit']
+        .map((name) => diorama.root.getObjectByName(name))
+        .filter((friend): friend is T.Object3D => !!friend)
+    : [];
   const owlBeakGeometry = geo(new T.ConeGeometry(0.075, 0.15, 12));
   function createOwlActor(parent: T.Object3D) {
     const root = new T.Group();
@@ -887,8 +1081,32 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
     new T.TorusGeometry(0.65, 0.1, 12, 32, Math.PI),
   );
   const sharedHeartGeometry = geo(new T.ConeGeometry(0.24, 0.3, 3));
-  const tags: { node: HTMLButtonElement; position: T.Vector3; id: string }[] =
-    [];
+  const secretStarShape = new T.Shape();
+  for (let i = 0; i < 10; i++) {
+    const a = Math.PI / 2 + (i * Math.PI) / 5,
+      r = i % 2 ? 0.13 : 0.29;
+    if (i === 0) secretStarShape.moveTo(Math.cos(a) * r, Math.sin(a) * r);
+    else secretStarShape.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+  }
+  secretStarShape.closePath();
+  const sharedSecretStar = geo(
+    new T.ExtrudeGeometry(secretStarShape, {
+      depth: 0.1,
+      bevelEnabled: true,
+      bevelSize: 0.028,
+      bevelThickness: 0.028,
+      bevelSegments: 2,
+      steps: 1,
+    }),
+  );
+  const tags: {
+    node: HTMLButtonElement;
+    position: T.Vector3;
+    id: string;
+    label: string;
+    width: number;
+    height: number;
+  }[] = [];
   const labelLayer = document.createElement('div');
   labelLayer.className = 'cw-world-labels';
   host.appendChild(labelLayer);
@@ -963,6 +1181,27 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
         mesh(sharedBellGeometry, gold, bellSwing, [0, -0.19, 0]).rotation.z =
           Math.PI;
         ball(bellSwing, glow, [0, -0.37, 0], [0.07, 0.07, 0.07]);
+      } else if (hot.kind === 'secret') {
+        if (hot.id === 'secret-shell') {
+          const shell = ball(g, pink, [0, 0.21, 0], [0.29, 0.16, 0.27]);
+          shell.rotation.x = -0.35;
+          for (let ridge = 0; ridge < 5; ridge++) {
+            const rib = ball(
+              g,
+              cream,
+              [(ridge - 2) * 0.083, 0.27, 0.06],
+              [0.019, 0.045, 0.23 - Math.abs(ridge - 2) * 0.036],
+            );
+            rib.rotation.y = (ridge - 2) * -0.17;
+          }
+          ball(g, glow, [0, 0.35, 0.09], [0.07, 0.07, 0.06]);
+        } else if (hot.id === 'secret-mushroom') {
+          mesh(cylinder, cream, g, [0, 0.23, 0], [0.09, 0.46, 0.09]);
+          ball(g, pink, [0, 0.48, 0], [0.34, 0.2, 0.29]);
+          ball(g, cream, [-0.1, 0.62, 0.08], [0.065, 0.026, 0.065]);
+          ball(g, cream, [0.13, 0.6, 0.1], [0.05, 0.024, 0.05]);
+          mesh(sharedSecretStar, gold, g, [0, 0.28, 0.17], [0.3, 0.3, 0.3]);
+        } else mesh(sharedSecretStar, glow, g, [0, 0.52, 0]);
       } else if (hot.kind === 'flower') {
         // Soil, planted shoots and opened petals live in persistent beds.
       } else if (hot.kind === 'portal') {
@@ -988,14 +1227,20 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
       button.textContent = hot.label;
       button.className = 'cw-world-tag';
       button.setAttribute('aria-label', `${hot.label} · 이동하기`);
-      const listener = () => walkTo(hot.id);
-      button.addEventListener('click', listener);
-      labelDisposers.push(() => button.removeEventListener('click', listener));
+      labelDisposers.push(
+        bindForestHotspotButton(button, () => {
+          down.active = false;
+          walkTo(hot.id);
+        }),
+      );
       labelLayer.appendChild(button);
       tags.push({
         node: button,
         position: new T.Vector3(hot.x, hot.kind === 'npc' ? 1.5 : 1.1, hot.z),
         id: hot.id,
+        label: hot.label,
+        width: (button.offsetWidth || hot.label.length * 11 + 28) + 18,
+        height: button.offsetHeight || 32,
       });
     }
   }
@@ -1025,6 +1270,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
     action = next;
     actionId += 1;
     actionUntil = elapsed + (next === 'sleep' ? 4 : 1.7);
+    diorama?.react(next, elapsed);
   }
   function burst(
     kind: EffectKind,
@@ -1143,12 +1389,40 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
     navigate(new T.Vector3(hot.x, 0, hot.z + 0.5), id);
   }
   const down = { x: 0, y: 0, active: false, moved: false };
+  let pressedTarget: { id: string } | { point: T.Vector3 } | null = null;
+  function pickForestTarget(e: PointerEvent) {
+    const bounds = renderer.domElement.getBoundingClientRect();
+    pointer.set(
+      ((e.clientX - bounds.left) / bounds.width) * 2 - 1,
+      (-(e.clientY - bounds.top) / bounds.height) * 2 + 1,
+    );
+    ray.setFromCamera(pointer, camera);
+    const hits = ray.intersectObjects(hotObjects, true);
+    if (hits.length) {
+      let object: T.Object3D | null = hits[0].object;
+      while (object && !object.userData.hotspotId) object = object.parent;
+      if (object?.userData.hotspotId)
+        return { id: String(object.userData.hotspotId) };
+    }
+    const point = new T.Vector3();
+    // Scenery and the sky must not silently redirect a tap to a map boundary.
+    if (
+      ray.ray.intersectPlane(groundPlane, point) &&
+      point.x >= -8 &&
+      point.x <= 8 &&
+      point.z >= -8 &&
+      point.z <= 4.8
+    )
+      return { point };
+    return null;
+  }
   function pointerDown(e: PointerEvent) {
     if (e.button !== 0) return;
     down.x = e.clientX;
     down.y = e.clientY;
     down.active = true;
     down.moved = false;
+    pressedTarget = home ? null : pickForestTarget(e);
     renderer.domElement.setPointerCapture(e.pointerId);
     renderer.domElement.focus({ preventScroll: true });
   }
@@ -1164,29 +1438,18 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
   function pointerUp(e: PointerEvent) {
     if (!down.active) return;
     down.active = false;
+    const selected = pressedTarget;
+    pressedTarget = null;
+    if (renderer.domElement.hasPointerCapture(e.pointerId))
+      renderer.domElement.releasePointerCapture(e.pointerId);
     if (down.moved) return;
     if (home) {
       react('pet');
       options.onPet();
       return;
     }
-    const bounds = renderer.domElement.getBoundingClientRect();
-    pointer.set(
-      ((e.clientX - bounds.left) / bounds.width) * 2 - 1,
-      (-(e.clientY - bounds.top) / bounds.height) * 2 + 1,
-    );
-    ray.setFromCamera(pointer, camera);
-    const hits = ray.intersectObjects(hotObjects, true);
-    if (hits.length) {
-      let obj: T.Object3D | null = hits[0].object;
-      while (obj && !obj.userData.hotspotId) obj = obj.parent;
-      if (obj?.userData.hotspotId) {
-        walkTo(String(obj.userData.hotspotId));
-        return;
-      }
-    }
-    const spot = new T.Vector3();
-    if (ray.ray.intersectPlane(groundPlane, spot)) navigate(spot, null);
+    if (selected && 'id' in selected) walkTo(selected.id);
+    else if (selected) navigate(selected.point, null);
   }
   function keyDown(e: KeyboardEvent) {
     if (home) return;
@@ -1212,6 +1475,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
     keys.clear();
     joystick.set(0, 0);
     down.active = false;
+    pressedTarget = null;
     destination = null;
     pendingId = null;
     journeyTarget = null;
@@ -1357,7 +1621,18 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
           creature.root.position.z = nextZ;
         else moving = false;
       }
-      if (moving) targetYaw = Math.atan2(moveVector.x, moveVector.z);
+      targetYaw = forestPlushTargetYaw(
+        moving,
+        moveVector,
+        {
+          x: camera.position.x - creature.root.position.x,
+          z: camera.position.z - creature.root.position.z,
+        },
+        targetYaw,
+        forest.chapter === 'complete' ||
+          (elapsed < actionUntil &&
+            ['celebrate', 'wave', 'pet'].includes(action)),
+      );
       yaw +=
         Math.atan2(Math.sin(targetYaw - yaw), Math.cos(targetYaw - yaw)) *
         Math.min(1, dt * 12);
@@ -1366,18 +1641,18 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
         creature.root.rotation.y = yaw;
         creature.root.rotation.x = 0;
       }
-      const narrow = width < 650;
-      cameraTarget.set(
-        creature.root.position.x * (narrow ? 0.96 : 0.9),
-        0.45,
-        -0.95 + creature.root.position.z * (narrow ? 0.94 : 0.88),
+      const framing = forestCameraFrame(
+        creature.root.position,
+        forest,
+        width,
+        reduced.matches ? undefined : diorama?.cameraFocus(elapsed),
       );
-      lookAt.lerp(cameraTarget, Math.min(1, dt * 5));
-      camPosition.set(
-        lookAt.x,
-        narrow ? 10 : 10.3,
-        lookAt.z + (narrow ? 12 : 13),
+      cameraTarget.set(framing.x, framing.y, framing.z);
+      lookAt.lerp(
+        cameraTarget,
+        1 - Math.exp(-dt * (reduced.matches ? 4 : 3.5)),
       );
+      camPosition.set(lookAt.x, framing.height, lookAt.z + framing.distance);
       camera.position.lerp(camPosition, Math.min(1, dt * 4.2));
       camera.lookAt(lookAt);
       if (drawingPuppet) {
@@ -1412,6 +1687,48 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
       actionId,
       reducedMotion: reduced.matches,
     });
+    diorama?.update({
+      dt,
+      time: elapsed,
+      player: creature.root.position,
+      camera: camera.position,
+      moving,
+      reducedMotion: reduced.matches,
+      walkable: (point) => isForestWalkablePoint(point, forest.bridges),
+      path: (from, to) => getCompanionNavigationPath(from, to, forest.bridges),
+    });
+    for (const tree of forestTrees) {
+      const bounds = {
+        x: tree.root.position.x,
+        z: tree.root.position.z,
+        radius: tree.radius,
+        height: tree.height,
+      };
+      let opacity = forestTreeOpacity(
+        camera.position,
+        { x: creature.root.position.x, y: 1, z: creature.root.position.z },
+        bounds,
+      );
+      for (const friend of routeFriends)
+        if (friend.visible)
+          opacity = Math.min(
+            opacity,
+            forestTreeOpacity(
+              camera.position,
+              { x: friend.position.x, y: 0.8, z: friend.position.z },
+              bounds,
+            ),
+          );
+      for (const material of tree.materials) {
+        material.opacity = reduced.matches
+          ? opacity
+          : T.MathUtils.lerp(material.opacity, opacity, 1 - Math.exp(-dt * 14));
+        material.depthWrite = material.opacity > 0.98;
+      }
+      tree.root.traverse((item) => {
+        if (item instanceof T.Mesh) item.castShadow = opacity > 0.98;
+      });
+    }
     const travelled = Math.hypot(
       creature.root.position.x - lastStepPosition.x,
       creature.root.position.z - lastStepPosition.z,
@@ -1706,7 +2023,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
       skyLights.geometry.attributes.position.needsUpdate = true;
     }
     const targetColor = new T.Color(
-      festival ? '#526887' : home ? '#f4ecda' : '#b8d6c5',
+      festival ? '#66758f' : home ? '#f4ecda' : '#c8dacf',
     );
     (scene.background as T.Color).lerp(targetColor, dt * 0.7);
     (scene.fog as T.Fog).color.copy(scene.background as T.Color);
@@ -1746,14 +2063,32 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
       if (reduced.matches) bed.bloom.scale.setScalar(1);
       else bed.bloom.scale.lerp(new T.Vector3(1, 1, 1), Math.min(1, dt * 4));
     });
-    tags.forEach((tag) => {
+    const labelPositions = tags.map((tag) => {
       projected.copy(tag.position).project(camera);
-      tag.node.style.transform = `translate(${(projected.x * 0.5 + 0.5) * width}px,${(-projected.y * 0.5 + 0.5) * height}px) translate(-50%,-100%)`;
-      tag.node.hidden =
-        projected.z > 1 ||
-        Math.abs(projected.x) > 1.05 ||
-        Math.abs(projected.y) > 1.05;
+      return {
+        id: tag.id,
+        x: (projected.x * 0.5 + 0.5) * width,
+        y: (-projected.y * 0.5 + 0.5) * height,
+        width: tag.width,
+        height: tag.height,
+        onscreen:
+          projected.z <= 1 &&
+          Math.abs(projected.x) <= 1.05 &&
+          Math.abs(projected.y) <= 1.05,
+        distance: tag.position.distanceToSquared(creature.root.position),
+      };
     });
+    const packedLabels = layoutForestLabels(labelPositions, width, height);
+    for (const tag of tags) {
+      const position = packedLabels.find((label) => label.id === tag.id);
+      tag.node.hidden = !position;
+      if (!position) continue;
+      const text = position.edge
+        ? `${tag.position.x < creature.root.position.x ? '↖' : '↗'} ${tag.label}`
+        : tag.label;
+      if (tag.node.textContent !== text) tag.node.textContent = text;
+      tag.node.style.transform = `translate(${position.x}px,${position.y}px) translate(-50%,-100%)`;
+    }
     renderer.render(scene, camera);
   }
   frame = requestAnimationFrame(animate);
@@ -1795,6 +2130,9 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
       );
       const newFlowers = next.watered.filter(
         (id) => !forest.watered.includes(id),
+      );
+      const newDiscoveries = (next.discoveries ?? []).filter(
+        (id) => !(forest.discoveries ?? []).includes(id),
       );
       if (next.ending !== forest.ending)
         endingStartedAt = next.ending ? elapsed : null;
@@ -1844,6 +2182,13 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
         burst('spark', FOREST_LOCATIONS[id], '#ffe19a', 22);
         ripple(FOREST_LOCATIONS[id], '#ffe4a8');
       });
+      newDiscoveries.forEach((id) => {
+        const location = FOREST_LOCATIONS[id];
+        if (location) {
+          burst('collect', location, '#ffe4b1', 24);
+          ripple(location, '#fff3c9', true);
+        }
+      });
       if (!forest.hasWater && next.hasWater)
         burst('water', FOREST_LOCATIONS['garden-water'], '#9edbff', 18);
       if (next.chapter === 'arrival' && forest.chapter !== 'arrival') {
@@ -1861,6 +2206,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
         sproutStarts.clear();
         bellStrikes.clear();
       }
+      diorama?.sync(next, elapsed, creature.root.position);
       forest = next;
       rebuild();
       newFlowers.forEach((id) =>
@@ -1899,6 +2245,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
       window.removeEventListener('keyup', keyUp);
       window.removeEventListener('blur', blur);
       creature.dispose();
+      diorama?.dispose();
       geometries.forEach((g) => g.dispose());
       materials.forEach((m) => m.dispose());
       textures.forEach((t) => t.dispose());

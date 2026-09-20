@@ -1,5 +1,6 @@
 import {
   sanitizeForestState,
+  FOREST_DISCOVERY_IDS,
   type ForestState,
   type ForestDifficulty,
 } from './forest-story';
@@ -29,6 +30,8 @@ export type CompanionStoryChoices = {
   route: 'river' | 'garden';
   owl: 'listen' | 'invite';
   ending: 'sky' | 'home';
+  craftDesign?: 'star' | 'heart';
+  discoveries?: string[];
 };
 
 export type CompanionStoryBook = {
@@ -269,6 +272,28 @@ function sanitizeBook(input: unknown): CompanionStoryBook | null {
     (choices.route === 'river' || choices.route === 'garden') &&
     (choices.owl === 'listen' || choices.owl === 'invite') &&
     (choices.ending === 'sky' || choices.ending === 'home');
+  if (
+    choices?.craftDesign !== undefined &&
+    choices.craftDesign !== 'star' &&
+    choices.craftDesign !== 'heart'
+  )
+    return null;
+  if (choices?.discoveries !== undefined) {
+    const discoveries = choices.discoveries;
+    if (
+      !Array.isArray(discoveries) ||
+      discoveries.length > 2 ||
+      new Set(discoveries).size !== discoveries.length ||
+      Array.from(discoveries).some(
+        (id) =>
+          typeof id !== 'string' ||
+          !(FOREST_DISCOVERY_IDS as readonly string[]).includes(id),
+      ) ||
+      (choices.route === 'river' && discoveries.includes('secret-mushroom')) ||
+      (choices.route === 'garden' && discoveries.includes('secret-shell'))
+    )
+      return null;
+  }
   return {
     id,
     title,
@@ -292,6 +317,12 @@ function sanitizeBook(input: unknown): CompanionStoryBook | null {
             route: choices.route as CompanionStoryChoices['route'],
             owl: choices.owl as CompanionStoryChoices['owl'],
             ending: choices.ending as CompanionStoryChoices['ending'],
+            ...(choices.craftDesign !== undefined
+              ? { craftDesign: choices.craftDesign as 'star' | 'heart' }
+              : {}),
+            ...(choices.discoveries !== undefined
+              ? { discoveries: [...(choices.discoveries as string[])] }
+              : {}),
           },
         }
       : {}),

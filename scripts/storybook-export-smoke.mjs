@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { readFileSync } from 'node:fs';
 import { createServer } from 'vite';
 
@@ -8,12 +10,17 @@ const server = await createServer({
   root: process.cwd(),
   appType: 'custom',
   logLevel: 'error',
-  server: { middlewareMode: true },
+  server: { middlewareMode: true, hmr: false },
 });
 
 try {
   const { exportStorybookHtml, storybookChapterTitle, storybookWorldSvg } =
     await server.ssrLoadModule('/app/storybook-export.ts');
+  const { forestKeepsakeSvg, forestKeepsakeMemory, getForestKeepsake } =
+    await server.ssrLoadModule('/app/forest-keepsake-art.ts');
+  const { default: CompanionStorybook } = await server.ssrLoadModule(
+    '/app/companion-storybook.tsx',
+  );
   // A valid one-pixel raster tests embedding without depending on network or DOM.
   const png =
     'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==';
@@ -95,6 +102,136 @@ try {
   assert.match(html, /친구들의 집 앞을 밝혀 줄래/);
   assert.match(html, /우리 같이 부르자!/);
   assert.match(html, /첨벙! 시냇물 길/);
+  assert.equal(
+    forestKeepsakeSvg(book, 1),
+    '',
+    'Legacy books never acquire an invented companion or handmade marker.',
+  );
+  assert.deepEqual(forestKeepsakeMemory(book), []);
+  for (const route of ['river', 'garden'])
+    for (const design of ['star', 'heart']) {
+      const routeDiscovery =
+        route === 'river' ? 'secret-shell' : 'secret-mushroom';
+      const editionTwo = {
+        ...book,
+        choices: {
+          ...book.choices,
+          route,
+          craftDesign: design,
+          discoveries: [routeDiscovery, 'secret-star'],
+        },
+      };
+      const memory = getForestKeepsake(editionTwo);
+      assert.equal(
+        memory.friend,
+        route === 'river' ? '수달 모모' : '토끼 포포',
+      );
+      assert.equal(memory.design, design);
+      assert.equal(memory.discoveryLabels.length, 2);
+      assert.equal(
+        forestKeepsakeSvg(editionTwo, 0),
+        '',
+        'The route companion only joins after the first page.',
+      );
+      assert.equal(
+        forestKeepsakeSvg(editionTwo, 5),
+        '',
+        'Keep illustration changes scoped to story pages two through five.',
+      );
+      assert.equal(forestKeepsakeSvg(editionTwo, NaN), '');
+      const beforeGrove = forestKeepsakeSvg(editionTwo, 1);
+      assert.match(beforeGrove, new RegExp(`data-craft-design="${design}"`));
+      assert.match(
+        beforeGrove,
+        new RegExp(`data-discovery="${routeDiscovery}"`),
+      );
+      assert.doesNotMatch(
+        beforeGrove,
+        /data-discovery="secret-star"/,
+        'A later forest discovery is not shown before the grove.',
+      );
+      assert.match(
+        forestKeepsakeSvg(editionTwo, 4),
+        /data-discovery="secret-star"/,
+      );
+      const kept = exportStorybookHtml(editionTwo, {
+        image: png,
+        illustrations: [png, png, png, png, png],
+      });
+      assert.equal(
+        (kept.match(/data-forest-friend=/g) ?? []).length,
+        4,
+        'Companion and craft marker appear on all four later pages, including embedded raster backgrounds.',
+      );
+      assert.equal(
+        (kept.match(/alt="달콩의 저장된 모습"/g) ?? []).length,
+        6,
+        'The child’s original hero stays present and remains the main character.',
+      );
+      assert.ok(kept.includes(memory.friend));
+      assert.ok(kept.includes(memory.designLabel));
+      for (const discovery of memory.discoveryLabels)
+        assert.ok(kept.includes(discovery));
+      assert.match(kept, /모험에 남긴 선택과 발견/);
+      const screen = renderToStaticMarkup(
+        React.createElement(CompanionStorybook, {
+          book: editionTwo,
+          fallbackName: '현재 친구',
+          fallbackAppearance: book.heroAppearance,
+        }),
+      );
+      assert.ok(
+        screen.includes(encodeURIComponent(forestKeepsakeSvg(editionTwo, 1))),
+        'Reader and offline HTML use the exact same trusted companion SVG.',
+      );
+      assert.match(screen, /csb-keepsake-memory/);
+      assert.ok(screen.includes(memory.designLabel));
+      for (const discovery of memory.discoveryLabels)
+        assert.ok(screen.includes(discovery));
+    }
+  const unsafeKeepsake = {
+    ...book,
+    heroName: '<script>RAW_HERO</script>',
+    choices: {
+      ...book.choices,
+      craftDesign: 'heart',
+      discoveries: [
+        'secret-shell',
+        'secret-shell',
+        'secret-mushroom',
+        '<img src=x onerror=RAW_ATTACK>',
+        'secret-star',
+      ],
+    },
+  };
+  assert.deepEqual(
+    getForestKeepsake(unsafeKeepsake).discoveries,
+    ['secret-shell', 'secret-star'],
+    'Unknown, duplicate, and other-route discovery IDs are not rendered.',
+  );
+  assert.doesNotMatch(
+    forestKeepsakeSvg(unsafeKeepsake, 4),
+    /RAW_|onerror|<script|javascript:/,
+  );
+  assert.equal(
+    forestKeepsakeSvg(
+      {
+        ...unsafeKeepsake,
+        choices: { ...unsafeKeepsake.choices, craftDesign: '<script>' },
+      },
+      1,
+    ),
+    '',
+  );
+  assert.equal(
+    forestKeepsakeSvg({ ...unsafeKeepsake, illustrationTheme: 'ocean' }, 1),
+    '',
+    'Illustrated world adventures are not retrofitted with forest-specific characters.',
+  );
+  assert.deepEqual(
+    forestKeepsakeMemory({ ...unsafeKeepsake, illustrationTheme: 'space' }),
+    [],
+  );
 
   for (const route of ['river', 'garden'])
     for (const owl of ['listen', 'invite'])

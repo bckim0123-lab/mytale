@@ -36,6 +36,7 @@ try {
     resetCompanionSave,
     serializeCompanionBackup,
     parseCompanionBackup,
+    sanitizeCompanionSave,
     MAX_COMPANION_SAVE_BYTES,
   } = await server.ssrLoadModule('/app/companion-save.ts');
   const { initialForestState, transitionForest } = await server.ssrLoadModule(
@@ -195,6 +196,60 @@ try {
     undefined,
     'Invalid optional choices are removed while the legacy book remains readable.',
   );
+  const newChoices = {
+    route: 'garden',
+    owl: 'invite',
+    ending: 'home',
+    craftDesign: 'heart',
+    discoveries: ['secret-mushroom', 'secret-star'],
+  };
+  const craftedBookSave = sanitizeCompanionSave({
+    ...custom,
+    storyBooks: [{ ...custom.storyBooks[0], choices: newChoices }],
+  });
+  assert.ok(craftedBookSave);
+  assert.deepEqual(craftedBookSave.storyBooks[0].choices, newChoices);
+  assert.notEqual(
+    craftedBookSave.storyBooks[0].choices.discoveries,
+    newChoices.discoveries,
+    'Discovery arrays receive an immutable book snapshot.',
+  );
+  const craftedBackup = serializeCompanionBackup(craftedBookSave);
+  assert.equal(craftedBackup.ok, true);
+  assert.deepEqual(
+    parseCompanionBackup(craftedBackup.json).save.storyBooks[0].choices,
+    newChoices,
+  );
+  for (const craftDesign of [null, 'square', 1, ['star']])
+    assert.equal(
+      sanitizeCompanionSave({
+        ...custom,
+        storyBooks: [
+          { ...custom.storyBooks[0], choices: { ...newChoices, craftDesign } },
+        ],
+      }),
+      null,
+    );
+  const sparseDiscoveries = [];
+  sparseDiscoveries.length = 1;
+  for (const discoveries of [
+    null,
+    'secret-star',
+    ['secret-shell'],
+    ['unknown'],
+    ['secret-star', 'secret-star'],
+    ['secret-shell', 'secret-mushroom', 'secret-star'],
+    sparseDiscoveries,
+  ])
+    assert.equal(
+      sanitizeCompanionSave({
+        ...custom,
+        storyBooks: [
+          { ...custom.storyBooks[0], choices: { ...newChoices, discoveries } },
+        ],
+      }),
+      null,
+    );
   assert.equal(
     custom.storyBooks[0].heroAppearance,
     undefined,

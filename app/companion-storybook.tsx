@@ -24,6 +24,11 @@ import {
   storybookWorldSvg,
 } from './storybook-export';
 import { downloadLocalFile } from './drawing-assets';
+import {
+  forestKeepsakeMemory,
+  forestKeepsakeSvg,
+  getForestKeepsake,
+} from './forest-keepsake-art';
 import './companion-storybook.css';
 
 type StorybookProps = {
@@ -265,6 +270,8 @@ function StoryPage({
 }) {
   const title = storybookChapterTitle(book, page);
   const theme = book.illustrationTheme;
+  const keepsake = getForestKeepsake(book);
+  const keepsakeArt = forestKeepsakeSvg(book, page);
   return (
     <section
       className={`csb-spread csb-page-${page}${theme ? ` csb-world-book csb-world-${theme}` : ''}${print ? ' csb-print-page' : ''}`}
@@ -286,6 +293,15 @@ function StoryPage({
         <div className="csb-art-wash" />
         {!theme && <SceneDetails page={page} book={book} />}
         <CompanionPortrait portrait={portrait} name={name} />
+        {keepsakeArt &&
+          keepsake && (
+            // eslint-disable-next-line next/no-img-element -- Only the trusted enum-based local SVG is embedded; no uploaded SVG is accepted.
+            <img
+              className="csb-keepsake-companion"
+              src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(keepsakeArt)}`}
+              alt={`${keepsake.friend}와 ${keepsake.designLabel}`}
+            />
+          )}
         <div className="csb-illustration-title">
           <span>
             {page === 0 ? '내가 만든 친구가 주인공인 이야기' : book.title}
@@ -322,6 +338,7 @@ function ParentNote({
 }) {
   const choices = book.choices;
   const headingId = useId();
+  const memories = forestKeepsakeMemory(book);
   const questions = choices
     ? [
         choices.route === 'river'
@@ -348,6 +365,16 @@ function ParentNote({
           ? `${companionWith(name)} ${choices.route === 'river' ? '나뭇조각을 모아 다리를 만들고' : '씨앗을 심고 물을 주어 꽃길을 만들고'}, ${choices.owl === 'listen' ? '부엉이의 이야기를 들어 주었어요' : '부엉이를 노래에 초대했어요'}. 마지막에는 ${choices.ending === 'sky' ? '하늘로 빛을 올려 보냈어요' : '친구들의 집으로 가는 길을 밝혔어요'}.`
           : `${companionWith(name)} 함께 만든 이야기예요. 마음에 남은 장면을 한 가지씩 이야기해 보세요.`}
       </p>
+      {memories.length > 0 && (
+        <dl className="csb-keepsake-memory">
+          {memories.map(([label, value]) => (
+            <div key={label}>
+              <dt>{label}</dt>
+              <dd>{value}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
       <ol>
         {questions.map((question) => (
           <li key={question}>{question}</li>

@@ -16,9 +16,10 @@
     "test:privacy": "node scripts/chat-privacy-smoke.mjs",
     "test:character-quality": "node scripts/character-quality-smoke.mjs && node scripts/character-stream-smoke.mjs",
     "test:creature": "node scripts/creature-interaction-smoke.mjs",
+    "test:forest-play": "node scripts/forest-toybox-smoke.mjs && node scripts/forest-play-controls-smoke.mjs && node scripts/forest-visual-smoke.mjs",
     "test:companion": "node scripts/forest-story-smoke.mjs && node scripts/forest-age-smoke.mjs && node scripts/companion-save-smoke.mjs && node scripts/drawing-assets-smoke.mjs && node scripts/companion-integration-smoke.mjs && node scripts/forest-navigation-smoke.mjs && node scripts/companion-palette-smoke.mjs && node scripts/storybook-export-smoke.mjs",
     "assets:creatures": "node scripts/build-creature-assets.mjs",
-    "quality": "npm run typecheck && npm run build && npm run test:safety && npm run test:privacy && npm run test:adventure && npm run test:generation && npm run test:character-quality && npm run test:companion && npm run test:creature",
+    "quality": "npm run typecheck && npm run build && npm run test:safety && npm run test:privacy && npm run test:adventure && npm run test:generation && npm run test:character-quality && npm run test:companion && npm run test:creature && npm run test:forest-play",
     "start": "wrangler dev --config dist/server/wrangler.json",
     "lint": "oxlint",
     "format": "oxfmt"

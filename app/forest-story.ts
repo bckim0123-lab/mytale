@@ -9,15 +9,21 @@ export type ForestChapter =
 export type ForestOwlChoice = 'listen' | 'invite';
 export type ForestEndingChoice = 'sky' | 'home';
 export type ForestDifficulty = 'simple' | 'standard' | 'challenge';
+export type ForestCraftDesign = 'star' | 'heart';
 export type ForestEvent =
   | { type: 'choose-route'; route: 'river' | 'garden' }
   | { type: 'interact'; id: string }
   | { type: 'choose-owl'; choice: ForestOwlChoice }
   | { type: 'choose-ending'; choice: ForestEndingChoice }
+  | { type: 'complete-craft'; design: ForestCraftDesign }
   | { type: 'retry-melody' };
 
 export type ForestState = {
   version: 1;
+  /** Existing saves without an edition retain their original progression. */
+  edition?: 2;
+  craftDesign?: ForestCraftDesign;
+  discoveries?: string[];
   /** Fixed when an adventure starts. Missing on older saves means standard. */
   difficulty?: ForestDifficulty;
   route: ForestRoute;
@@ -49,7 +55,8 @@ export type ForestHotspot = {
     | 'bell'
     | 'lantern'
     | 'portal'
-    | 'water';
+    | 'water'
+    | 'secret';
   x: number;
   z: number;
   available: boolean;
@@ -99,6 +106,51 @@ export const FOREST_LANTERN_IDS = [
   'lantern-star',
 ] as const;
 export const FOREST_BELL_IDS = ['bell-dew', 'bell-leaf', 'bell-star'] as const;
+export const FOREST_DISCOVERY_IDS = [
+  'secret-shell',
+  'secret-mushroom',
+  'secret-star',
+] as const;
+export const FOREST_DISCOVERIES = {
+  'secret-shell': {
+    label: '속삭이는 조개',
+    description: '귀에 살짝 대면 작은 파도 소리가 나요.',
+  },
+  'secret-mushroom': {
+    label: '포근한 버섯 배지',
+    description: '풀잎 아래 숨은 버섯 모양 배지예요. 옷깃에 달아 봐요.',
+  },
+  'secret-star': {
+    label: '별빛 조각',
+    description: '나뭇잎 사이에서 찾은 빛이 손바닥에 반짝여요.',
+  },
+} as const;
+
+export function getForestCompanion(route: ForestRoute): string {
+  return route === 'river'
+    ? '수달 모모'
+    : route === 'garden'
+      ? '토끼 포포'
+      : '숲 친구';
+}
+
+function craftName(state: ForestState): string {
+  const shape = state.craftDesign === 'heart' ? '하트' : '별';
+  return state.route === 'river' ? `${shape}표 다리` : `${shape} 모양 물길`;
+}
+
+function availableSecrets(state: ForestState): string[] {
+  if (
+    state.edition !== 2 ||
+    state.route === 'undecided' ||
+    state.chapter === 'complete'
+  )
+    return [];
+  const ids = [state.route === 'river' ? 'secret-shell' : 'secret-mushroom'];
+  if (state.chapter === 'grove' || state.chapter === 'festival')
+    ids.push('secret-star');
+  return ids;
+}
 
 /** Placement shared with the renderer; each ID has one position throughout the story. */
 export const FOREST_LOCATIONS: Record<string, { x: number; z: number }> = {
@@ -124,6 +176,9 @@ export const FOREST_LOCATIONS: Record<string, { x: number; z: number }> = {
   'lantern-moon': { x: 0, z: -6.5 },
   'lantern-star': { x: 3.5, z: -3.3 },
   'festival-tree': { x: 0, z: -4.5 },
+  'secret-shell': { x: 6.5, z: 2.1 },
+  'secret-mushroom': { x: -7, z: 0.4 },
+  'secret-star': { x: 3.2, z: -7.1 },
 };
 
 const chapterLabels: Record<ForestChapter, string> = {
@@ -139,6 +194,8 @@ export function initialForestState(
 ): ForestState {
   return {
     version: 1,
+    edition: 2,
+    discoveries: [],
     difficulty,
     route: 'undecided',
     chapter: 'arrival',
@@ -504,6 +561,95 @@ export function getForestView(state: ForestState): ForestView {
       view.objective =
         '멀리 보이는 별과 가까운 귀갓길. 이 빛이 닿았으면 하는 곳을 골라 보자.';
   }
+  if (state.edition === 2) {
+    const companion = getForestCompanion(state.route);
+    if (state.chapter === 'arrival') {
+      view.choices = view.choices.map((choice) => ({
+        ...choice,
+        description:
+          choice.id === 'route-river'
+            ? '수달 모모와 조각을 맞춰 다리를 만들어요.'
+            : '토끼 포포와 물길을 이어 꽃을 깨워요.',
+      }));
+    }
+    if (state.chapter === 'crossing') {
+      if (state.route === 'garden' && state.collected.length < 3)
+        view.objective = say(
+          state,
+          `포포와 씨앗 세 개를 모아 물길을 이어요. 씨앗 ${state.collected.length}/3개`,
+          `포포와 동그란 씨앗을 찾아 줘. ${state.collected.length}/3개`,
+          `세 화단을 깨울 씨앗을 찾아보자. 물은 어디로 흘러가야 할까? ${state.collected.length}/3개`,
+        );
+      if (
+        state.route === 'river' &&
+        state.collected.length === 3 &&
+        !state.bridges
+      )
+        view.objective = say(
+          state,
+          '모모가 가지를 잡아 줄게. 다리 앞에서 조각을 맞추고 우리 표식을 골라 보자!',
+          '모모와 다리 조각을 맞춰 줘.',
+          '길이와 모양을 살펴 빈자리에 맞춰 보자. 마지막 표식은 우리가 골라!',
+        );
+      if (
+        state.route === 'garden' &&
+        state.collected.length === 3 &&
+        !state.hasWater
+      )
+        view.objective = say(
+          state,
+          '포포가 씨앗을 화단에 놓았어! 수로 조각을 돌려 세 꽃에게 물이 흐르게 이어 보자.',
+          '포포와 물길 조각을 이어 줘.',
+          '끊긴 수로를 돌려 이어 보자. 입구부터 출구까지 물이 흐를 수 있을까?',
+        );
+      view.hotspots = view.hotspots.map((spot) =>
+        spot.id === 'garden-water'
+          ? {
+              ...spot,
+              available: !state.hasWater && state.collected.length === 3,
+              label: state.hasWater ? '우리가 이은 물길' : '포포와 물길 잇기',
+            }
+          : spot.id === 'river-bridge'
+            ? {
+                ...spot,
+                label: state.bridges
+                  ? craftName(state)
+                  : '모모와 다리 조각 맞추기',
+              }
+            : state.route === 'garden' &&
+                spot.kind === 'flower' &&
+                !state.hasWater
+              ? {
+                  ...spot,
+                  available: false,
+                  label: spot.label
+                    .replace('씨앗 심기', '꽃이 자랄 자리')
+                    .replace('새싹에 물 주기', '새싹이 물을 기다려요'),
+                }
+              : spot,
+      );
+      if (state.route === 'garden')
+        view.progress =
+          8 +
+          Math.round(
+            ((state.collected.length + Number(state.gardenBloom)) / 5) * 38,
+          );
+    }
+    if (state.chapter === 'grove') view.title = `${companion}와 찾은 작은 노래`;
+    if (state.chapter === 'festival')
+      view.title = `${companion}와 켜는 달빛 축제`;
+    view.hotspots.push(
+      ...availableSecrets(state).map((id) =>
+        hotspot(
+          id,
+          'secret',
+          FOREST_DISCOVERIES[id as keyof typeof FOREST_DISCOVERIES].label,
+          !(state.discoveries ?? []).includes(id),
+          (state.discoveries ?? []).includes(id),
+        ),
+      ),
+    );
+  }
   return view;
 }
 
@@ -520,6 +666,17 @@ export function transitionForest(
       !['river', 'garden'].includes(event.route)
     )
       return state;
+    if (state.edition === 2)
+      return advance(
+        state,
+        { route: event.route, chapter: 'crossing' },
+        event.route === 'river'
+          ? '“이쪽이야!” 수달 모모가 물 밖으로 얼굴을 쏙 내밀었어. “가지 세 개만 모아 줘. 내가 잡고 있을 테니 함께 다리를 맞추자!”'
+          : '풀잎 뒤에서 토끼 포포가 폴짝! “꽃들이 목말라해. 씨앗 세 개를 찾아 줄래? 나는 끊긴 물길을 살펴볼게.”',
+        event.route === 'river'
+          ? '수달 모모가 손을 흔들어! 가지 세 개를 모으자.'
+          : '토끼 포포가 폴짝! 씨앗 세 개를 찾자.',
+      );
     return advance(
       state,
       { route: event.route, chapter: 'crossing' },
@@ -535,6 +692,39 @@ export function transitionForest(
     );
   }
 
+  if (event.type === 'complete-craft') {
+    if (
+      state.edition !== 2 ||
+      state.chapter !== 'crossing' ||
+      state.collected.length !== 3 ||
+      !['star', 'heart'].includes(event.design) ||
+      state.craftDesign ||
+      (state.route !== 'river' && state.route !== 'garden')
+    )
+      return state;
+    const built = { ...state, craftDesign: event.design };
+    return advance(
+      state,
+      {
+        craftDesign: event.design,
+        ...(state.route === 'river'
+          ? { bridges: true }
+          : {
+              hasWater: true,
+              planted: [...FOREST_BED_IDS],
+              watered: [...FOREST_BED_IDS],
+              gardenBloom: true,
+            }),
+      },
+      state.route === 'river'
+        ? `마지막 조각이 쏙! 모모가 양팔을 들었어. “우리가 만든 ${craftName(built)}야!” 발을 톡 굴려 보니 튼튼해. 이제 함께 건너자.`
+        : `쪼르르! ${craftName(built)}을 따라 물이 세 화단에 도착했어. 포포가 심은 씨앗들이 꽃으로 활짝! “우리가 꽃길을 열었어!” 이제 아치 아래로 함께 가자.`,
+      state.route === 'river'
+        ? `${craftName(built)} 완성! 모모와 건너자.`
+        : `${craftName(built)}로 물이 졸졸! 세 꽃이 활짝! 포포와 꽃길로 가자.`,
+    );
+  }
+
   if (event.type === 'choose-owl') {
     if (
       state.chapter !== 'grove' ||
@@ -542,6 +732,23 @@ export function transitionForest(
       !['listen', 'invite'].includes(event.choice)
     )
       return state;
+    if (state.edition === 2) {
+      const companion = getForestCompanion(state.route);
+      const next = { ...state, owlChoice: event.choice };
+      return advance(
+        state,
+        { owlChoice: event.choice, owlHelped: true },
+        event.choice === 'listen'
+          ? `${companion}도 네 옆에 조용히 앉았어. “괜찮아, 기다릴게.” 부엉이가 숨을 고르고 노래를 시작해. 빛나는 종의 순서를 잘 보고 기억해 볼까?`
+          : `${companion}가 먼저 박자를 톡톡! 네가 첫 소리를 부르자 부엉이도 날개를 폈어. 함께 반짝이는 종을 잘 보고 같은 순서로 울려 보자.`,
+        event.choice === 'listen'
+          ? `${companion}도 귀를 쫑긋! ${melodyWords(next)}.`
+          : `${companion}와 같이 부르자! ${melodyWords(next)}.`,
+        event.choice === 'listen'
+          ? `${companion}와 기다려 주니 부엉이가 노래를 시작했어. 가운데 소리 뒤에는 어떤 순서로 돌아올까?`
+          : `${companion}가 첫 박자를 내고 부엉이가 이어 불러. 처음과 끝이 만나는 소리의 규칙을 찾아보자.`,
+      );
+    }
     return advance(
       state,
       { owlChoice: event.choice, owlHelped: true },
@@ -564,6 +771,17 @@ export function transitionForest(
       !['sky', 'home'].includes(event.choice)
     )
       return state;
+    if (state.edition === 2)
+      return advance(
+        state,
+        { ending: event.choice, chapter: 'complete' },
+        event.choice === 'sky'
+          ? `${getForestCompanion(state.route)}와 손을 번쩍! ${craftName(state)}의 표식을 닮은 빛이 하늘로 올라갔어. 달빛 나무가 눈을 뜨자 모두 “와아!” 하고 웃어.`
+          : `${getForestCompanion(state.route)}가 앞장서고 우리는 빛을 나누었어. ${craftName(state)}부터 집 앞까지 환해졌어. “오늘은 나도 혼자 돌아갈 수 있겠다!”`,
+        event.choice === 'sky'
+          ? `${getForestCompanion(state.route)}와 별을 띄웠어! 우리 이야기가 책이 됐어.`
+          : `${getForestCompanion(state.route)}와 길을 밝혔어! 우리 이야기가 책이 됐어.`,
+      );
     return advance(
       state,
       { ending: event.choice, chapter: 'complete' },
@@ -590,6 +808,21 @@ export function transitionForest(
   }
   if (event.type !== 'interact') return state;
   const { id } = event;
+  if (availableSecrets(state).includes(id)) {
+    if ((state.discoveries ?? []).includes(id)) return state;
+    const companion = getForestCompanion(state.route);
+    const discovery = FOREST_DISCOVERIES[id as keyof typeof FOREST_DISCOVERIES];
+    return advance(
+      state,
+      { discoveries: [...(state.discoveries ?? []), id] },
+      id === 'secret-shell'
+        ? `돌 아래서 속삭이는 조개를 찾았어! 모모가 귀에 대 보래. “쉬이이…” 작은 파도 소리야. 축제에 가져가 볼까?`
+        : id === 'secret-mushroom'
+          ? '풀잎을 살짝 들자 포근한 버섯 배지가 짠! 포포가 네 옷깃에 달아 주었어. “우리 탐험대 표식이네!”'
+          : `${companion}가 가리킨 잎 사이에 별빛 조각이 반짝! 손바닥 위에서 데굴 굴리니 주변 잎들이 노랗게 빛나. 등불 곁에 놓아 보자.`,
+      `${discovery.label} 발견! ${companion}와 살짝 간직하자.`,
+    );
+  }
   if (state.chapter === 'arrival' && id === 'owl-welcome') {
     return feedback(
       state,
@@ -623,6 +856,12 @@ export function transitionForest(
           `다리를 놓으려면 나뭇가지 ${3 - state.collected.length}개가 더 필요해. 주변을 함께 살펴보자.`,
           `가지 ${3 - state.collected.length}개를 더 찾아 줘.`,
         );
+      if (state.edition === 2)
+        return feedback(
+          state,
+          '모모가 가지를 잡고 기다려. 다리 조각을 빈자리에 맞춰야 건널 수 있어!',
+          '모모와 다리 조각을 맞춰 줘.',
+        );
       return advance(
         state,
         { bridges: true },
@@ -631,7 +870,14 @@ export function transitionForest(
         '가지가 서로 받쳐 주자 다리가 되었어. 우리가 건넌 뒤에도 다리는 여기 남을 거야. 또 누가 건너오게 될까?',
       );
     }
-    if (id === 'river-gate' && state.bridges)
+    if (id === 'river-gate' && state.bridges) {
+      if (state.edition === 2)
+        return advance(
+          state,
+          { chapter: 'grove' },
+          `수달 모모가 ${craftName(state)}를 톡톡 두드려 보고 따라왔어. 나무 아래에서 부엉이가 입을 열었다 닫아. “노래가… 잘 안 나와.” 모모가 네 손을 꼭 잡아.`,
+          `수달 모모와 ${craftName(state)}를 건넜어. 부엉이가 떨린대!`,
+        );
       return advance(
         state,
         { chapter: 'grove' },
@@ -639,10 +885,22 @@ export function transitionForest(
         '부엉이가 떨린대. 곁에 가 볼까?',
         '물소리가 멀어지자 작은 목소리가 들려. 부엉이가 첫 무대 앞에서 망설이고 있어. 어떤 도움이 필요할까?',
       );
+    }
   }
   if (state.chapter === 'crossing' && state.route === 'garden') {
     if ((FOREST_SEED_IDS as readonly string[]).includes(id)) {
       if (state.collected.includes(id)) return state;
+      if (state.edition === 2)
+        return advance(
+          state,
+          { collected: [...state.collected, id] },
+          state.collected.length === 2
+            ? '씨앗 세 개를 다 모았어! 포포가 화단에 놓는 동안 우리는 물길 조각을 이어 보자.'
+            : '동그란 씨앗이 손바닥에 쏙! 포포에게 가져다주니 빈 화단 옆에 조심히 놓았어.',
+          state.collected.length === 2
+            ? '세 개 다 찾았어! 포포와 물길을 이어 줘.'
+            : '씨앗을 찾았어! 포포가 잘 보관해 줄게.',
+        );
       return advance(
         state,
         { collected: [...state.collected, id] },
@@ -652,6 +910,16 @@ export function transitionForest(
     }
     if (id === 'garden-water') {
       if (state.hasWater) return state;
+      if (state.edition === 2)
+        return feedback(
+          state,
+          state.collected.length < 3
+            ? '포포가 수로를 살피는 동안 씨앗 세 개를 찾아보자. 다 모으면 함께 물길을 이을 수 있어.'
+            : '포포와 수로 조각을 돌려 이어 보자. 물이 세 화단까지 닿으면 꽃길이 열릴 거야!',
+          state.collected.length < 3
+            ? '포포와 씨앗 세 개부터 찾자.'
+            : '포포와 물길 조각을 이어 줘.',
+        );
       return advance(
         state,
         { hasWater: true },
@@ -661,6 +929,12 @@ export function transitionForest(
     }
     if ((FOREST_BED_IDS as readonly string[]).includes(id)) {
       if (state.watered.includes(id)) return state;
+      if (state.edition === 2 && !state.hasWater)
+        return feedback(
+          state,
+          '화단은 포포가 준비하고 있어. 씨앗 세 개를 모아 수로를 이으면 이곳까지 물이 흐를 거야.',
+          '포포와 씨앗을 모아 물길부터 이어 줘.',
+        );
       if (!state.planted.includes(id)) {
         if (state.collected.length <= state.planted.length)
           return feedback(
@@ -696,15 +970,33 @@ export function transitionForest(
           : '물을 받은 꽃이 활짝 피었어. 아직 새싹인 화단과 나란히 보니 달라진 모습이 잘 보여.',
       );
     }
-    if (id === 'garden-gate' && state.gardenBloom)
+    if (id === 'garden-gate' && state.gardenBloom) {
+      if (state.edition === 2)
+        return advance(
+          state,
+          { chapter: 'grove' },
+          `토끼 포포가 ${craftName(state)}에 물이 잘 흐르는지 보고 폴짝 따라왔어. 꽃 아치 너머에서 부엉이가 목을 가다듬어. “첫 무대가 무서워…” 포포가 네 곁에 앉아.`,
+          '토끼 포포와 꽃길을 지났어. 부엉이에게 힘을 줄까?',
+        );
       return advance(
         state,
         { chapter: 'grove' },
         '우리가 피운 꽃길을 따라가니 부엉이가 앉아 있어. “노래가 자꾸 생각이 안 나… 무대에 서는 게 떨려.”',
         '꽃길 끝에 부엉이가 있어. 첫 노래가 떨린대.',
       );
+    }
   }
   if (state.chapter === 'grove') {
+    if (id === 'owl-grove' && state.edition === 2)
+      return feedback(
+        state,
+        state.owlChoice
+          ? `${getForestCompanion(state.route)}가 곁에서 발로 박자를 맞춰. 부엉이가 다시 불러 줘. ${melodyWords(state)}.`
+          : `${getForestCompanion(state.route)}가 작은 목소리로 말해. “우리도 처음엔 어려웠지? 부엉이에게 어떤 말을 해 줄까?”`,
+        state.owlChoice
+          ? `${getForestCompanion(state.route)}와 들어 봐. ${melodyWords(state)}.`
+          : `${getForestCompanion(state.route)}도 곁에 있어. 뭐라고 할까?`,
+      );
     if (id === 'owl-grove')
       return feedback(
         state,
@@ -737,6 +1029,17 @@ export function transitionForest(
         };
       }
       const nextNote = state.melody + 1;
+      if (nextNote === melody.length && state.edition === 2)
+        return advance(
+          state,
+          { melody: nextNote, chapter: 'festival' },
+          state.owlChoice === 'listen'
+            ? `${getForestCompanion(state.route)}도 숨을 죽이고 듣자 마지막 소리가 숲에 퍼졌어. 반딧불이 하나둘 모여 ${craftName(state)} 쪽을 밝혀! 등불도 함께 켜 볼까?`
+            : `${getForestCompanion(state.route)}가 네 박자를 따라 톡톡! 부엉이가 날개를 활짝 펴. “나도 갈래!” 세 친구가 ${craftName(state)}${state.route === 'river' ? '를' : '을'} 돌아보고 축제로 달려가.`,
+          state.owlChoice === 'listen'
+            ? `${getForestCompanion(state.route)}와 성공! 반딧불도 축제에 왔어.`
+            : `${getForestCompanion(state.route)}와 성공! 부엉이도 함께 가!`,
+        );
       if (nextNote === melody.length)
         return advance(
           state,
@@ -765,6 +1068,19 @@ export function transitionForest(
   ) {
     if (state.lanterns.includes(id)) return state;
     const lanterns = [...state.lanterns, id];
+    if (state.edition === 2)
+      return advance(
+        state,
+        { lanterns },
+        lanterns.length === 3
+          ? `${getForestCompanion(state.route)}가 세 번째 등불을 받쳐 주자 달빛 나무가 반짝! 우리가 고른 ${craftName(state)}의 표식도 빛나. 이 빛을 어디에 남길까?`
+          : (state.discoveries ?? []).includes('secret-star')
+            ? `${getForestCompanion(state.route)}와 등불 옆에 별빛 조각을 놓았어. 빛이 반사되어 잎사귀에 작은 별이 춤춰! 등불 ${lanterns.length}개가 켜졌어.`
+            : `${getForestCompanion(state.route)}가 등불을 잡고 네가 불을 켜. ${lanterns.length}개가 반짝! 손을 마주치니 부엉이도 날개로 짝짝!`,
+        lanterns.length === 3
+          ? `${getForestCompanion(state.route)}와 다 켰어! 빛을 어디로 보낼까?`
+          : `${getForestCompanion(state.route)}와 반짝! 등불 ${lanterns.length}개가 켜졌어.`,
+      );
     return advance(
       state,
       { lanterns },
@@ -782,15 +1098,79 @@ export function transitionForest(
   return state;
 }
 
-export function getForestEnding(state: ForestState): {
+type ForestEnding = {
   title: string;
   paragraphs: string[];
   reward: string;
   routeMemory: string;
   owlMemory: string;
-} | null {
+};
+
+function editionTwoEnding(state: ForestState): ForestEnding {
+  const companion = getForestCompanion(state.route);
+  const design = craftName(state);
+  const river = state.route === 'river';
+  const listen = state.owlChoice === 'listen';
+  const sky = state.ending === 'sky';
+  const found = state.discoveries ?? [];
+  const foundRoute = found.includes(river ? 'secret-shell' : 'secret-mushroom');
+  const foundStar = found.includes('secret-star');
+  const tiny = state.difficulty === 'simple';
+  const thoughtful = state.difficulty === 'challenge';
+  const routeTreasure = river ? '속삭이는 조개' : '포근한 버섯 배지';
+  const paragraphs = tiny
+    ? [
+        `작은 친구 둘이 숲에 왔어요. ${companion}가 손을 흔들었어요. “나랑 같이 가자!”`,
+        river
+          ? `가지를 모아 조각을 쏙쏙! ${design}를 만들었어요.${foundRoute ? ` 모모와 ${routeTreasure}도 찾았어요.` : ' 모모가 먼저 폴짝 건넜어요.'}`
+          : `물길 조각을 빙글! ${design}로 물이 졸졸. 꽃이 피었어요.${foundRoute ? ` ${routeTreasure}도 찾았어요.` : ' 포포가 폴짝 뛰었어요.'}`,
+        listen
+          ? `${companion}와 기다렸어요. 부엉이가 ${melodyWords(state)}! 하고 불렀어요. 반딧불도 왔어요.`
+          : `${companion}와 톡톡! ${melodyWords(state)}! 부엉이도 함께 불렀어요.`,
+        `${companion}와 등불을 켰어요.${foundStar ? ' 별빛 조각도 반짝!' : ''} ${sky ? '하늘로 별이 둥실! 나무가 깨어났어요.' : '집 앞이 환해졌어요. 모두 손을 흔들었어요.'}`,
+        `“또 놀자!” ${companion}와 손을 짝! ${design}${river ? '와' : '과'} 오늘의 모험을 책에 담았어요.`,
+      ]
+    : [
+        river
+          ? '작은 친구 둘이 시냇가에 도착했어요. 물에서 얼굴을 내민 수달 모모가 다리의 빈 곳을 가리켰어요. “나는 가지를 잡을게. 너희가 맞춰 줄래?” 두 친구는 소매를 걷었어요.'
+          : '작은 친구 둘이 정원에 들어섰어요. 토끼 포포가 빈 물뿌리개를 흔들었어요. 달그락! “꽃들이 목말라하는데 물길이 끊겼어.” 두 친구는 포포 옆에 쪼그려 앉았어요.',
+        (river
+          ? `모모가 한쪽 끝을 잡고 두 친구가 조각을 밀었어요. 어긋난 곳은 살짝 돌리고, 마지막 빈칸에는 꼭 맞는 조각을 쏙! ${design}가 완성됐어요. 모모가 먼저 발을 톡 굴리고 폴짝 건넜어요.`
+          : `두 친구가 모은 씨앗을 포포가 세 화단에 심었어요. 그동안 두 친구는 수로 조각을 빙글 돌렸어요. “조금만 더!” 마지막 조각이 이어지자 ${design}로 물이 졸졸 달려갔어요. 물이 닿은 세 꽃이 차례로 활짝! 포포가 꽃 아치 아래에서 폴짝 뛰었어요.`) +
+          (foundRoute
+            ? river
+              ? ' 돌 아래서 속삭이는 조개도 찾았어요. 모모와 번갈아 귀에 대자 작은 파도 소리가 났어요.'
+              : ' 풀잎 아래에는 포근한 버섯 배지가 숨어 있었어요. 포포가 탐험대 표식이라며 옷깃에 달아 주었어요.'
+            : ''),
+        (listen
+          ? `${companion}와 두 친구가 부엉이 곁에 앉았어요. 아무도 서두르라고 하지 않았어요. 부엉이가 숨을 고르더니 ${melodyWords(state)}… 조그만 노래를 꺼냈어요. 종으로 답하자 반딧불이 모여들었어요.`
+          : `${companion}가 발로 박자를 톡톡 밟았어요. 두 친구도 ${melodyWords(state)}! 하고 불렀어요. 부엉이가 머뭇거리다 마지막 소리를 보탰어요. 다시 부를 때는 날개까지 활짝 폈어요. “나도 축제에 갈래!”`) +
+          (thoughtful
+            ? ' 혼자서는 멈추던 노래가 친구들의 소리를 만나 끝까지 이어졌어요.'
+            : ''),
+        `${companion}가 등불을 받치고 두 친구가 하나씩 불을 켰어요.${foundStar ? ' 나무 곁에서 찾은 별빛 조각을 가까이 놓자, 잎사귀 위에 작은 별들이 춤췄어요.' : ''} ` +
+          (sky
+            ? `${design}의 표식을 닮은 빛을 하늘로 보냈어요. 점점 작아지는 별을 따라 모두 고개를 들었어요. 달빛 나무가 눈을 뜨고 가지를 쭉 폈어요!`
+            : `${design}에서 집 앞까지 빛을 나눴어요. 작은 계단도 구불구불한 길도 잘 보였어요. 돌아가던 친구가 뒤돌아 손을 흔들자 달빛 나무도 가지를 흔들었어요.`),
+        `${companion}가 돌아가는 두 친구에게 손을 내밀었어요. 짝! “다음에는 내가 너희를 도와줄게.” 두 친구는 ${design}${river ? '를' : '을'} 한 번 돌아보았어요.${foundRoute ? ` ${routeTreasure}를 만지니 함께 찾던 순간이 떠올랐어요.` : ''}${foundStar ? ' 별빛 조각은 마지막 장을 환하게 밝혔어요.' : ''} 오늘 우리가 고르고 만든 일들이 이 책에 고스란히 남았어요.`,
+      ];
+  return {
+    title: sky
+      ? `${companion}와 띄운 작은 별`
+      : `${companion}와 밝힌 돌아오는 길`,
+    paragraphs,
+    reward: listen ? '반딧불 친구 배지' : '부엉이 합창단 배지',
+    routeMemory: `우리가 만든 ${design}`,
+    owlMemory: listen
+      ? `${companion}와 귀 기울여 준 노래`
+      : `${companion}와 함께 부른 노래`,
+  };
+}
+
+export function getForestEnding(state: ForestState): ForestEnding | null {
   if (state.chapter !== 'complete' || !state.ending || !state.owlChoice)
     return null;
+  if (state.edition === 2) return editionTwoEnding(state);
   const routeMemory =
     state.route === 'river' ? '우리가 만든 나무다리' : '우리가 피운 세 송이 꽃';
   const owlMemory =
@@ -859,6 +1239,18 @@ export function getForestEnding(state: ForestState): {
 export function sanitizeForestState(input: unknown): ForestState | null {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
   const value = input as Record<string, unknown>;
+  if (value.edition !== undefined && value.edition !== 2) return null;
+  if (
+    value.craftDesign !== undefined &&
+    value.craftDesign !== 'star' &&
+    value.craftDesign !== 'heart'
+  )
+    return null;
+  if (
+    value.edition !== 2 &&
+    (value.craftDesign !== undefined || value.discoveries !== undefined)
+  )
+    return null;
   if (
     value.difficulty !== undefined &&
     (typeof value.difficulty !== 'string' ||
@@ -912,7 +1304,7 @@ export function sanitizeForestState(input: unknown): ForestState | null {
     if (
       !Array.isArray(items) ||
       items.length > allowed.length ||
-      items.some(
+      Array.from(items).some(
         (item) => typeof item !== 'string' || !allowed.includes(item),
       ) ||
       new Set(items).size !== items.length
@@ -931,6 +1323,18 @@ export function sanitizeForestState(input: unknown): ForestState | null {
   const planted = arrayIds('planted', FOREST_BED_IDS);
   const watered = arrayIds('watered', FOREST_BED_IDS);
   const lanterns = arrayIds('lanterns', FOREST_LANTERN_IDS);
+  const discoveries =
+    value.discoveries === undefined
+      ? []
+      : arrayIds('discoveries', FOREST_DISCOVERY_IDS);
+  if (
+    !discoveries ||
+    discoveries.length > 2 ||
+    (discoveries.length > 0 && value.route === 'undecided') ||
+    (value.route === 'river' && discoveries.includes('secret-mushroom')) ||
+    (value.route === 'garden' && discoveries.includes('secret-shell'))
+  )
+    return null;
   if (!collected || !planted || !watered || !lanterns) return null;
   if (
     planted.length > collected.length ||
@@ -947,6 +1351,14 @@ export function sanitizeForestState(input: unknown): ForestState | null {
     return null;
   if (value.bridges && (value.route !== 'river' || collected.length !== 3))
     return null;
+  if (value.edition === 2) {
+    const crafted = value.craftDesign !== undefined;
+    if (crafted && (collected.length !== 3 || value.chapter === 'arrival'))
+      return null;
+    if (value.route === 'river' && value.bridges !== crafted) return null;
+    if (value.route === 'garden' && value.hasWater !== crafted) return null;
+    if (value.route === 'undecided' && crafted) return null;
+  }
   if (value.owlHelped !== (value.owlChoice !== null)) return null;
   if (
     value.chapter === 'arrival' &&
@@ -955,6 +1367,7 @@ export function sanitizeForestState(input: unknown): ForestState | null {
     return null;
   if (value.chapter !== 'arrival' && value.route === 'undecided') return null;
   const crossed = ['grove', 'festival', 'complete'].includes(value.chapter);
+  if (!crossed && discoveries.includes('secret-star')) return null;
   if (crossed && !(value.route === 'river' ? value.bridges : value.gardenBloom))
     return null;
   if (!crossed && (value.owlChoice !== null || value.melody !== 0)) return null;
@@ -977,6 +1390,11 @@ export function sanitizeForestState(input: unknown): ForestState | null {
     return null;
   return {
     version: 1,
+    ...(value.edition === 2 ? { edition: 2 as const } : {}),
+    ...(value.craftDesign !== undefined
+      ? { craftDesign: value.craftDesign as ForestCraftDesign }
+      : {}),
+    ...(value.discoveries !== undefined ? { discoveries } : {}),
     ...(value.difficulty === undefined ? {} : { difficulty }),
     route: value.route as ForestRoute,
     chapter: value.chapter as ForestChapter,

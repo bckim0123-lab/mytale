@@ -78,19 +78,44 @@ try {
             interact('river-bridge'); // Missing branches gives gentle feedback.
             for (const id of FOREST_WOOD_IDS) interact(id);
             interact('river-bridge');
+            event({
+              type: 'complete-craft',
+              design: owlChoice === 'listen' ? 'star' : 'heart',
+            });
             interact('river-gate');
           } else {
-            interact(FOREST_BED_IDS[0]); // Missing seed feedback.
+            interact(FOREST_BED_IDS[0]); // The actual water puzzle opens the beds.
             for (const id of FOREST_SEED_IDS) interact(id);
-            for (const id of FOREST_BED_IDS) interact(id);
-            interact(FOREST_BED_IDS[0]); // Missing water feedback.
             interact('garden-water');
-            for (const id of FOREST_BED_IDS) interact(id);
+            const movesBeforeCraft = state.moves;
+            event({
+              type: 'complete-craft',
+              design: owlChoice === 'listen' ? 'star' : 'heart',
+            });
+            assert.equal(state.moves, movesBeforeCraft + 1);
+            assert.deepEqual(state.planted, [...FOREST_BED_IDS]);
+            assert.deepEqual(state.watered, [...FOREST_BED_IDS]);
+            assert.equal(
+              state.gardenBloom,
+              true,
+              'Every age opens the flower path by solving its actual water puzzle.',
+            );
             interact('garden-gate');
           }
           interact('owl-grove');
           event({ type: 'choose-owl', choice: owlChoice });
           const melody = getForestMelody(state);
+          const names = {
+            'bell-dew': '물방울',
+            'bell-leaf': '나뭇잎',
+            'bell-star': '별빛',
+          };
+          const answerWords = melody.map((id) => names[id]).join(', ');
+          assert.equal(
+            state.message.includes(answerWords),
+            difficulty === 'simple',
+            'Only simple play displays the answer immediately; older children may request an explicit hint.',
+          );
           const expectedLength =
             difficulty === 'simple'
               ? 2
@@ -113,13 +138,8 @@ try {
             assert.match(getForestView(state).objective, /규칙|가운데/);
           }
           interact('owl-grove');
-          const names = {
-            'bell-dew': '물방울',
-            'bell-leaf': '나뭇잎',
-            'bell-star': '별빛',
-          };
           assert.ok(
-            state.message.includes(melody.map((id) => names[id]).join(', ')),
+            state.message.includes(answerWords),
             'owl recites actual age-specific melody',
           );
           const beforeMistake = {
@@ -166,6 +186,31 @@ try {
               book.paragraphs.every((text) => text.length <= 85),
               'short 5-page book',
             );
+          const discoveries = [
+            route === 'river' ? 'secret-shell' : 'secret-mushroom',
+            'secret-star',
+          ];
+          const discovered = { ...state, discoveries };
+          assert.deepEqual(sanitizeForestState(discovered), discovered);
+          const discoveredBook = getForestEnding(discovered);
+          assert.notDeepEqual(
+            discoveredBook.paragraphs,
+            book.paragraphs,
+            'Optional discoveries change the keepsake without being required to finish.',
+          );
+          if (difficulty === 'simple')
+            assert.ok(
+              discoveredBook.paragraphs.every((text) => text.length <= 85),
+              'Even a fully explored little-child book stays short.',
+            );
+          assert.ok(
+            discoveredBook.paragraphs.every((text) => text.length <= 600),
+            'All books fit the strict persistence contract without truncation.',
+          );
+          assert.ok(
+            discoveredBook.paragraphs.at(-1).length <= 300,
+            'The ending fits the persisted ending field.',
+          );
           books.add(JSON.stringify(book));
           const save = { ...createCompanionSave(), forest: state };
           assert.equal(
@@ -198,6 +243,8 @@ try {
   }
   const old = initialForestState();
   delete old.difficulty;
+  delete old.edition;
+  delete old.discoveries;
   assert.deepEqual(
     sanitizeForestState(old),
     old,

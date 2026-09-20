@@ -4,11 +4,26 @@
 
 - Four reusable, genuinely volumetric mesh companions (sprout, bunny, cat, bear), with articulated pivots, eye blink, idle breathing, walk, wave, hop and pet reactions. The same source exports portable animated GLB assets. Runtime fur micro-normal shading is an enhancement; exported assets retain standard PBR materials.
 - A directly playable forest: tap-to-walk, arrow/WASD controls, accessible mobile joystick, water collision and bridge routing, proximity-triggered interactions.
-- Two different paths: collect wood/build a bridge, or collect seeds/plant/water three flower beds. The changes remain in the world.
+- Two different paths: collect wood and rotate actual bridge pieces, or collect seeds and connect a water-flow puzzle that blooms three flower beds. Existing legacy saves keep their original plant/water progression. Changes remain in the world.
 - Age-recommended play modes change reading length and the melody to two, three/four or five notes. The selected mode stays fixed for an adventure. Both accessible visual order and optional synthesized audio are supported. Mistakes can be retried without penalty.
 - Individual lantern progress, dusk, moon-tree landmark and different sky/home-light endings.
 - Five-page illustrated storybooks reflect route, owl choice and ending (eight combinations), with accessory rewards and a local bookshelf.
 - Browser-local, versioned saves for appearance, nickname, progress and up to 100 books. Explicitly kept, completed AI character PNGs and their personas live in an IndexedDB artwork vault; original uploads and chat are not persisted. Quota, corruption and incompatible-version errors preserve the previous record.
+
+## Playable forest, second edition (2026-09-21)
+
+- An immersive full-width diorama with a field notebook on desktop and a lower story panel on phones. Closer character framing, instanced flowers/grass/stepping stones, softly hidden obstructing trees and bounded cameras replace the sparse distant view.
+- River companion Momo the otter and garden companion Popo the rabbit are actual articulated 3D followers. They accompany the hero through the song and festival, and turn toward the child during celebrations.
+- Two distinct, deterministic toy puzzles: rotate bridge planks or connect a 3×3 water network. Difficulty changes the number of movable pieces. Optional hints and explicit one-piece assistance have no timer or penalty. A completed puzzle still requires choosing a star/heart and explicitly confirming it.
+- The selected design changes world decorations and all five story pages. Optional shell/mushroom/star discoveries persist in books and a small memory album. Missing discoveries never block completion.
+- In non-simple modes, melody playback highlights one step at a time, then lets the child remember it. Visual hints remain explicitly available and sound is optional. Input is locked only while the demonstration plays.
+- New books share trusted, code-native companion/keepsake art between the reader, print layout and offline HTML; saved hero artwork remains the protagonist. No additional API call is needed for play or book assembly.
+- Craft dialogs make the background inert and stop movement. Completion is bound to the same saved forest snapshot and reset generation. Legacy and earlier partial-progress backups remain supported.
+- `test:forest-play` covers 4,352 toy orientation/connectivity states, all difficulty gates, stale-snapshot protection, instanced graphics, label safe areas, camera occlusion/facing and resource disposal. Existing story/save/navigation regressions remain part of `quality`.
+
+Internal screen review is not a substitute for the family testing listed below. The scope is still one branching 3D forest, not an unlimited catalogue of 3D adventures.
+
+Second-edition screen checks: a standard-mode river/heart/invite/sky playthrough collected both optional discoveries and produced the matching five-page book; a 390×844 challenge-mode garden/star/listen/home playthrough used the saved AI drawing puppet, solved the actual water puzzle, resumed after reload, deliberately played a wrong note, used the visual hint and completed without collecting discoveries. Both the new friend/marker book art and the final forward-facing companion celebration were visually inspected. No console warnings or errors were observed in the last local check. `npm run quality`, targeted lint and both production build presets passed during this pass; final deployment state must be checked separately.
 
 ## Honest boundaries
 
