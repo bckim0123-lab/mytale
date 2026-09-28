@@ -1,3 +1,12 @@
+/* showModal makes the page inert, but does not lock its scroll container.
+   Scope the lock to an open book, and never apply it to the printed document. */
+@media screen {
+  html:has(.cw-book-dialog[open] .csb-reader),
+  body:has(.cw-book-dialog[open] .csb-reader) {
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+}
 .cw-dialog.cw-book-dialog:has(.csb-reader) {
   width: min(1080px, calc(100vw - 32px));
   padding: 0;
@@ -6,6 +15,7 @@
   border: 1px solid #efe4d2;
   border-radius: 28px;
   box-shadow: 0 32px 110px #1e342357;
+  overscroll-behavior: contain;
 }
 .csb-reader {
   color: #344d42;
@@ -49,6 +59,10 @@
 .csb-screen-page {
   scroll-margin-top: 145px;
 }
+.csb-screen-page:focus-visible {
+  outline: 3px solid #3b806d;
+  outline-offset: -4px;
+}
 .csb-toolbar > div {
   display: flex;
   flex-wrap: wrap;
@@ -67,7 +81,8 @@
   font-size: 12px;
   color: #426554;
   font-weight: 700;
-  min-height: 40px;
+  min-height: 44px;
+  min-width: 44px;
 }
 .csb-toolbar button:hover:not(:disabled) {
   background: #ecf2e6;
@@ -342,8 +357,8 @@
   gap: 5px;
 }
 .csb-page-dots > button {
-  width: 32px;
-  height: 34px;
+  width: 44px;
+  height: 44px;
   border: 0;
   background: transparent;
   padding: 0;
@@ -488,7 +503,7 @@
   .csb-toolbar button {
     padding: 7px 8px;
     font-size: 10px;
-    min-height: 34px;
+    min-height: 44px;
     gap: 5px;
   }
   .csb-toolbar button > svg {
@@ -558,22 +573,31 @@
     font-size: 20px;
   }
   .csb-navigation {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
     padding: 12px 13px;
-    gap: 2px;
+    gap: 8px;
   }
   .csb-navigation > button {
     font-size: 11px;
     padding: 8px 9px;
     gap: 2px;
+    justify-content: center;
+    grid-row: 1;
+  }
+  .csb-navigation > button:first-child {
+    grid-column: 1;
+  }
+  .csb-navigation > button:last-child {
+    grid-column: 2;
   }
   .csb-navigation > button svg {
     width: 16px;
   }
   .csb-page-dots {
+    grid-column: 1 / -1;
+    grid-row: 2;
     gap: 0;
-  }
-  .csb-page-dots > button {
-    width: 27px;
   }
   .csb-privacy-note {
     padding: 0 21px;

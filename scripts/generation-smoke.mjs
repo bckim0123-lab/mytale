@@ -125,7 +125,7 @@ assert.doesNotMatch(
 );
 assert.match(
   page,
-  /disabled=\{[\s\S]{0,80}!image \|\| Boolean\(uploadError\)/,
+  /disabled=\{[\s\S]{0,80}!image\s*\|\|\s*Boolean\(uploadError\)/,
   '새 파일을 읽지 못했을 때 이전 그림으로 잘못 생성하지 못하게 해야 합니다.',
 );
 assert.match(

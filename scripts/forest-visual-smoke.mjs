@@ -24,10 +24,126 @@ try {
     forestTreeOpacity,
     layoutForestLabels,
     forestPlushTargetYaw,
+    createWorldPointerGesture,
   } = await server.ssrLoadModule('/app/companion-world-runtime.ts');
+  const gesture = createWorldPointerGesture();
+  const primary = {
+    pointerId: 7,
+    clientX: 120,
+    clientY: 80,
+    button: 0,
+    isPrimary: true,
+  };
+  const second = { ...primary, pointerId: 8, clientX: 280, isPrimary: false };
+  assert.equal(
+    gesture.begin({ ...primary, button: 2 }),
+    false,
+    'right click never starts a world gesture',
+  );
+  assert.equal(
+    gesture.begin(second),
+    false,
+    'secondary finger cannot initiate a world tap',
+  );
+  assert.equal(gesture.begin(primary), true);
+  assert.equal(
+    gesture.begin({ ...second, isPrimary: true }),
+    false,
+    'an additional pointer cannot replace the active press even across input devices',
+  );
+  assert.equal(
+    gesture.move({ ...second, clientX: 310 }),
+    null,
+    'other finger cannot orbit or turn a tap into a drag',
+  );
+  assert.equal(
+    gesture.end(second),
+    null,
+    'other finger cannot commit the primary destination',
+  );
+  assert.equal(
+    gesture.cancel(second.pointerId),
+    false,
+    'other finger cancellation cannot stop the owner',
+  );
+  assert.equal(gesture.pointerId, primary.pointerId);
+  assert.deepEqual(
+    gesture.end(primary),
+    { tap: true, dx: 0 },
+    'original press remains a valid single tap',
+  );
+  assert.equal(
+    gesture.end(primary),
+    null,
+    'duplicate releases do not interact twice',
+  );
+
+  assert.equal(gesture.begin(primary), true);
+  let orbitTravel = 0;
+  for (let step = 1; step <= 12; step++)
+    orbitTravel += gesture.move({
+      ...primary,
+      clientX: primary.clientX + step * 2,
+    });
+  assert.equal(orbitTravel, 24, 'slow orbit keeps incremental camera deltas');
+  assert.deepEqual(
+    gesture.end({ ...primary, clientX: primary.clientX + 24 }),
+    { tap: false, dx: 0 },
+    'twelve tiny home drags cannot become a pet/tap',
+  );
+  gesture.begin(primary);
+  gesture.move({ ...primary, clientX: primary.clientX + 10 });
+  gesture.move(primary);
+  assert.equal(
+    gesture.end(primary).tap,
+    false,
+    'dragging back to the start is still not a tap',
+  );
+  gesture.begin(primary);
+  assert.equal(
+    gesture.end({ ...primary, clientY: primary.clientY + 20 }).tap,
+    false,
+    'release displacement is checked even when move events were coalesced',
+  );
+  gesture.begin({ ...primary, pointerId: 0 });
+  assert.equal(
+    gesture.cancel(0),
+    true,
+    'pointer id zero cancels on lost capture',
+  );
+  assert.equal(
+    gesture.end({ ...primary, pointerId: 0 }),
+    null,
+    'lost capture cannot leave a stale click behind',
+  );
+  assert.equal(
+    gesture.begin(primary),
+    true,
+    'new input works after cancellation',
+  );
+  assert.equal(
+    gesture.end({
+      ...primary,
+      clientX: primary.clientX + 2,
+      clientY: primary.clientY + 1,
+    }).tap,
+    true,
+    'normal touch jitter remains a tap after prior drags',
+  );
   const button = new EventTarget();
   let labelActivations = 0;
   const unbind = bindForestHotspotButton(button, () => labelActivations++);
+  const secondaryPress = new Event('pointerdown', { cancelable: true });
+  Object.defineProperties(secondaryPress, {
+    button: { value: 0 },
+    isPrimary: { value: false },
+  });
+  button.dispatchEvent(secondaryPress);
+  assert.equal(
+    labelActivations,
+    0,
+    'second finger cannot redirect the hero through a projected label',
+  );
   const pointerPress = new Event('pointerdown', { cancelable: true });
   Object.defineProperty(pointerPress, 'button', { value: 0 });
   button.dispatchEvent(pointerPress);
@@ -441,7 +557,7 @@ try {
     'shared resources disposed once',
   );
   console.log(
-    'Forest visual smoke passed: cute route NPCs, mesh budget, batched detail, both-bank navigation, design marks, event/reset lifecycle, camera/puppet framing and resource disposal.',
+    'Forest visual smoke passed: pointer ownership/slow-drag safety, route NPCs, mesh budget, batched detail, both-bank navigation, design marks, event/reset lifecycle, camera/puppet framing and resource disposal.',
   );
 } finally {
   await server.close();

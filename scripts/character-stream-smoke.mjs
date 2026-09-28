@@ -38,8 +38,8 @@ const helpers =
   declarations.join('\n') +
   `
 export function createVariantRequester(bindings) {
-  const { generationRun, reviewTickets, favoriteColor, preserveFocus, characterWish, age, childGender,
-    characterMood, favoriteWorld, styleReferenceBlob, plushReferenceVersion, setGenerationLastActivityAt } = bindings;
+  const { generationRun, reviewTickets, characterInput, favoriteColor, preserveFocus, characterWish, age, childGender,
+    characterMood, favoriteWorld, styleReferenceBlob, plushReferenceVersion, setGenerationLastActivityAt, setReviewTicketStyles } = bindings;
   const ${requestDefinition};
   return requestVariant;
 }
@@ -133,6 +133,8 @@ for (const patch of [
 function bindings() {
   return {
     generationRun: { current: 1 },
+    characterInput: { current: { consent: true } },
+    setReviewTicketStyles: () => {},
     reviewTickets: { current: {} },
     favoriteColor: '원본 색',
     preserveFocus: '',

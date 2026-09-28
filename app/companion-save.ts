@@ -737,9 +737,20 @@ export async function persistCompanionSave(
   data: CompanionSave,
   options: CompanionWriteOptions,
 ): Promise<CompanionWriteResult> {
-  return withStorageLock(() =>
-    writeCompanionSave(data, options.storage, options.base),
-  );
+  try {
+    return await withStorageLock(() =>
+      writeCompanionSave(data, options.storage, options.base),
+    );
+  } catch {
+    // Acquiring a browser lock can itself throw or reject before the write.
+    // Report the failure; writing without the lock would reintroduce tab races.
+    return {
+      ok: false,
+      code: 'unavailable',
+      error:
+        '기기 저장을 시작하지 못했어요. 기존 기록은 그대로 두었어요. 잠시 뒤 다시 시도해 주세요.',
+    };
+  }
 }
 
 /** Compatibility wrapper. New UI code must use persistCompanionSave with its base snapshot. */
@@ -787,7 +798,16 @@ export function clearCompanionSave(storage?: StorageLike): CompanionSaveResult {
 export async function resetCompanionSave(
   storage?: StorageLike,
 ): Promise<CompanionSaveResult> {
-  return withStorageLock(() => clearCompanionSave(storage));
+  try {
+    return await withStorageLock(() => clearCompanionSave(storage));
+  } catch {
+    // Callers must receive a result so their reset-in-progress guards release.
+    return {
+      ok: false,
+      error:
+        '기록 지우기를 시작하지 못했어요. 기존 기록은 그대로 두었어요. 잠시 뒤 다시 시도해 주세요.',
+    };
+  }
 }
 
 export type CompanionBackupResult =

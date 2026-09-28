@@ -174,8 +174,11 @@ export default function CompanionExperience({
     moves: number;
     generation: string;
     stateKey: string;
+    requestEpoch: number;
   } | null>(null);
-  const toyOpening = useRef(false);
+  const toyOpening = useRef<number | null>(null);
+  const toyRequestEpoch = useRef(0);
+  const forestInteractionEnabled = useRef(false);
   const [book, setBook] = useState<CompanionStoryBook | null>(null);
   const [settings, setSettings] = useState(false);
   const [resetPrompt, setResetPrompt] = useState(false);
@@ -204,6 +207,12 @@ export default function CompanionExperience({
   const mounted = useRef(false);
   const colorRequest = useRef(0);
   const soundRef = useRef(sound);
+  const cancelToyRequest = useCallback((dismiss = true) => {
+    toyRequestEpoch.current += 1;
+    toyOpening.current = null;
+    forestInteractionEnabled.current = false;
+    if (dismiss) setToybox(null);
+  }, []);
   const forest = save.forest ?? initialForestState();
   const liveAppearance = useMemo(
     () => ({
@@ -304,13 +313,14 @@ export default function CompanionExperience({
     mounted.current = true;
     return () => {
       mounted.current = false;
+      cancelToyRequest(false);
       timers.current.forEach(clearTimeout);
       chatAbort.current?.abort();
       chatAbort.current = null;
       void audio.current?.close().catch(() => {});
       audio.current = null;
     };
-  }, []);
+  }, [cancelToyRequest]);
   useEffect(() => {
     soundRef.current = sound;
     if (!sound) void audio.current?.suspend().catch(() => {});
@@ -472,8 +482,23 @@ export default function CompanionExperience({
     },
     [commitSave, playTone, replayMelody, saveRef],
   );
+  function closeToybox() {
+    cancelToyRequest();
+    forestInteractionEnabled.current =
+      mode === 'forest' && !book && !settings && !chat;
+  }
   async function handleInteraction(id: string) {
-    if (toybox || toyOpening.current || (replaying && id.startsWith('bell-')))
+    if (
+      !mounted.current ||
+      !forestInteractionEnabled.current ||
+      mode !== 'forest' ||
+      book ||
+      settings ||
+      chat ||
+      toybox ||
+      toyOpening.current !== null ||
+      (replaying && id.startsWith('bell-'))
+    )
       return;
     const current = saveRef.current.forest ?? initialForestState();
     const kind = forestToyFor(current, id);
@@ -481,12 +506,15 @@ export default function CompanionExperience({
       world.current?.stop();
       setWalking('');
       const stateKey = JSON.stringify(current);
-      toyOpening.current = true;
+      const requestEpoch = ++toyRequestEpoch.current;
+      toyOpening.current = requestEpoch;
       try {
         await flush();
         const stored = readCompanionSave();
         if (
           !mounted.current ||
+          !forestInteractionEnabled.current ||
+          toyRequestEpoch.current !== requestEpoch ||
           JSON.stringify(saveRef.current.forest) !== stateKey ||
           stored.status !== 'ready' ||
           JSON.stringify(stored.save.forest) !== stateKey
@@ -497,20 +525,28 @@ export default function CompanionExperience({
           moves: current.moves,
           generation: stored.snapshot.generation,
           stateKey,
+          requestEpoch,
         });
       } catch {
-        setBackupStatus(
-          '모험 저장을 확인하지 못했어요. 보호자 안내에서 저장 상태를 확인해 주세요.',
-        );
+        if (mounted.current && toyRequestEpoch.current === requestEpoch)
+          setBackupStatus(
+            '모험 저장을 확인하지 못했어요. 보호자 안내에서 저장 상태를 확인해 주세요.',
+          );
       } finally {
-        toyOpening.current = false;
+        if (toyOpening.current === requestEpoch) toyOpening.current = null;
       }
       return;
     }
     dispatch({ type: 'interact', id });
   }
   function finishToy(design: 'star' | 'heart') {
-    if (!toybox) return;
+    if (
+      !toybox ||
+      !mounted.current ||
+      !forestInteractionEnabled.current ||
+      toybox.requestEpoch !== toyRequestEpoch.current
+    )
+      return;
     const stored = readCompanionSave();
     const current = saveRef.current.forest;
     const valid =
@@ -567,7 +603,7 @@ export default function CompanionExperience({
       setBackupStatus(
         '책장에 100권이 모였어요. 먼저 보호자와 백업 파일을 보관해 주세요. 기존 책을 자동으로 지우지 않아요.',
       );
-      setSettings(true);
+      openSettings();
       return;
     }
     timers.current.forEach(clearTimeout);
@@ -578,7 +614,7 @@ export default function CompanionExperience({
     setReplayStep(-1);
     setMelodyHelp(false);
     setPetSpeech('');
-    setToybox(null);
+    cancelToyRequest();
     if (!current.forest || current.forest.chapter === 'complete')
       commitSave((s) => ({
         ...s,
@@ -593,20 +629,23 @@ export default function CompanionExperience({
         updatedAt: Date.now(),
       }));
     setWalking('');
+    forestInteractionEnabled.current = true;
     setMode('forest');
   }
   function goHome(showBooks = false) {
+    cancelToyRequest();
     timers.current.forEach(clearTimeout);
     timers.current = [];
     setActiveNote(null);
     setReplaying(false);
     setWalking('');
     setReplayStep(-1);
-    setToybox(null);
     setMode('home');
     if (showBooks) setPanel('books');
   }
   function closeDialog() {
+    cancelToyRequest();
+    forestInteractionEnabled.current = mode === 'forest';
     setBook(null);
     setChat(false);
     setSettings(false);
@@ -897,11 +936,13 @@ export default function CompanionExperience({
     }
   }
   function openBook(item: CompanionStoryBook) {
+    cancelToyRequest();
     setSettings(false);
     setChat(false);
     setBook(item);
   }
   function openChat() {
+    cancelToyRequest();
     setGuardianQuestion({
       a: 13 + Math.floor(Math.random() * 14),
       b: 4 + Math.floor(Math.random() * 7),
@@ -909,6 +950,18 @@ export default function CompanionExperience({
     setGuardianAnswer('');
     setGuardianChecked(false);
     setChat(true);
+  }
+  function openSettings() {
+    cancelToyRequest();
+    setSettings(true);
+  }
+  function exitCompanion() {
+    cancelToyRequest();
+    onExit();
+  }
+  function openDrawing() {
+    cancelToyRequest();
+    onDrawing();
   }
   return (
     <>
@@ -920,7 +973,7 @@ export default function CompanionExperience({
         <header className="cw-header">
           <button
             className="cw-brand"
-            onClick={onExit}
+            onClick={exitCompanion}
             aria-label="그림친구 처음으로"
           >
             <span>✦</span>그림친구<small>작은 상상이 사는 곳</small>
@@ -944,7 +997,7 @@ export default function CompanionExperience({
           <button
             className="cw-icon"
             aria-label="보호자와 함께 보기"
-            onClick={() => setSettings(true)}
+            onClick={openSettings}
           >
             <Settings2 size={20} />
           </button>
@@ -953,7 +1006,7 @@ export default function CompanionExperience({
           <div className="cw-alert" role="alert">
             {saveError} 이 창에서는 계속 놀 수 있지만, 창을 닫으면 이번 변경이
             사라질 수 있어요.
-            <button onClick={() => setSettings(true)}>백업·복구 열기</button>
+            <button onClick={openSettings}>백업·복구 열기</button>
           </div>
         )}
         {(backupStatus || artworkBusy || art.error) && (
@@ -1494,7 +1547,7 @@ export default function CompanionExperience({
                   <MessageCircle size={17} />
                   친구와 이야기
                 </button>
-                <button onClick={onDrawing}>
+                <button onClick={openDrawing}>
                   <ImagePlus size={17} />
                   AI 그림 변환
                 </button>
@@ -1849,9 +1902,7 @@ export default function CompanionExperience({
         )}
         <footer className="cw-footer">
           <span>작은 선택이 모여, 우리만의 이야기가 돼요.</span>
-          <button onClick={() => setSettings(true)}>
-            보호자 안내 · 저장 설정
-          </button>
+          <button onClick={openSettings}>보호자 안내 · 저장 설정</button>
         </footer>
         <dialog
           ref={dialog}
@@ -2213,6 +2264,7 @@ export default function CompanionExperience({
                         backupOperation.current
                       )
                         return;
+                      cancelToyRequest();
                       backupOperation.current = true;
                       setBackupBusy(true);
                       artworkEpoch.current++;
@@ -2257,6 +2309,7 @@ export default function CompanionExperience({
                       setPanel('customize');
                       setMode('home');
                       closeDialog();
+                      forestInteractionEnabled.current = false;
                     }}
                   >
                     모든 기록 지우기
@@ -2292,7 +2345,7 @@ export default function CompanionExperience({
           difficulty={forest.difficulty ?? 'standard'}
           companionName={getForestCompanion(forest.route)}
           onComplete={finishToy}
-          onClose={() => setToybox(null)}
+          onClose={closeToybox}
           sound={sound}
         />
       )}

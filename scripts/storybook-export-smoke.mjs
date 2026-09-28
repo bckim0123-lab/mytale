@@ -2,7 +2,63 @@ import assert from 'node:assert/strict';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { readFileSync } from 'node:fs';
+import ts from 'typescript';
+import postcss from 'postcss';
 import { createServer } from 'vite';
+
+const readerSource = readFileSync('app/companion-storybook.tsx', 'utf8');
+const readerAst = ts.createSourceFile(
+  'companion-storybook.tsx',
+  readerSource,
+  ts.ScriptTarget.Latest,
+  true,
+  ts.ScriptKind.TSX,
+);
+function findNode(predicate) {
+  let found;
+  const visit = (node) => {
+    if (!found && predicate(node)) found = node;
+    ts.forEachChild(node, visit);
+  };
+  visit(readerAst);
+  assert.ok(
+    found,
+    'The regression harness must execute a real reader function.',
+  );
+  return found;
+}
+function compileReader(source, resultName, bindings) {
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: {
+      target: ts.ScriptTarget.ES2022,
+      module: ts.ModuleKind.ESNext,
+    },
+  }).outputText;
+  // oxlint-disable-next-line typescript/no-implied-eval -- Execute only parsed repository UI code with deterministic mocks; never user content.
+  return new Function(
+    ...Object.keys(bindings),
+    `${compiled}\nreturn ${resultName};`,
+  )(...Object.values(bindings));
+}
+function readerFunction(name, bindings) {
+  const node = findNode(
+    (node) => ts.isFunctionDeclaration(node) && node.name?.text === name,
+  );
+  return compileReader(node.getText(readerAst), name, bindings);
+}
+function readerEffect(marker, bindings) {
+  const node = findNode(
+    (node) =>
+      ts.isCallExpression(node) &&
+      node.expression.getText(readerAst) === 'useEffect' &&
+      node.arguments[0]?.getText(readerAst).includes(marker),
+  );
+  return compileReader(
+    `const effect = ${node.arguments[0].getText(readerAst)};`,
+    'effect',
+    bindings,
+  )();
+}
 
 const server = await createServer({
   configFile: false,
@@ -486,7 +542,7 @@ try {
     chapterEscaped.includes('&lt;img src=x onerror=&quot;bad&quot;&gt;'),
   );
   assert.doesNotMatch(chapterEscaped, /<img src=x|<[^>]+\sonerror=/);
-  const reader = readFileSync('app/companion-storybook.tsx', 'utf8');
+  const reader = readerSource;
   assert.match(
     reader,
     /storybookChapterTitle\(book, activePage\)/,
@@ -502,8 +558,328 @@ try {
     /!theme && <SceneDetails/,
     'New forest plot overlays cannot leak into other worlds.',
   );
+
+  // Execute the actual async UI handler, retaining control of late responses.
+  function exportHarness({
+    pages = book.pages,
+    theme,
+    failOnAbort = false,
+  } = {}) {
+    const exportJob = { current: null };
+    const pending = [];
+    const downloads = [];
+    const statuses = [];
+    const exporting = [];
+    const timers = new Map();
+    const listeners = new Map();
+    const exportOptions = [];
+    const frame = {
+      current: {
+        closest: (selector) => {
+          assert.equal(selector, 'dialog');
+          return {
+            addEventListener: (name, callback) => listeners.set(name, callback),
+            removeEventListener: (name) => listeners.delete(name),
+          };
+        },
+      },
+    };
+    const bindings = {
+      exportJob,
+      book: { ...book, pages, illustrationTheme: theme },
+      name: '달콩',
+      portrait: { src: png },
+      window: {
+        setTimeout: (callback, delay) => {
+          assert.equal(delay, 15_000);
+          timers.set(1, callback);
+          return 1;
+        },
+        clearTimeout: (id) => timers.delete(id),
+      },
+      setExporting: (value) => exporting.push(value),
+      setExportStatus: (value) => statuses.push(value),
+      loadStorybookIllustration: (scene, signal) =>
+        new Promise((resolve, reject) => {
+          pending.push({ scene, signal, resolve });
+          if (failOnAbort)
+            signal.addEventListener('abort', () => reject(signal.reason), {
+              once: true,
+            });
+        }),
+      exportStorybookHtml: (value, options) => {
+        exportOptions.push(options);
+        return exportStorybookHtml(value, options);
+      },
+      downloadLocalFile: (...args) => downloads.push(args),
+    };
+    return {
+      exportJob,
+      pending,
+      downloads,
+      statuses,
+      exporting,
+      timers,
+      listeners,
+      exportOptions,
+      keep: readerFunction('keepBook', bindings),
+      cancel: readerFunction('cancelBookExport', { exportJob }),
+      cleanup: readerEffect("modal?.addEventListener('cancel'", {
+        frame,
+        exportJob,
+      }),
+      resolve: () => pending.forEach((request) => request.resolve(png)),
+    };
+  }
+  const completeExport = exportHarness({ pages: longPages });
+  const firstExport = completeExport.keep();
+  await completeExport.keep();
+  assert.equal(
+    completeExport.pending.length,
+    5,
+    'At most five distinct local backgrounds are requested, even after an immediate second click or for a 12-page book.',
+  );
+  completeExport.resolve();
+  await firstExport;
+  assert.equal(completeExport.downloads.length, 1);
+  assert.equal(completeExport.exportOptions[0].illustrations.length, 12);
+  assert.ok(
+    completeExport.exportOptions[0].illustrations.every(
+      (value) => value === png,
+    ),
+  );
+  assert.deepEqual(completeExport.exporting, [true, false]);
+  assert.equal(completeExport.timers.size, 0);
+  completeExport.cleanup();
+
+  for (const exit of ['button', 'cancel', 'close', 'unmount']) {
+    const canceled = exportHarness();
+    const operation = canceled.keep();
+    if (exit === 'button') canceled.cancel();
+    else if (exit === 'unmount') canceled.cleanup();
+    else canceled.listeners.get(exit)();
+    assert.ok(canceled.pending.every((request) => request.signal.aborted));
+    const statusesAtClose = canceled.statuses.length;
+    // A response that ignores abort may still arrive after close; it must be inert.
+    canceled.resolve();
+    await operation;
+    assert.equal(
+      canceled.downloads.length,
+      0,
+      `${exit}: no surprise late download`,
+    );
+    assert.equal(
+      canceled.statuses.length,
+      statusesAtClose,
+      `${exit}: no stale status update`,
+    );
+    assert.deepEqual(
+      canceled.exporting,
+      [true],
+      `${exit}: no state updates after close`,
+    );
+    assert.equal(canceled.exportJob.current, null);
+    assert.equal(canceled.timers.size, 0);
+    canceled.cleanup();
+    assert.equal(canceled.listeners.size, 0);
+  }
+  const timedOut = exportHarness({ failOnAbort: true });
+  const timeoutOperation = timedOut.keep();
+  timedOut.timers.get(1)();
+  await timeoutOperation;
+  assert.equal(timedOut.downloads.length, 0);
+  assert.match(timedOut.statuses.at(-1), /시간이 오래 걸려/);
+  assert.deepEqual(
+    timedOut.exporting,
+    [true, false],
+    'A timeout leaves the retry action available.',
+  );
+  assert.equal(timedOut.exportJob.current, null);
+  timedOut.cleanup();
+  const worldExport = exportHarness({ theme: 'ocean' });
+  await worldExport.keep();
+  assert.equal(worldExport.pending.length, 0);
+  assert.equal(worldExport.downloads.length, 1);
+  worldExport.cleanup();
+
+  // Abort is forwarded to actual fetch and to a FileReader already in progress.
+  const rasterReads = [];
+  let rasterAborts = 0;
+  let responseSize = 50;
+  let responseType = 'image/webp';
+  const loadIllustration = readerFunction('loadStorybookIllustration', {
+    fetch: async (url, options) => {
+      assert.equal(url, '/moon-forest-scene-2.webp');
+      assert.ok(options.signal instanceof AbortSignal);
+      return {
+        ok: true,
+        blob: async () => ({ size: responseSize, type: responseType }),
+      };
+    },
+    FileReader: class {
+      result = png;
+      readAsDataURL() {
+        rasterReads.push(this);
+      }
+      abort() {
+        rasterAborts += 1;
+      }
+    },
+  });
+  const rasterJob = new AbortController();
+  const rasterRead = loadIllustration(2, rasterJob.signal);
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(rasterReads.length, 1);
+  rasterJob.abort();
+  await assert.rejects(rasterRead, { name: 'AbortError' });
+  assert.equal(rasterAborts, 1);
+  assert.equal(rasterReads[0].onload, null);
+  assert.equal(rasterReads[0].onerror, null);
+  responseSize = 4 * 1024 * 1024 + 1;
+  assert.equal(await loadIllustration(2, new AbortController().signal), null);
+  responseSize = 10;
+  responseType = 'text/html';
+  assert.equal(await loadIllustration(2, new AbortController().signal), null);
+  assert.equal(
+    rasterReads.length,
+    1,
+    'Oversized or HTML error responses never enter raster decoding.',
+  );
+
+  // Page change never touches window/document scrolling, even at the boundaries.
+  const changedPages = [];
+  let stoppedSpeech = 0;
+  const pageMoved = { current: false };
+  const changePage = readerFunction('changePage', {
+    book,
+    activePage: 0,
+    pageMoved,
+    stopSpeech: () => stoppedSpeech++,
+    setSpeechError: () => {},
+    setPage: (next) => changedPages.push(next),
+  });
+  changePage(-1);
+  changePage(NaN);
+  changePage(1.5);
+  assert.equal(changedPages.length, 0);
+  changePage(99);
+  assert.deepEqual(changedPages, [4]);
+  assert.equal(
+    stoppedSpeech,
+    1,
+    'A real page change stops the previous narration.',
+  );
+  assert.equal(pageMoved.current, true);
+  const scrollActions = [];
+  const frame = {
+    current: {
+      focus: (options) => scrollActions.push(['focus', options]),
+      closest: (selector) => {
+        assert.equal(selector, 'dialog');
+        return {
+          scrollTo: (options) => scrollActions.push(['dialog', options]),
+        };
+      },
+    },
+  };
+  readerEffect('pageMoved.current', { pageMoved, frame });
+  assert.deepEqual(scrollActions, [
+    ['focus', { preventScroll: true }],
+    ['dialog', { top: 0, behavior: 'instant' }],
+  ]);
+  assert.equal(pageMoved.current, false);
+  readerEffect('pageMoved.current', { pageMoved, frame });
+  assert.equal(
+    scrollActions.length,
+    2,
+    'Initial render does not unexpectedly move focus or scroll.',
+  );
+  assert.doesNotMatch(reader, /\.scrollIntoView\(/);
+  const keyboardPages = [];
+  const handlePageKey = readerFunction('handlePageKey', {
+    book,
+    activePage: 2,
+    changePage: (next) => keyboardPages.push(next),
+  });
+  for (const key of ['ArrowLeft', 'ArrowRight', 'Home', 'End']) {
+    let prevented = false;
+    let stopped = false;
+    handlePageKey({
+      key,
+      nativeEvent: {},
+      preventDefault: () => {
+        prevented = true;
+      },
+      stopPropagation: () => {
+        stopped = true;
+      },
+    });
+    assert.ok(prevented && stopped);
+  }
+  assert.deepEqual(keyboardPages, [1, 3, 0, 4]);
+  for (const override of [
+    { key: 'Tab' },
+    { ctrlKey: true },
+    { shiftKey: true },
+    { altKey: true },
+    { metaKey: true },
+    { nativeEvent: { isComposing: true } },
+    { defaultPrevented: true },
+  ]) {
+    handlePageKey({ key: 'ArrowRight', nativeEvent: {}, ...override });
+  }
+  assert.equal(
+    keyboardPages.length,
+    4,
+    'Browser shortcuts, Tab and composing input are not intercepted.',
+  );
+
+  const styles = postcss.parse(
+    readFileSync('app/companion-storybook.css', 'utf8'),
+  );
+  const lockedSelectors = new Set();
+  styles.walkRules((rule) => {
+    if (!rule.selector.includes(':has(.cw-book-dialog[open]')) return;
+    assert.equal(rule.parent.type, 'atrule');
+    assert.equal(
+      rule.parent.params,
+      'screen',
+      'Body scroll lock must never clip printed pages.',
+    );
+    for (const selector of rule.selectors) lockedSelectors.add(selector);
+    assert.ok(
+      rule.nodes.some(
+        (declaration) =>
+          declaration.prop === 'overflow' && declaration.value === 'hidden',
+      ),
+    );
+  });
+  assert.ok(lockedSelectors.has('html:has(.cw-book-dialog[open] .csb-reader)'));
+  assert.ok(lockedSelectors.has('body:has(.cw-book-dialog[open] .csb-reader)'));
+  let touchTargets = 0;
+  styles.walkRules('.csb-page-dots > button', (rule) => {
+    assert.ok(
+      rule.nodes.some(
+        (declaration) =>
+          declaration.prop === 'width' && declaration.value === '44px',
+      ),
+    );
+    assert.ok(
+      rule.nodes.some(
+        (declaration) =>
+          declaration.prop === 'height' && declaration.value === '44px',
+      ),
+    );
+    touchTargets++;
+  });
+  assert.equal(
+    touchTargets,
+    1,
+    'Mobile must not override the 44px page targets with tiny buttons.',
+  );
   console.log(
-    'Offline storybook export passed: complete ordered pages, immutable hero, 8 forest branches + 8 illustrated worlds, strict chapter/theme validation and backup round-trip, legacy compatibility, script/network-free HTML, escaping, raster validation and print layout rules.',
+    'Offline storybook export passed: complete ordered pages, immutable hero, all branches/worlds, escaping/raster/print safety, canceled-close/unmount/timeout and duplicate download races, scoped modal scroll, keyboard pages and 44px mobile targets.',
   );
 } finally {
   await server.close();

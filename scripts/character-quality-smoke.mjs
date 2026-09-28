@@ -185,8 +185,8 @@ globalThis.fetch = async (url, init) => {
   if (expected.throw) throw expected.throw;
   if (expected.status)
     return Response.json(
-      { error: 'offline provider outage' },
-      { status: expected.status },
+      { error: 'private-provider-debug-do-not-expose' },
+      { status: expected.status, headers: expected.headers },
     );
   if (expected.refusal)
     return Response.json({
@@ -225,6 +225,7 @@ async function request({
   style = 0,
   contentLength,
   stream = false,
+  clientId,
 } = {}) {
   const form = new FormData();
   form.append(
@@ -243,7 +244,7 @@ async function request({
       }),
       'review.bin',
     );
-  const headers = { 'x-forwarded-for': `offline-${requestId++}` };
+  const headers = { 'x-forwarded-for': clientId ?? `offline-${requestId++}` };
   if (contentLength) headers['content-length'] = String(contentLength);
   if (stream) headers.accept = 'application/x-ndjson';
   const response = await route.POST(
@@ -395,7 +396,9 @@ exhausted();
 
 plan({ kind: 'image' }, { kind: 'review', refusal: true });
 result = await request();
-assert.equal(result.data.code, 'quality_failed');
+assert.equal(result.data.code, 'quality_review_refused');
+assert.equal(result.data.retryable, false);
+assert.equal(result.response.status, 422);
 assert.equal(
   result.data.reviewTicket,
   undefined,
@@ -403,6 +406,72 @@ assert.equal(
 );
 assert.equal(calls.length, 2);
 exhausted();
+
+for (const stream of [false, true]) {
+  for (const status of [400, 401, 403, 404, 415, 422]) {
+    plan({ kind: 'image', status });
+    const rejected = await request({ stream });
+    const isConfiguration = [401, 403, 404].includes(status);
+    assert.equal(
+      rejected.data.code,
+      isConfiguration ? 'provider_unavailable' : 'generation_request_rejected',
+    );
+    assert.equal(rejected.data.retryable, false);
+    assert.equal(rejected.data.image, undefined);
+    assert.equal(rejected.data.reviewTicket, undefined);
+    assert.equal(
+      JSON.stringify(rejected.data).includes('private-provider-debug'),
+      false,
+    );
+    assert.equal(
+      calls.length,
+      1,
+      'A rejected image request never purchases a review or correction.',
+    );
+    if (stream) {
+      assert.equal(rejected.events.at(-1).type, 'error');
+      assert.equal(rejected.events.at(-1).status, isConfiguration ? 503 : 422);
+    } else assert.equal(rejected.response.status, isConfiguration ? 503 : 422);
+    exhausted();
+  }
+  for (const status of [408, 429, 500, 503]) {
+    plan({ kind: 'image', status, headers: { 'Retry-After': '7' } });
+    const busy = await request({ stream });
+    assert.equal(busy.data.code, 'upstream_busy');
+    assert.equal(busy.data.retryable, true);
+    assert.equal(busy.data.retryAfterMs, 7000);
+    assert.equal(busy.data.image, undefined);
+    assert.equal(
+      JSON.stringify(busy.data).includes('private-provider-debug'),
+      false,
+    );
+    assert.equal(calls.length, 1);
+    exhausted();
+  }
+}
+
+// A provider refusal/outage during the sole correction retains its real
+// recovery meaning instead of masquerading as another poor-quality drawing.
+for (const status of [403, 503]) {
+  plan(
+    { kind: 'image' },
+    { kind: 'review', review: { ...passing, score: 70 } },
+    { kind: 'image', status },
+  );
+  const failedCorrection = await request();
+  assert.equal(
+    failedCorrection.data.code,
+    status === 403 ? 'provider_unavailable' : 'upstream_busy',
+  );
+  assert.equal(failedCorrection.data.retryable, status === 503);
+  assert.equal(
+    calls.length,
+    3,
+    'Correction failure cannot start another edit or review.',
+  );
+  assert.equal(failedCorrection.data.image, undefined);
+  exhausted();
+}
 
 const realNow = Date.now;
 try {
@@ -498,6 +567,129 @@ result = await request();
 const correctedTicket = result.data.reviewTicket;
 assert.ok(correctedTicket);
 exhausted();
+
+// Resume admission is independent from paid image-generation admission.
+// Invalid/mismatched receipts do not consume either allowance.
+const quotaClient = 'quota-boundary-client';
+for (let index = 0; index < 10; index++) {
+  plan();
+  const invalid = await request({
+    clientId: quotaClient,
+    reviewTicket: Buffer.from('invalid-ticket').toString('base64'),
+  });
+  assert.equal(invalid.data.code, 'review_ticket_invalid');
+  assert.equal(calls.length, 0);
+  exhausted();
+}
+for (let index = 0; index < 8; index++) {
+  plan({ kind: 'image' }, { kind: 'review' });
+  assert.equal((await request({ clientId: quotaClient })).response.status, 200);
+  exhausted();
+}
+plan({ kind: 'image' }, { kind: 'review', status: 503 });
+const ninth = await request({ clientId: quotaClient });
+assert.ok(
+  ninth.data.reviewTicket,
+  'The final allowed image can still receive a recovery ticket.',
+);
+exhausted();
+plan();
+const tenth = await request({ clientId: quotaClient });
+assert.equal(
+  tenth.data.code,
+  'rate_limited',
+  'The original nine-image allowance is unchanged.',
+);
+assert.equal(calls.length, 0);
+exhausted();
+const ninthTicket = ninth.data.reviewTicket;
+for (const change of [{ drawing: png(111) }, { style: 1 }]) {
+  plan();
+  const invalid = await request({
+    clientId: quotaClient,
+    reviewTicket: ninthTicket,
+    ...change,
+  });
+  assert.equal(invalid.data.code, 'review_ticket_invalid');
+  assert.equal(calls.length, 0);
+  exhausted();
+}
+for (let attempt = 0; attempt < 3; attempt++) {
+  plan({ kind: 'review', ...(attempt > 0 ? { status: 503 } : {}) });
+  const resumed = await request({
+    clientId: quotaClient,
+    reviewTicket: ninthTicket,
+  });
+  assert.equal(
+    resumed.data.code,
+    attempt > 0 ? 'quality_review_failed' : undefined,
+  );
+  if (attempt === 0) assert.equal(resumed.data.quality.passed, true);
+  assert.equal(calls.length, 1);
+  assert.equal(
+    calls[0].kind,
+    'review',
+    'A resume never generates a new image.',
+  );
+  exhausted();
+}
+for (const clientId of [quotaClient, 'different-client-same-ticket']) {
+  plan();
+  const exhaustedTicket = await request({
+    clientId,
+    reviewTicket: ninthTicket,
+    stream: true,
+  });
+  assert.equal(exhaustedTicket.data.code, 'review_retry_exhausted');
+  assert.equal(exhaustedTicket.data.retryable, false);
+  assert.equal(exhaustedTicket.data.image, undefined);
+  assert.equal(exhaustedTicket.data.reviewTicket, undefined);
+  assert.equal(exhaustedTicket.events.at(-1).status, 429);
+  assert.equal(
+    calls.length,
+    0,
+    'Changing client IP cannot evade a ticket lifetime limit.',
+  );
+  exhausted();
+}
+
+const reviewClient = 'separate-review-quota-client';
+const reviewTickets = [];
+for (let index = 0; index < 4; index++) {
+  plan({ kind: 'image' }, { kind: 'review', status: 503 });
+  const generated = await request({ clientId: reviewClient });
+  assert.ok(generated.data.reviewTicket);
+  reviewTickets.push(generated.data.reviewTicket);
+  exhausted();
+}
+for (const reviewTicket of reviewTickets.slice(0, 3))
+  for (let attempt = 0; attempt < 3; attempt++) {
+    plan({ kind: 'review' });
+    assert.equal(
+      (await request({ clientId: reviewClient, reviewTicket })).response.status,
+      200,
+    );
+    exhausted();
+  }
+plan();
+const exhaustedClient = await request({
+  clientId: reviewClient,
+  reviewTicket: reviewTickets[3],
+});
+assert.equal(exhaustedClient.data.code, 'review_retry_exhausted');
+assert.equal(
+  calls.length,
+  0,
+  'Using another valid ticket cannot evade the per-client review allowance.',
+);
+exhausted();
+plan({ kind: 'image' }, { kind: 'review' });
+assert.equal(
+  (await request({ clientId: reviewClient })).response.status,
+  200,
+  'Review attempts never consume the separate image allowance.',
+);
+exhausted();
 plan({ kind: 'review' });
 result = await request({ reviewTicket: correctedTicket });
 assert.equal(result.data.quality.polished, true);
@@ -524,5 +716,5 @@ assert.equal(result.data.image, undefined);
 exhausted();
 
 console.log(
-  'character-quality smoke passed: strict numeric/boolean gates, bounded correction + re-review, encrypted expiring source-bound review-only retries, no unreviewed image exposure, payload caps; all provider calls mocked.',
+  'character-quality smoke passed: strict numeric/boolean gates, bounded correction + re-review, encrypted expiring source-bound review-only retries, separate bounded image/review allowances, safe permanent/transient provider errors, no unreviewed image exposure, payload caps; all provider calls mocked.',
 );

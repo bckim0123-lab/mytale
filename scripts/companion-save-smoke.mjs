@@ -307,6 +307,100 @@ try {
     null,
   );
 
+  // Lock denial is an expected storage failure, not a rejected public API or a
+  // permanently stuck reset operation. Never bypass the lock to write anyway.
+  const originalNavigator = Object.getOwnPropertyDescriptor(
+    globalThis,
+    'navigator',
+  );
+  try {
+    const failures = [
+      {
+        request() {
+          throw new DOMException('Lock denied', 'SecurityError');
+        },
+      },
+      {
+        request() {
+          return Promise.reject(
+            new DOMException('Lock canceled', 'AbortError'),
+          );
+        },
+      },
+    ];
+    for (const locks of failures) {
+      const deniedStorage = new MemoryStorage();
+      assert.equal(saveCompanionSave(custom, deniedStorage).ok, true);
+      const base = readCompanionSave(deniedStorage).snapshot;
+      const originalRecord = deniedStorage.getItem(COMPANION_SAVE_KEY);
+      const deniedSession = new CompanionStorageSession({
+        storage: deniedStorage,
+      });
+      deniedSession.hydrate();
+      Object.defineProperty(globalThis, 'navigator', {
+        configurable: true,
+        value: { locks },
+      });
+
+      const deniedWrite = await persistCompanionSave(
+        { ...custom, name: '저장되지 않아야 할 이름' },
+        { base, storage: deniedStorage },
+      );
+      assert.equal(deniedWrite.ok, false);
+      assert.equal(deniedWrite.code, 'unavailable');
+      assert.ok(deniedWrite.error);
+      assert.equal(deniedStorage.getItem(COMPANION_SAVE_KEY), originalRecord);
+      const deniedReset = await deniedSession.reset();
+      assert.equal(deniedReset.ok, false);
+      assert.ok(deniedReset.error);
+      assert.equal(deniedStorage.getItem(COMPANION_SAVE_KEY), originalRecord);
+      assert.deepEqual(deniedSession.getState().save, custom);
+
+      // Once the browser lock works again, both APIs and the same session must
+      // remain usable. Reset must not leave its operation guard permanently set.
+      let acquired = 0;
+      Object.defineProperty(globalThis, 'navigator', {
+        configurable: true,
+        value: {
+          locks: {
+            async request(name, work) {
+              assert.equal(name, `${COMPANION_SAVE_KEY}:write`);
+              acquired++;
+              return work();
+            },
+          },
+        },
+      });
+      deniedSession.commitSave((save) => ({
+        ...save,
+        name: '다시 저장한 친구',
+      }));
+      await deniedSession.flush();
+      assert.equal(
+        readCompanionSave(deniedStorage).save.name,
+        '다시 저장한 친구',
+      );
+      assert.equal(deniedSession.getState().blocked, false);
+      assert.equal((await deniedSession.reset()).ok, true);
+      assert.equal(readCompanionSave(deniedStorage).status, 'empty');
+      assert.equal(acquired, 2, 'Retry still goes through the cross-tab lock.');
+      const staleWrite = await persistCompanionSave(custom, {
+        base,
+        storage: deniedStorage,
+      });
+      assert.equal(staleWrite.ok, false);
+      assert.equal(
+        staleWrite.code,
+        'reset',
+        'A recovered reset still invalidates old tabs.',
+      );
+    }
+  } finally {
+    if (originalNavigator)
+      Object.defineProperty(globalThis, 'navigator', originalNavigator);
+    else delete globalThis.navigator;
+  }
+
   for (const corrupted of [
     '{invalid json',
     'null',

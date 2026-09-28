@@ -16,6 +16,58 @@ import {
 
 export type ForestPoint = { x: number; z: number };
 
+type WorldPointer = {
+  pointerId: number;
+  clientX: number;
+  clientY: number;
+};
+
+/** One gesture has one owner. Tap tolerance is measured from the initial press,
+ * independently from the per-frame delta used to orbit the home camera. */
+export function createWorldPointerGesture() {
+  let pointerId: number | null = null;
+  let startX = 0,
+    startY = 0,
+    previousX = 0,
+    dragged = false;
+  function move(event: WorldPointer) {
+    if (pointerId !== event.pointerId) return null;
+    const dx = event.clientX - previousX;
+    previousX = event.clientX;
+    if (Math.abs(event.clientX - startX) + Math.abs(event.clientY - startY) > 6)
+      dragged = true;
+    return dx;
+  }
+  return {
+    get pointerId() {
+      return pointerId;
+    },
+    begin(event: WorldPointer & { button: number; isPrimary?: boolean }) {
+      if (pointerId !== null || event.button !== 0 || event.isPrimary === false)
+        return false;
+      pointerId = event.pointerId;
+      startX = previousX = event.clientX;
+      startY = event.clientY;
+      dragged = false;
+      return true;
+    },
+    move,
+    end(event: WorldPointer) {
+      const dx = move(event);
+      if (dx === null) return null;
+      const tap = !dragged;
+      pointerId = null;
+      return { tap, dx };
+    },
+    cancel(owner?: number) {
+      if (pointerId === null || (owner !== undefined && pointerId !== owner))
+        return false;
+      pointerId = null;
+      return true;
+    },
+  };
+}
+
 export function forestPlushTargetYaw(
   moving: boolean,
   movement: ForestPoint,
@@ -34,7 +86,7 @@ export function bindForestHotspotButton(
   activate: () => void,
 ) {
   const press = (event: PointerEvent) => {
-    if (event.button !== 0) return;
+    if (event.button !== 0 || event.isPrimary === false) return;
     event.preventDefault();
     event.stopPropagation();
     activate();
@@ -1229,7 +1281,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
       button.setAttribute('aria-label', `${hot.label} · 이동하기`);
       labelDisposers.push(
         bindForestHotspotButton(button, () => {
-          down.active = false;
+          cancelPointerGesture();
           walkTo(hot.id);
         }),
       );
@@ -1388,7 +1440,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
     options.onStatus(`${hot.label} 쪽으로 가고 있어요`);
     navigate(new T.Vector3(hot.x, 0, hot.z + 0.5), id);
   }
-  const down = { x: 0, y: 0, active: false, moved: false };
+  const pointerGesture = createWorldPointerGesture();
   let pressedTarget: { id: string } | { point: T.Vector3 } | null = null;
   function pickForestTarget(e: PointerEvent) {
     const bounds = renderer.domElement.getBoundingClientRect();
@@ -1417,32 +1469,24 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
     return null;
   }
   function pointerDown(e: PointerEvent) {
-    if (e.button !== 0) return;
-    down.x = e.clientX;
-    down.y = e.clientY;
-    down.active = true;
-    down.moved = false;
+    if (!pointerGesture.begin(e)) return;
     pressedTarget = home ? null : pickForestTarget(e);
     renderer.domElement.setPointerCapture(e.pointerId);
     renderer.domElement.focus({ preventScroll: true });
   }
   function pointerMove(e: PointerEvent) {
-    if (!down.active) return;
-    const dx = e.clientX - down.x;
-    if (Math.abs(dx) + Math.abs(e.clientY - down.y) > 6) down.moved = true;
-    if (home) {
-      orbit -= dx * 0.009;
-      down.x = e.clientX;
-    }
+    const dx = pointerGesture.move(e);
+    if (dx !== null && home) orbit -= dx * 0.009;
   }
   function pointerUp(e: PointerEvent) {
-    if (!down.active) return;
-    down.active = false;
+    const ended = pointerGesture.end(e);
+    if (!ended) return;
     const selected = pressedTarget;
     pressedTarget = null;
     if (renderer.domElement.hasPointerCapture(e.pointerId))
       renderer.domElement.releasePointerCapture(e.pointerId);
-    if (down.moved) return;
+    if (home) orbit -= ended.dx * 0.009;
+    if (!ended.tap) return;
     if (home) {
       react('pet');
       options.onPet();
@@ -1450,6 +1494,16 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
     }
     if (selected && 'id' in selected) walkTo(selected.id);
     else if (selected) navigate(selected.point, null);
+  }
+  function cancelPointerGesture() {
+    const owner = pointerGesture.pointerId;
+    pointerGesture.cancel();
+    pressedTarget = null;
+    if (owner !== null && renderer.domElement.hasPointerCapture(owner))
+      renderer.domElement.releasePointerCapture(owner);
+  }
+  function pointerCancel(e: PointerEvent) {
+    if (pointerGesture.pointerId === e.pointerId) stop();
   }
   function keyDown(e: KeyboardEvent) {
     if (home) return;
@@ -1474,8 +1528,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
   function stop() {
     keys.clear();
     joystick.set(0, 0);
-    down.active = false;
-    pressedTarget = null;
+    cancelPointerGesture();
     destination = null;
     pendingId = null;
     journeyTarget = null;
@@ -1488,7 +1541,8 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
   renderer.domElement.addEventListener('pointerdown', pointerDown);
   renderer.domElement.addEventListener('pointermove', pointerMove);
   renderer.domElement.addEventListener('pointerup', pointerUp);
-  renderer.domElement.addEventListener('pointercancel', blur);
+  renderer.domElement.addEventListener('pointercancel', pointerCancel);
+  renderer.domElement.addEventListener('lostpointercapture', pointerCancel);
   renderer.domElement.addEventListener('keydown', keyDown);
   renderer.domElement.addEventListener('blur', blur);
   window.addEventListener('keyup', keyUp);
@@ -2239,7 +2293,11 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
       renderer.domElement.removeEventListener('pointerdown', pointerDown);
       renderer.domElement.removeEventListener('pointermove', pointerMove);
       renderer.domElement.removeEventListener('pointerup', pointerUp);
-      renderer.domElement.removeEventListener('pointercancel', blur);
+      renderer.domElement.removeEventListener('pointercancel', pointerCancel);
+      renderer.domElement.removeEventListener(
+        'lostpointercapture',
+        pointerCancel,
+      );
       renderer.domElement.removeEventListener('keydown', keyDown);
       renderer.domElement.removeEventListener('blur', blur);
       window.removeEventListener('keyup', keyUp);

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
 import {
   ChevronLeft,
   ChevronRight,
@@ -391,6 +391,53 @@ export function CompanionStorybook(props: StorybookProps) {
   return <CompanionStorybookReader key={props.book.id} {...props} />;
 }
 
+/** A book export owns these requests, including an in-progress raster read. */
+async function loadStorybookIllustration(
+  scene: number,
+  signal: AbortSignal,
+): Promise<string | null> {
+  try {
+    signal.throwIfAborted();
+    const response = await fetch(`/moon-forest-scene-${scene}.webp`, {
+      signal,
+    });
+    if (!response.ok) return null;
+    const blob = await response.blob();
+    signal.throwIfAborted();
+    // These are small bundled backgrounds; never decode an unbounded response.
+    if (blob.size > 4 * 1024 * 1024 || blob.type !== 'image/webp') return null;
+    return await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      const cleanup = () => {
+        signal.removeEventListener('abort', abort);
+        reader.onload = null;
+        reader.onerror = null;
+      };
+      const abort = () => {
+        cleanup();
+        reader.abort();
+        reject(new DOMException('책 저장을 취소했어요.', 'AbortError'));
+      };
+      reader.onload = () => {
+        cleanup();
+        if (typeof reader.result === 'string') resolve(reader.result);
+        else reject(new TypeError('그림 파일을 읽지 못했어요.'));
+      };
+      reader.onerror = () => {
+        cleanup();
+        reject(new TypeError('그림 파일을 읽지 못했어요.'));
+      };
+      signal.addEventListener('abort', abort, { once: true });
+      if (signal.aborted) abort();
+      else reader.readAsDataURL(blob);
+    });
+  } catch (error) {
+    if (signal.aborted) throw error;
+    // An unavailable optional backdrop must not discard the saved story.
+    return null;
+  }
+}
+
 function CompanionStorybookReader({
   book,
   fallbackName,
@@ -409,8 +456,34 @@ function CompanionStorybookReader({
   const [exportStatus, setExportStatus] = useState('');
   const speech = useRef<SpeechSynthesisUtterance | null>(null);
   const localVoice = useRef<SpeechSynthesisVoice | null>(null);
-  const frame = useRef<HTMLDivElement>(null);
+  const frame = useRef<HTMLElement>(null);
+  const pageMoved = useRef(false);
+  const exportJob = useRef<AbortController | null>(null);
   const activePage = Math.min(page, book.pages.length - 1);
+
+  useEffect(() => {
+    const modal = frame.current?.closest('dialog');
+    const cancel = () => {
+      const pending = exportJob.current;
+      exportJob.current = null;
+      pending?.abort();
+    };
+    modal?.addEventListener('cancel', cancel);
+    modal?.addEventListener('close', cancel);
+    return () => {
+      modal?.removeEventListener('cancel', cancel);
+      modal?.removeEventListener('close', cancel);
+      cancel();
+    };
+  }, []);
+  useEffect(() => {
+    if (!pageMoved.current) return;
+    pageMoved.current = false;
+    // scrollIntoView also scrolls the page behind a native dialog. Only move
+    // this book's scroll container, after React has rendered its new chapter.
+    frame.current?.focus({ preventScroll: true });
+    frame.current?.closest('dialog')?.scrollTo({ top: 0, behavior: 'instant' });
+  }, [activePage]);
 
   useEffect(() => {
     if (
@@ -491,43 +564,67 @@ function CompanionStorybookReader({
     }
   }
   function changePage(next: number) {
+    const nextPage = Math.max(0, Math.min(book.pages.length - 1, next));
+    if (!Number.isInteger(nextPage) || nextPage === activePage) return;
     stopSpeech();
     setSpeechError('');
-    setPage(next);
-    frame.current?.scrollIntoView({ behavior: 'instant', block: 'nearest' });
+    pageMoved.current = true;
+    setPage(nextPage);
+  }
+  function handlePageKey(event: KeyboardEvent<HTMLElement>) {
+    if (
+      event.defaultPrevented ||
+      event.altKey ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.shiftKey ||
+      event.nativeEvent.isComposing
+    )
+      return;
+    const next =
+      event.key === 'ArrowLeft'
+        ? activePage - 1
+        : event.key === 'ArrowRight'
+          ? activePage + 1
+          : event.key === 'Home'
+            ? 0
+            : event.key === 'End'
+              ? book.pages.length - 1
+              : null;
+    if (next === null) return;
+    event.preventDefault();
+    event.stopPropagation();
+    changePage(next);
+  }
+  function cancelBookExport() {
+    const pending = exportJob.current;
+    exportJob.current = null;
+    pending?.abort();
   }
 
   async function keepBook() {
-    if (exporting) return;
+    // A ref also guards two clicks before React has painted the disabled state.
+    if (exportJob.current) return;
+    const job = new AbortController();
+    exportJob.current = job;
+    const timeout = window.setTimeout(() => job.abort(), 15_000);
     setExporting(true);
     setExportStatus(
       `친구와 ${book.pages.length}장의 이야기를 한 권에 담고 있어요…`,
     );
     try {
-      const illustrations = book.illustrationTheme
+      const sceneImages = book.illustrationTheme
         ? []
         : await Promise.all(
-            book.pages.map(async (_, index) => {
-              try {
-                const response = await fetch(
-                  `/moon-forest-scene-${Math.min(index + 1, 5)}.webp`,
-                );
-                if (!response.ok) return null;
-                const blob = await response.blob();
-                return await new Promise<string>((resolve, reject) => {
-                  const reader = new FileReader();
-                  reader.onload = () =>
-                    typeof reader.result === 'string'
-                      ? resolve(reader.result)
-                      : reject(new TypeError('그림 파일을 읽지 못했어요.'));
-                  reader.onerror = reject;
-                  reader.readAsDataURL(blob);
-                });
-              } catch {
-                return null;
-              }
-            }),
+            Array.from({ length: Math.min(book.pages.length, 5) }, (_, index) =>
+              loadStorybookIllustration(index + 1, job.signal),
+            ),
           );
+      job.signal.throwIfAborted();
+      if (exportJob.current !== job) return;
+      const illustrations = book.illustrationTheme
+        ? []
+        : book.pages.map((_, index) => sceneImages[Math.min(index, 4)]);
       const html = exportStorybookHtml(book, {
         name,
         image: portrait.src || undefined,
@@ -542,9 +639,18 @@ function CompanionStorybookReader({
         '책 파일을 내려받았어요. 인터넷 없이 열어 읽고, 브라우저에서 인쇄하거나 PDF로 저장할 수 있어요.',
       );
     } catch {
-      setExportStatus('책 파일을 만들지 못했어요. 잠시 뒤 다시 눌러 주세요.');
+      if (exportJob.current === job)
+        setExportStatus(
+          job.signal.aborted
+            ? '그림을 담는 데 시간이 오래 걸려 멈췄어요. 연결을 확인하고 다시 눌러 주세요.'
+            : '책 파일을 만들지 못했어요. 잠시 뒤 다시 눌러 주세요.',
+        );
     } finally {
-      setExporting(false);
+      window.clearTimeout(timeout);
+      if (exportJob.current === job) {
+        exportJob.current = null;
+        setExporting(false);
+      }
     }
   }
 
@@ -593,6 +699,7 @@ function CompanionStorybookReader({
               className="csb-close"
               onClick={() => {
                 stopSpeech();
+                cancelBookExport();
                 onClose();
               }}
               aria-label="동화책 닫기"
@@ -602,7 +709,15 @@ function CompanionStorybookReader({
           )}
         </div>
       </header>
-      <div className="csb-screen-page" ref={frame} aria-live="polite">
+      {/* oxlint-disable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex -- This labelled reading region intentionally accepts focus so keyboard readers can turn pages without returning to the controls. */}
+      <section
+        className="csb-screen-page"
+        ref={frame}
+        tabIndex={0}
+        aria-label={`${book.pages.length}장 중 ${activePage + 1}장 · ${storybookChapterTitle(book, activePage)}`}
+        aria-keyshortcuts="ArrowLeft ArrowRight Home End"
+        onKeyDown={handlePageKey}
+      >
         <StoryPage
           key={`${book.id}-${activePage}`}
           book={book}
@@ -610,7 +725,8 @@ function CompanionStorybookReader({
           name={name}
           portrait={portrait}
         />
-      </div>
+      </section>
+      {/* oxlint-enable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex */}
       {exportStatus && (
         <output className="csb-privacy-note">{exportStatus}</output>
       )}
@@ -619,6 +735,7 @@ function CompanionStorybookReader({
           type="button"
           disabled={activePage === 0}
           onClick={() => changePage(activePage - 1)}
+          onKeyDown={handlePageKey}
         >
           <ChevronLeft size={20} />
           <span>이전 장</span>
@@ -631,6 +748,7 @@ function CompanionStorybookReader({
               aria-label={`${index + 1}장으로 이동`}
               aria-current={activePage === index ? 'page' : undefined}
               onClick={() => changePage(index)}
+              onKeyDown={handlePageKey}
             >
               <span>{index + 1}</span>
             </button>
@@ -640,6 +758,7 @@ function CompanionStorybookReader({
           type="button"
           disabled={activePage === book.pages.length - 1}
           onClick={() => changePage(activePage + 1)}
+          onKeyDown={handlePageKey}
         >
           <span>다음 장</span>
           <ChevronRight size={20} />

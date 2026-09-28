@@ -24,6 +24,13 @@ const CORRECTION_RESERVE_MS = 105_000;
 const TRUSTED_3D_REFERENCE_SHA256 =
   'cdb11278d8f3bc776c6e5f02d76e8134cd33763c6f2fbfc3de57bb6eb917a697';
 const recentGenerations = new Map<string, number[]>();
+const recentReviews = new Map<string, number[]>();
+const ticketReviews = new Map<
+  string,
+  { attempts: number; expiresAt: number }
+>();
+const RATE_WINDOW_MS = 15 * 60_000;
+const MAX_REVIEW_ATTEMPTS = 3;
 
 export const maxDuration = 300;
 
@@ -87,6 +94,50 @@ function json(
     status,
     headers: { 'Cache-Control': 'no-store', ...headers },
   });
+}
+
+class ImageProviderError extends Error {
+  constructor(
+    readonly code:
+      | 'provider_unavailable'
+      | 'generation_request_rejected'
+      | 'upstream_busy',
+    readonly status: number,
+    readonly retryable: boolean,
+    message: string,
+    readonly retryAfterMs?: number,
+  ) {
+    super(message);
+    this.name = 'ImageProviderError';
+  }
+}
+
+/** A source-bound review ticket can never buy another image or unlimited reviews. */
+function consumeReviewAttempt(
+  clientId: string,
+  ticketId: string,
+  expiresAt: number,
+) {
+  const now = Date.now();
+  for (const [id, entry] of ticketReviews)
+    if (entry.expiresAt <= now) ticketReviews.delete(id);
+  const recent = (recentReviews.get(clientId) ?? []).filter(
+    (time) => now - time < RATE_WINDOW_MS,
+  );
+  const attempts = ticketReviews.get(ticketId)?.attempts ?? 0;
+  if (attempts >= MAX_REVIEW_ATTEMPTS || recent.length >= 9)
+    return json(
+      {
+        error:
+          '가능한 검사 이어하기 횟수를 다 썼어요. 검수 전 결과는 보여 주지 않았어요. 새 모습 만들기는 별도 생성 작업이에요.',
+        code: 'review_retry_exhausted',
+        retryable: false,
+      },
+      429,
+    );
+  recentReviews.set(clientId, [...recent, now]);
+  ticketReviews.set(ticketId, { attempts: attempts + 1, expiresAt });
+  return null;
 }
 
 type CutenessReviewOutcome =
@@ -538,6 +589,18 @@ function qualityFailure() {
   );
 }
 
+function reviewRefused() {
+  return json(
+    {
+      error:
+        '이 결과의 안전 검수를 진행할 수 없어 보여 주지 않았어요. 다른 그림을 골라 주세요.',
+      code: 'quality_review_refused',
+      retryable: false,
+    },
+    422,
+  );
+}
+
 function approvedCharacter(
   image: string,
   index: number,
@@ -642,6 +705,44 @@ async function imageEdit(
   const result = (await response.json().catch(() => ({}))) as {
     data?: Array<{ b64_json?: string }>;
   };
+  if (!response.ok) {
+    if ([401, 403, 404].includes(response.status))
+      throw new ImageProviderError(
+        'provider_unavailable',
+        503,
+        false,
+        'AI 작업실 설정을 확인해야 해서 지금은 만들 수 없어요. 같은 요청을 반복하지 않아도 돼요.',
+      );
+    if (
+      response.status === 429 ||
+      response.status === 408 ||
+      response.status >= 500
+    ) {
+      const header = response.headers.get('retry-after');
+      const seconds =
+        header !== null && /^\d+(?:\.\d+)?$/.test(header.trim())
+          ? Number(header)
+          : Number.NaN;
+      const until = header ? Date.parse(header) - Date.now() : Number.NaN;
+      const delay = Number.isFinite(seconds) ? seconds * 1000 : until;
+      throw new ImageProviderError(
+        'upstream_busy',
+        response.status === 429 ? 429 : 502,
+        true,
+        'AI 작업실이 잠깐 쉬고 있어요. 잠시 뒤 다시 시도해 주세요.',
+        Math.min(
+          RATE_WINDOW_MS,
+          Math.max(1000, Number.isFinite(delay) ? delay : 2000),
+        ),
+      );
+    }
+    throw new ImageProviderError(
+      'generation_request_rejected',
+      422,
+      false,
+      'AI 작업 요청을 처리하지 못했어요. 같은 요청을 반복하기 전에 그림과 작업실 설정을 확인해 주세요.',
+    );
+  }
   return response.ok && typeof result.data?.[0]?.b64_json === 'string'
     ? result.data[0].b64_json
     : null;
@@ -776,26 +877,6 @@ async function handleCharacterRequest(
       request.headers.get('x-forwarded-for')?.split(',')[0] ||
       'local';
     const now = Date.now();
-    const recent = (recentGenerations.get(clientId) || []).filter(
-      (time) => now - time < 15 * 60_000,
-    );
-    if (recent.length >= 9)
-      return json(
-        {
-          error:
-            '친구들이 숨을 고르고 있어요. 잠시 쉬었다가 다시 만들어 주세요.',
-          code: 'rate_limited',
-          retryable: true,
-          retryAfterMs: Math.max(1000, recent[0] + 15 * 60_000 - now),
-        },
-        429,
-        {
-          'Retry-After': String(
-            Math.max(1, Math.ceil((recent[0] + 15 * 60_000 - now) / 1000)),
-          ),
-        },
-      );
-
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey)
       return json(
@@ -807,8 +888,6 @@ async function handleCharacterRequest(
         },
         503,
       );
-    recentGenerations.set(clientId, [...recent, now]);
-
     if (reviewTicket !== null) {
       generationStage = 'resume-review';
       if (!isBinaryFormPart(reviewTicket))
@@ -836,6 +915,12 @@ async function handleCharacterRequest(
           },
           400,
         );
+      const limited = consumeReviewAttempt(
+        clientId,
+        await sourceDigest(ticketBytes),
+        opened.metadata.expiresAt,
+      );
+      if (limited) return limited;
       const candidate = encodeBase64(opened.candidate);
       const alpha = await auditPngAlpha(candidate);
       if (!alpha.transparent) return qualityFailure();
@@ -850,7 +935,7 @@ async function handleCharacterRequest(
         styleReferenceDataUrl,
       );
       operationSignal.throwIfAborted();
-      if (outcome.status === 'refused') return qualityFailure();
+      if (outcome.status === 'refused') return reviewRefused();
       if (outcome.status !== 'reviewed')
         return reviewUnavailable(
           outcome.status,
@@ -869,6 +954,27 @@ async function handleCharacterRequest(
         opened.metadata.corrected,
       );
     }
+
+    const recent = (recentGenerations.get(clientId) || []).filter(
+      (time) => now - time < RATE_WINDOW_MS,
+    );
+    if (recent.length >= 9)
+      return json(
+        {
+          error:
+            '친구들이 숨을 고르고 있어요. 잠시 쉬었다가 다시 만들어 주세요.',
+          code: 'rate_limited',
+          retryable: true,
+          retryAfterMs: Math.max(1000, recent[0] + RATE_WINDOW_MS - now),
+        },
+        429,
+        {
+          'Retry-After': String(
+            Math.max(1, Math.ceil((recent[0] + RATE_WINDOW_MS - now) / 1000)),
+          ),
+        },
+      );
+    recentGenerations.set(clientId, [...recent, now]);
 
     const prompt = [
       '당신은 4–12세 아동용 창작 서비스의 최고 수준 캐릭터 디자이너입니다.',
@@ -1048,7 +1154,8 @@ async function handleCharacterRequest(
           75_000,
         );
       } catch (error) {
-        if (operationSignal.aborted) throw error;
+        if (operationSignal.aborted || error instanceof ImageProviderError)
+          throw error;
       }
       if (!refined || refined.length > Math.ceil(MAX_CANDIDATE_BYTES / 3) * 4)
         return qualityFailure();
@@ -1069,7 +1176,7 @@ async function handleCharacterRequest(
       );
       operationSignal.throwIfAborted();
     }
-    if (reviewOutcome.status === 'refused') return qualityFailure();
+    if (reviewOutcome.status === 'refused') return reviewRefused();
     if (reviewOutcome.status !== 'reviewed') {
       console.warn('character-quality-review-unavailable', {
         reason: reviewOutcome.status,
@@ -1114,6 +1221,19 @@ async function handleCharacterRequest(
     });
     return approvedCharacter(finalImage, styleIndex, review, alpha, corrected);
   } catch (error) {
+    if (error instanceof ImageProviderError)
+      return json(
+        {
+          error: error.message,
+          code: error.code,
+          retryable: error.retryable,
+          ...(error.retryAfterMs ? { retryAfterMs: error.retryAfterMs } : {}),
+        },
+        error.status,
+        error.retryAfterMs
+          ? { 'Retry-After': String(Math.ceil(error.retryAfterMs / 1000)) }
+          : {},
+      );
     console.error(
       'character-generation-failed',
       generationStage,

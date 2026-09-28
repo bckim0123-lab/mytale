@@ -1,5 +1,18 @@
 # Playable companion release — 2026-09-21
 
+## Character-first reliability pass (2026-09-21)
+
+- The entry screen now leads with drawing conversion, a full-body transparent plush style example and a separate no-upload 3D play option. Examples are explicitly labelled, not represented as the visitor's generated result. The first completed character can be named and kept immediately before optional persona editing.
+- Mobile composition puts the friend before the source thumbnail and progress details. The first screen was visually checked at 320px and 390px, and on desktop. Motion-reduction settings are respected.
+- A fresh live, non-personal sample conversion completed in 152,443 ms server time (HTTP 200). Visual review found the original star, mint cape and curled tail retained in a transparent plush character. The result was kept as `별망토` and survived a reload. This is one successful sample, not a success-rate or child-preference study. Existing books retained their earlier hero snapshot.
+- Candidate-quality rejection now offers an explicitly requested new creation; review outages offer only resuming the same encrypted candidate. Image and review allowances are separate, with three attempts per review ticket and unchanged expiry. Provider configuration errors and refusals are not labelled temporary overloads. These memory-based allowances are not a distributed spend cap.
+- Uploads now use an epoch: late reads, decoding and errors cannot replace a newer chosen drawing. Consent withdrawal invalidates pending work and is checked again immediately before transmission and before accepting responses. Retry-After deadlines survive screen, profile and drawing changes. The consent-revocation/logo/re-entry path was checked in the browser and returned to the unchecked guardian screen without generation.
+- Web Lock rejection preserves existing saved bytes and leaves the session able to retry. Multi-touch cannot steal the active pointer; slow accumulated rotation cannot accidentally trigger petting. Delayed puzzle opening is canceled on navigation, dialogs, reset and unmount.
+- Storybook exports cancel on close/unmount and reject late downloads; duplicate clicks are bounded. On a 390px screen, page changes stayed inside the reader, outer scroll was locked and Escape restored the bookshelf. Actual A4 print-preview pagination remains unverified.
+- `npm run quality` and changed-file lint passed after these changes, including actual-handler, offline failure-injection tests for creation, consent, uploads, saves, puzzle races and exports. Local browser QA is separate from mocked provider tests. Production deployment verification is recorded after publication, not implied by a local test pass.
+
+The 30-minute heartbeat is paused at the user's request. On 2026-09-28 the user ended the continuous-improvement instruction: finish verifying and publishing this batch, then stop. No recurring unattended generation is scheduled.
+
 ## What changed
 
 - Four reusable, genuinely volumetric mesh companions (sprout, bunny, cat, bear), with articulated pivots, eye blink, idle breathing, walk, wave, hop and pet reactions. The same source exports portable animated GLB assets. Runtime fur micro-normal shading is an enhancement; exported assets retain standard PBR materials.

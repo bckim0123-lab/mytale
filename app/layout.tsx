@@ -16,7 +16,7 @@ export const metadata: Metadata = {
   metadataBase: new URL('https://drawing-friend.bckim0123.chatgpt.site'),
   title: '그림친구 — 내 그림이 살아나는 모험',
   description:
-    '나만의 입체 친구를 꾸미고 직접 탐험하는 달빛 숲. 아이의 선택으로 바뀐 숲이 한 권의 동화책으로 남아요.',
+    '아이의 그림을 보송하고 귀여운 캐릭터로. 내가 만든 친구와 달빛 숲을 탐험하고, 우리의 선택이 담긴 동화책을 간직해요.',
   openGraph: {
     title: '그림친구',
     description: '내 그림이 살아나는 모험',
