@@ -530,15 +530,46 @@ for (const blockedBy of [
   );
 }
 
-const nextTarget = findAll((node) => ts.isVariableDeclaration(node) && node.name.getText(ast) === 'compactNextTarget')[0];
+const nextTarget = findAll(
+  (node) =>
+    ts.isVariableDeclaration(node) &&
+    node.name.getText(ast) === 'compactNextTarget',
+)[0];
 assert.ok(nextTarget?.initializer);
 const portal = { kind: 'portal', available: true, complete: false };
-assert.strictEqual(evaluate(nextTarget.initializer, { view: { hotspots: [
-  { kind: 'secret', available: true, complete: false },
-  { kind: 'bell', available: true, complete: false },
-  { kind: 'seed', available: true, complete: true },
+assert.strictEqual(
+  evaluate(nextTarget.initializer, {
+    view: {
+      hotspots: [
+        { kind: 'secret', available: true, complete: false },
+        { kind: 'bell', available: true, complete: false },
+        { kind: 'seed', available: true, complete: true },
+        portal,
+      ],
+    },
+  }),
   portal,
-] } }), portal, 'The compact action exposes the next chapter without choosing a secret or melody answer.');
+  'The compact action exposes the next chapter without choosing a secret or melody answer.',
+);
+
+const dialogToolbar = findAll(
+  (node) =>
+    ts.isJsxElement(node) &&
+    node.openingElement.attributes.properties.some(
+      (attribute) =>
+        ts.isJsxAttribute(attribute) &&
+        attribute.name.getText(ast) === 'className' &&
+        attribute.initializer?.getText(ast) === '"cw-dialog-toolbar"',
+    ),
+)[0];
+assert.ok(dialogToolbar, 'Non-book dialogs keep a dedicated close toolbar.');
+assert.match(dialogToolbar.getText(ast), /onClick=\{closeDialog\}/);
+const companionStyles = readFileSync('app/companion.css', 'utf8');
+assert.match(
+  companionStyles,
+  /\.cw-dialog-toolbar\s*\{[^}]*position:\s*sticky;[^}]*height:\s*60px;[^}]*background:\s*#fffcf4;/,
+  'The close control has its own opaque sticky row, not an overlay on consent text.',
+);
 
 console.log(
   'Forest UI race smoke passed: actual delayed-flush handlers, navigation/dialog/unmount/reset cancellation, stale callback rejection, newer-request ownership and preserved normal play; no browser/network.',

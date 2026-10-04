@@ -342,7 +342,9 @@
 }
 .cw-chat-consent > strong {
   display: block;
-  font-size: 15px;
+  font-size: 16px;
+  word-break: keep-all;
+  text-wrap: balance;
 }
 .cw-chat-consent .cw-guardian-check {
   gap: 12px;
@@ -367,9 +369,9 @@
 }
 .cw-chat-consent > small {
   display: block;
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.7;
-  color: #748368;
+  color: #5d6e52;
 }
 .cw-gift {
   display: flex;
@@ -1053,6 +1055,7 @@
   background: #fffcf4;
   color: #40523e;
   width: min(94vw, 540px);
+  max-width: calc(100% - 20px);
   max-height: 90svh;
   overflow: auto;
   box-shadow: 0 30px 100px #23352933;
@@ -1061,34 +1064,44 @@
   background: #253a2f80;
   backdrop-filter: blur(8px);
 }
+.cw-dialog-toolbar {
+  position: sticky;
+  top: 0;
+  height: 60px;
+  z-index: 5;
+  background: #fffcf4;
+}
 .cw-dialog-close {
   position: absolute;
   right: 14px;
-  top: 14px;
+  top: 8px;
   z-index: 5;
 }
 .cw-chat,
 .cw-settings {
-  padding: 38px 30px 30px;
+  padding: 12px 30px 30px;
 }
 .cw-chat h2,
 .cw-settings h2 {
   font-size: 25px;
   letter-spacing: -1px;
   margin: 14px 0 23px;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
 }
 .cw-settings > p,
 .cw-chat-consent p {
-  font-size: 13px;
+  font-size: 16px;
   line-height: 1.9;
-  color: #7c8871;
+  color: #586b50;
   word-break: keep-all;
 }
 .cw-chat-consent label {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  font-size: 13px;
+  gap: 12px;
+  font-size: 14px;
   margin: 24px 0;
 }
 .cw-chat-consent select {
@@ -1096,10 +1109,27 @@
   border-radius: 10px;
   background: #fffdf4;
   padding: 10px 15px;
+  min-height: 44px;
+  font-size: 16px;
 }
 .cw-chat-consent button {
   width: 100%;
   margin-top: 22px;
+  min-height: 48px;
+  font-size: 14px;
+  line-height: 1.6;
+  word-break: keep-all;
+}
+@media (max-width: 480px) {
+  .cw-chat-consent label:not(.cw-guardian-check) {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .cw-chat-consent input[inputmode='numeric'],
+  .cw-chat-consent select {
+    width: 100%;
+    min-width: 0;
+  }
 }
 .cw-messages {
   height: 300px;
@@ -1153,8 +1183,8 @@
   place-items: center;
 }
 .cw-chat > small {
-  font-size: 10px;
-  color: #98a089;
+  font-size: 12px;
+  color: #5d6e52;
 }
 .cw-reset-link {
   background: none;
@@ -1599,7 +1629,7 @@
   }
   .cw-chat,
   .cw-settings {
-    padding: 37px 23px 26px;
+    padding: 12px 18px 26px;
   }
   .cw-book-dialog {
     max-height: 92svh;

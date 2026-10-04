@@ -237,9 +237,15 @@ export default function CompanionExperience({
     (hot) =>
       hot.available &&
       !hot.complete &&
-      ['wood', 'seed', 'flower', 'water', 'bridge', 'lantern', 'portal'].includes(
-        hot.kind,
-      ),
+      [
+        'wood',
+        'seed',
+        'flower',
+        'water',
+        'bridge',
+        'lantern',
+        'portal',
+      ].includes(hot.kind),
   );
   const memories = Array.from(
     new Set([
@@ -2238,18 +2244,20 @@ export default function CompanionExperience({
             book
               ? book.title
               : chat
-                ? `${save.name}와 도란도란`
+                ? `${save.name}의 이야기방`
                 : '보호자 안내와 저장 설정'
           }
         >
           {!book && (
-            <button
-              className="cw-dialog-close cw-icon"
-              aria-label="닫기"
-              onClick={closeDialog}
-            >
-              <X size={22} />
-            </button>
+            <div className="cw-dialog-toolbar">
+              <button
+                className="cw-dialog-close cw-icon"
+                aria-label="닫기"
+                onClick={closeDialog}
+              >
+                <X size={22} />
+              </button>
+            </div>
           )}
           {book && (
             <CompanionStorybook
@@ -2263,7 +2271,7 @@ export default function CompanionExperience({
           {chat && (
             <section className="cw-chat">
               <span className="cw-eyebrow">A LITTLE CONVERSATION</span>
-              <h2>{save.name}와 도란도란</h2>
+              <h2>{save.name}의 이야기방</h2>
               {!consent ? (
                 <div className="cw-chat-consent">
                   <strong>잠깐, 보호자와 함께 확인해 주세요.</strong>
