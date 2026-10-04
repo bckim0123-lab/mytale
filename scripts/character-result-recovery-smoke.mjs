@@ -145,6 +145,9 @@ function fixture(results = ['approved-2d', '', 'approved-3d'], books = []) {
     clearCompanionSave: () => assert.fail('Do not delete the durable library'),
     downloadLocalFile: () => assert.fail('No automatic export'),
     stopPageSpeech: () => {},
+    // Camera ownership and close are exercised by camera-preview-smoke.
+    closeCamera: () => {},
+    clearCameraPreview: () => {},
   };
   for (const name of [
     'cancelImagePreparation',
@@ -407,9 +410,10 @@ for (const action of ['cancel', 'withdraw', 'leave', 'unmount']) {
       queueMicrotask: (callback) => callback(),
     });
   else if (action === 'unmount')
-    effect('cameraStream.current?.getTracks()', {
+    effect('generationRequest.current?.abort()', {
       ...test.bindings,
       cameraStream: { current: null },
+      cameraRequest: { current: 0 },
     })();
   else test.bindings.cancelImagePreparation();
   assert.equal(test.bindings.drawingReplacement.current, null);

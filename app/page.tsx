@@ -704,6 +704,7 @@ export default function Home() {
     (typeof worldChoices)[number]['name']
   >(worldChoices[0].name);
   const [cameraOpen, setCameraOpen] = useState(false);
+  const [cameraReady, setCameraReady] = useState(false);
   const [cameraError, setCameraError] = useState('');
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>(
     'environment',
@@ -860,6 +861,7 @@ export default function Home() {
   const cameraInput = useRef<HTMLInputElement>(null);
   const video = useRef<HTMLVideoElement>(null);
   const cameraStream = useRef<MediaStream | null>(null);
+  const cameraReadyStream = useRef<MediaStream | null>(null);
   const cameraRequest = useRef(0);
   const messagesEnd = useRef<HTMLDivElement>(null);
   const generationRequest = useRef<AbortController | null>(null);
@@ -882,6 +884,43 @@ export default function Home() {
       0,
       Math.ceil((characterInput.current.retryUntil - Date.now()) / 1000),
     );
+  const clearCameraPreview = () => {
+    const stream = cameraStream.current;
+    cameraStream.current = null;
+    cameraReadyStream.current = null;
+    if (video.current) {
+      video.current.onloadeddata = null;
+      video.current.oncanplay = null;
+      video.current.srcObject = null;
+    }
+    stream?.getTracks().forEach((track) => track.stop());
+  };
+  const cameraFrameReady = (
+    preview: HTMLVideoElement,
+    stream: MediaStream,
+    requestId: number,
+  ) =>
+    cameraRequest.current === requestId &&
+    cameraStream.current === stream &&
+    video.current === preview &&
+    preview.srcObject === stream &&
+    preview.readyState >= 2 &&
+    preview.videoWidth > 0 &&
+    preview.videoHeight > 0 &&
+    stream.getVideoTracks().some((track) => track.readyState === 'live');
+  const bindCameraPreview = (stream: MediaStream, requestId: number) => {
+    const preview = video.current;
+    if (!preview) return;
+    const markReady = () => {
+      if (!cameraFrameReady(preview, stream, requestId)) return;
+      cameraReadyStream.current = stream;
+      setCameraReady(true);
+    };
+    preview.onloadeddata = markReady;
+    preview.oncanplay = markReady;
+    if (preview.srcObject !== stream) preview.srcObject = stream;
+    void preview.play().catch(() => undefined);
+  };
   const cancelImagePreparation = (updateUi = true) => {
     const input = characterInput.current;
     input.uploadEpoch += 1;
@@ -951,6 +990,7 @@ export default function Home() {
     setPhotoConsent(agreed);
     if (agreed) return;
     setGuardianVerified(false);
+    closeCamera();
     cancelImagePreparation();
     generationRequest.current?.abort();
     generationRun.current += 1;
@@ -1050,8 +1090,7 @@ export default function Home() {
   }, []);
   useEffect(() => {
     if (cameraOpen && video.current && cameraStream.current) {
-      video.current.srcObject = cameraStream.current;
-      void video.current.play().catch(() => undefined);
+      bindCameraPreview(cameraStream.current, cameraRequest.current);
     }
   }, [cameraOpen, facingMode]);
   useEffect(() => {
@@ -1069,17 +1108,24 @@ export default function Home() {
     }
     if (step !== 'upload' && cameraStream.current) {
       cameraRequest.current += 1;
-      cameraStream.current.getTracks().forEach((track) => track.stop());
-      cameraStream.current = null;
-      queueMicrotask(() => setCameraOpen(false));
+      clearCameraPreview();
+      queueMicrotask(() => {
+        setCameraOpen(false);
+        setCameraReady(false);
+      });
     } else if (step !== 'upload') {
       cameraRequest.current += 1;
-      queueMicrotask(() => setCameraOpen(false));
+      clearCameraPreview();
+      queueMicrotask(() => {
+        setCameraOpen(false);
+        setCameraReady(false);
+      });
     }
   }, [step]);
   useEffect(
     () => () => {
-      cameraStream.current?.getTracks().forEach((track) => track.stop());
+      cameraRequest.current += 1;
+      clearCameraPreview();
       cancelImagePreparation(false);
       generationRequest.current?.abort();
       generationRun.current += 1;
@@ -1344,9 +1390,8 @@ export default function Home() {
   };
   const closeCamera = () => {
     cameraRequest.current += 1;
-    cameraStream.current?.getTracks().forEach((track) => track.stop());
-    cameraStream.current = null;
-    if (video.current) video.current.srcObject = null;
+    clearCameraPreview();
+    setCameraReady(false);
     setCameraOpen(false);
   };
   const openCamera = async (mode: 'environment' | 'user' = facingMode) => {
@@ -1358,7 +1403,8 @@ export default function Home() {
     }
     const requestId = cameraRequest.current + 1;
     cameraRequest.current = requestId;
-    cameraStream.current?.getTracks().forEach((track) => track.stop());
+    clearCameraPreview();
+    setCameraReady(false);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: false,
@@ -1373,6 +1419,9 @@ export default function Home() {
         return;
       }
       cameraStream.current = stream;
+      // Reopening the same camera leaves both effect dependencies unchanged.
+      // Bind an existing preview now; the effect still handles its first mount.
+      bindCameraPreview(stream, requestId);
       setFacingMode(mode);
       setCameraOpen(true);
     } catch {
@@ -1388,16 +1437,24 @@ export default function Home() {
     await openCamera(next);
   };
   const captureCamera = () => {
-    if (!video.current?.videoWidth || !video.current.videoHeight) return;
+    const preview = video.current;
+    const stream = cameraStream.current;
+    if (
+      !preview ||
+      !stream ||
+      cameraReadyStream.current !== stream ||
+      !cameraFrameReady(preview, stream, cameraRequest.current)
+    )
+      return;
     cancelImagePreparation();
     const requestId = ++cameraRequest.current;
     const uploadEpoch = characterInput.current.uploadEpoch;
     const canvas = document.createElement('canvas');
-    canvas.width = video.current.videoWidth;
-    canvas.height = video.current.videoHeight;
+    canvas.width = preview.videoWidth;
+    canvas.height = preview.videoHeight;
     const context = canvas.getContext('2d');
     if (!context) return;
-    context.drawImage(video.current, 0, 0, canvas.width, canvas.height);
+    context.drawImage(preview, 0, 0, canvas.width, canvas.height);
     canvas.toBlob(
       (blob) => {
         // Encoding is asynchronous: a newer picture, camera switch, close,
@@ -3155,6 +3212,7 @@ export default function Home() {
                   type="button"
                   className="camera-shutter"
                   onClick={captureCamera}
+                  disabled={!cameraReady}
                   aria-label="그림 사진 촬영"
                 >
                   <span />
@@ -3163,6 +3221,11 @@ export default function Home() {
                   닫기
                 </button>
               </div>
+              <output className="camera-status" aria-live="polite">
+                {cameraReady
+                  ? '그림이 모두 보이면 촬영 버튼을 눌러 주세요.'
+                  : '카메라 화면을 준비하고 있어요. 잠시 기다려 주세요.'}
+              </output>
               <small>
                 <LockKeyhole /> 미리보기 영상은 기기 밖으로 전송되지 않아요.
               </small>

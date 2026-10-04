@@ -156,6 +156,10 @@ function createFixture() {
     ...setters,
     characterInput,
     drawingReplacement: { current: null },
+    cameraStream: { current: null },
+    cameraReadyStream: { current: null },
+    cameraRequest: { current: 0 },
+    video: { current: null },
     // These input tests cover decode/cancellation. The recovery smoke exercises
     // the actual confirmation; here the user explicitly accepts a valid source.
     offerDrawingReplacement: (_epoch, apply) => apply(),
@@ -192,6 +196,8 @@ function createFixture() {
     'cancelImagePreparation',
     bindings,
   );
+  bindings.clearCameraPreview = loadArrow('clearCameraPreview', bindings);
+  bindings.closeCamera = loadArrow('closeCamera', bindings);
   bindings.getCharacterRetryRemainingSeconds = loadArrow(
     'getCharacterRetryRemainingSeconds',
     bindings,
@@ -423,10 +429,16 @@ for (const supersedingAction of ['upload', 'close', 'capture']) {
   const callbacks = [];
   const accepted = [];
   const cameraRequest = { current: 5 };
+  const stream = {};
   let closed = 0;
   const capture = loadArrow('captureCamera', {
     ...camera.bindings,
     cameraRequest,
+    cameraStream: { current: stream },
+    cameraReadyStream: { current: stream },
+    // Current-frame readiness is exercised with actual media handlers in
+    // camera-preview-smoke; this fixture isolates deferred JPEG ownership.
+    cameraFrameReady: () => true,
     video: { current: { videoWidth: 640, videoHeight: 480 } },
     File,
     document: {

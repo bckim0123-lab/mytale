@@ -12,7 +12,7 @@
     "typecheck": "tsc --noEmit",
     "test:safety": "node scripts/safety-smoke.mjs && node scripts/public-metadata-smoke.mjs",
     "test:adventure": "node scripts/adventure-smoke.mjs && node scripts/adventure-texture-smoke.mjs",
-    "test:generation": "node scripts/generation-smoke.mjs && node scripts/character-journey-smoke.mjs && node scripts/character-input-smoke.mjs && node scripts/character-result-recovery-smoke.mjs && node scripts/character-selection-race-smoke.mjs && node scripts/welcome-resume-smoke.mjs && node scripts/artwork-handoff-smoke.mjs && node scripts/companion-entry-smoke.mjs && node scripts/image-input-limits-smoke.mjs",
+    "test:generation": "node scripts/generation-smoke.mjs && node scripts/character-journey-smoke.mjs && node scripts/character-input-smoke.mjs && node scripts/camera-preview-smoke.mjs && node scripts/camera-framing-smoke.mjs && node scripts/character-result-recovery-smoke.mjs && node scripts/character-selection-race-smoke.mjs && node scripts/welcome-resume-smoke.mjs && node scripts/artwork-handoff-smoke.mjs && node scripts/companion-entry-smoke.mjs && node scripts/image-input-limits-smoke.mjs",
     "test:privacy": "node scripts/chat-privacy-smoke.mjs && node scripts/local-speech-smoke.mjs && node scripts/forest-narration-smoke.mjs",
     "test:character-quality": "node scripts/character-review-image-smoke.mjs && node scripts/character-quality-smoke.mjs && node scripts/character-stream-smoke.mjs",
     "test:creature": "node scripts/creature-interaction-smoke.mjs",
