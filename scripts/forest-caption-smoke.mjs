@@ -2,6 +2,38 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
+import postcss from 'postcss';
+
+const sceneCss = postcss.parse(
+  readFileSync('app/forest-immersive.css', 'utf8'),
+);
+const tagRules = sceneCss.nodes.filter(
+  (node) =>
+    node.type === 'rule' &&
+    node.selector === '.cw-forest-immersive .cw-world-tag',
+);
+const tagStyle = Object.fromEntries(
+  tagRules.flatMap((rule) =>
+    rule.nodes
+      .filter((node) => node.type === 'decl')
+      .map((node) => [node.prop, node.value]),
+  ),
+);
+assert.equal(
+  tagStyle['word-break'],
+  'keep-all',
+  'Korean hotspot labels prefer whole-word wrapping',
+);
+assert.equal(
+  tagStyle['overflow-wrap'],
+  'anywhere',
+  'A long unspaced label can still fit its measured box',
+);
+assert.equal(
+  tagStyle['min-height'],
+  '44px',
+  'Readable wrapping preserves the minimum touch target',
+);
 
 const source = readFileSync('app/forest-adventure-ui.tsx', 'utf8');
 const ast = ts.createSourceFile(

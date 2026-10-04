@@ -748,6 +748,12 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
   function ball(parent: T.Object3D, m: T.Material, p: number[], s: number[]) {
     return mesh(sphere, m, parent, p, s);
   }
+  function addForestRoot(root: T.Object3D) {
+    // Modes remount; these roots can never appear at home. Keep their existing
+    // resource owners, but exclude them from scene-wide matrix traversal there.
+    if (home) root.removeFromParent();
+    else scene.add(root);
+  }
   mesh(
     cylinder,
     groundMat,
@@ -908,7 +914,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
   moonTree.name = 'MoonTree';
   moonTree.position.set(0, 0, -8.35);
   moonTree.visible = !home;
-  scene.add(moonTree);
+  addForestRoot(moonTree);
   const moonBark = mat('#896d50');
   const moonLeaves = [mat('#78a38b'), mat('#9bb992'), mat('#c0ca98')];
   const moonGold = mat('#edc77a', 0.4);
@@ -1029,7 +1035,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
 
   const woodlandDetails = new T.Group();
   woodlandDetails.visible = !home;
-  scene.add(woodlandDetails);
+  addForestRoot(woodlandDetails);
   const rock = mat('#8c9e8b');
   const mushroomCap = mat('#d39782');
   [
@@ -1073,7 +1079,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
   houseWindows.emissiveIntensity = 0;
   const cottages = new T.Group();
   cottages.visible = !home;
-  scene.add(cottages);
+  addForestRoot(cottages);
   [
     [-8.5, -4.4],
     [8.5, -5.5],
@@ -1097,7 +1103,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
   });
   const homeLights = new T.Group();
   homeLights.visible = false;
-  scene.add(homeLights);
+  addForestRoot(homeLights);
   [
     [-3.6, -4.1],
     [-5.5, -4.2],
@@ -1134,7 +1140,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
     const points = new T.Points(geometry, material);
     points.frustumCulled = false;
     points.visible = !home;
-    scene.add(points);
+    addForestRoot(points);
     return { positions, geometry, material, points };
   }
   const fireflies = lightParticles(36, '#eaffb6', 5);
@@ -1190,7 +1196,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
   const effectPoints = new T.Points(effectGeometry, effectMaterial);
   effectPoints.frustumCulled = false;
   effectPoints.visible = !home;
-  scene.add(effectPoints);
+  addForestRoot(effectPoints);
   let nextEffectSlot = 0;
   const rippleGeometry = geo(new T.RingGeometry(0.4, 0.46, 40));
   const ripples = Array.from({ length: 5 }, () => {
@@ -1206,6 +1212,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
     object.castShadow = false;
     object.receiveShadow = false;
     object.visible = false;
+    addForestRoot(object);
     return { object, material, born: -10, life: 1, vertical: false };
   });
   let nextRipple = 0;
@@ -1236,7 +1243,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
   pawprints.instanceMatrix.setUsage(T.DynamicDrawUsage);
   pawprints.frustumCulled = false;
   pawprints.visible = !home;
-  scene.add(pawprints);
+  addForestRoot(pawprints);
   const pawSlots = Array.from({ length: 20 }, () => ({
     born: -10,
     x: 0,
@@ -1290,6 +1297,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
     return { root, wings, eyes };
   }
   const owlFollower = createOwlActor(scene);
+  addForestRoot(owlFollower.root);
   owlFollower.root.position.set(
     FOREST_LOCATIONS['owl-grove'].x,
     0,
@@ -1319,10 +1327,11 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
   cursor.rotation.x = -Math.PI / 2;
   cursor.visible = false;
   cursor.castShadow = false;
+  addForestRoot(cursor);
   const hotGroup = new T.Group();
-  scene.add(hotGroup);
+  addForestRoot(hotGroup);
   const persistent = new T.Group();
-  scene.add(persistent);
+  addForestRoot(persistent);
   const bridgeGroup = new T.Group();
   persistent.add(bridgeGroup);
   const bridgePlanks: T.Mesh[] = [];
@@ -2179,181 +2188,183 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
         if (item instanceof T.Mesh) item.castShadow = opacity > 0.98;
       });
     }
-    const travelled = Math.hypot(
-      creature.root.position.x - lastStepPosition.x,
-      creature.root.position.z - lastStepPosition.z,
-    );
-    lastStepPosition.copy(creature.root.position);
-    if (!home && moving && !reduced.matches) {
-      stepDistance += Math.min(travelled, 0.2);
-      if (stepDistance > 0.34) {
-        stepDistance = 0;
-        const side = nextPaw % 2 ? 1 : -1;
-        const paw = pawSlots[nextPaw++ % pawSlots.length];
-        paw.born = elapsed;
-        paw.yaw = yaw + Math.PI;
-        paw.x = creature.root.position.x + Math.cos(yaw) * side * 0.14;
-        paw.z = creature.root.position.z - Math.sin(yaw) * side * 0.14;
-      }
-    }
-    pawprints.visible = !home && !reduced.matches;
-    pawSlots.forEach((paw, index) => {
-      const age = elapsed - paw.born;
-      const size =
-        age < 2.5 ? Math.max(0.001, 1 - Math.max(0, age - 1) / 1.5) : 0.001;
-      pawMatrix.position.set(paw.x, 0.048, paw.z);
-      pawMatrix.rotation.set(0, paw.yaw, 0);
-      pawMatrix.scale.setScalar(size);
-      pawMatrix.updateMatrix();
-      pawprints.setMatrixAt(index, pawMatrix.matrix);
-    });
-    pawprints.instanceMatrix.needsUpdate = true;
-
-    let liveEffects = 0;
-    effectSlots.forEach((slot, index) => {
-      if (reduced.matches) slot.active = false;
-      if (!slot.active) {
-        effectAlphas[index] = 0;
-        return;
-      }
-      const age = elapsed - slot.born;
-      if (age < 0) {
-        effectAlphas[index] = 0;
-        liveEffects++;
-        return;
-      }
-      const fraction = age / slot.life;
-      if (fraction >= 1) {
-        slot.active = false;
-        effectAlphas[index] = 0;
-        return;
-      }
-      liveEffects++;
-      if (slot.kind === 'collect') {
-        const arc = Math.sin(fraction * Math.PI);
-        const ease = fraction * fraction * (3 - 2 * fraction);
-        effectPositions[index * 3] =
-          T.MathUtils.lerp(slot.x, creature.root.position.x, ease) +
-          Math.cos(slot.phase) * arc * 0.28;
-        effectPositions[index * 3 + 1] =
-          T.MathUtils.lerp(slot.y, 1.1, ease) + arc * 0.67;
-        effectPositions[index * 3 + 2] =
-          T.MathUtils.lerp(slot.z, creature.root.position.z, ease) +
-          Math.sin(slot.phase) * arc * 0.28;
-      } else {
-        effectPositions[index * 3] = slot.x + slot.vx * age;
-        effectPositions[index * 3 + 1] = Math.max(
-          0.08,
-          slot.y +
-            slot.vy * age -
-            (slot.kind === 'water' ? 0.95 : 0.65) * age * age,
-        );
-        effectPositions[index * 3 + 2] = slot.z + slot.vz * age;
-      }
-      effectAlphas[index] =
-        Math.min(1, age * 9) *
-        (1 - fraction) *
-        (slot.kind === 'soil' ? 0.7 : 0.95);
-    });
-    effectPoints.visible = !home && liveEffects > 0;
-    effectGeometry.attributes.position.needsUpdate = true;
-    effectGeometry.attributes.effectAlpha.needsUpdate = true;
-    ripples.forEach((effect) => {
-      const fraction = (elapsed - effect.born) / effect.life;
-      effect.object.visible = !home && fraction >= 0 && fraction < 1;
-      if (!effect.object.visible) return;
-      effect.object.scale.setScalar(
-        reduced.matches ? 1.1 : 0.75 + fraction * 2.5,
+    if (!home) {
+      const travelled = Math.hypot(
+        creature.root.position.x - lastStepPosition.x,
+        creature.root.position.z - lastStepPosition.z,
       );
-      effect.material.opacity = (1 - fraction) * 0.65;
-      if (effect.vertical) effect.object.quaternion.copy(camera.quaternion);
-    });
-    bellObjects.forEach((bell, id) => {
-      const strike = bellStrikes.get(id);
-      const age = strike === undefined ? 10 : elapsed - strike;
-      bell.rotation.z =
-        reduced.matches || age > 1.7
-          ? 0
-          : Math.sin(age * 19) * Math.exp(-age * 2.7) * 0.36;
-    });
-    if (forest.bridges) {
-      const bridgeAge =
-        reduced.matches || bridgeStartedAt === null
-          ? 10
-          : elapsed - bridgeStartedAt;
-      bridgePlanks.forEach((plank, index) => {
-        const fraction = T.MathUtils.clamp(
-          (bridgeAge - index * 0.065) / 0.23,
-          0,
+      lastStepPosition.copy(creature.root.position);
+      if (!home && moving && !reduced.matches) {
+        stepDistance += Math.min(travelled, 0.2);
+        if (stepDistance > 0.34) {
+          stepDistance = 0;
+          const side = nextPaw % 2 ? 1 : -1;
+          const paw = pawSlots[nextPaw++ % pawSlots.length];
+          paw.born = elapsed;
+          paw.yaw = yaw + Math.PI;
+          paw.x = creature.root.position.x + Math.cos(yaw) * side * 0.14;
+          paw.z = creature.root.position.z - Math.sin(yaw) * side * 0.14;
+        }
+      }
+      pawprints.visible = !home && !reduced.matches;
+      pawSlots.forEach((paw, index) => {
+        const age = elapsed - paw.born;
+        const size =
+          age < 2.5 ? Math.max(0.001, 1 - Math.max(0, age - 1) / 1.5) : 0.001;
+        pawMatrix.position.set(paw.x, 0.048, paw.z);
+        pawMatrix.rotation.set(0, paw.yaw, 0);
+        pawMatrix.scale.setScalar(size);
+        pawMatrix.updateMatrix();
+        pawprints.setMatrixAt(index, pawMatrix.matrix);
+      });
+      pawprints.instanceMatrix.needsUpdate = true;
+
+      let liveEffects = 0;
+      effectSlots.forEach((slot, index) => {
+        if (reduced.matches) slot.active = false;
+        if (!slot.active) {
+          effectAlphas[index] = 0;
+          return;
+        }
+        const age = elapsed - slot.born;
+        if (age < 0) {
+          effectAlphas[index] = 0;
+          liveEffects++;
+          return;
+        }
+        const fraction = age / slot.life;
+        if (fraction >= 1) {
+          slot.active = false;
+          effectAlphas[index] = 0;
+          return;
+        }
+        liveEffects++;
+        if (slot.kind === 'collect') {
+          const arc = Math.sin(fraction * Math.PI);
+          const ease = fraction * fraction * (3 - 2 * fraction);
+          effectPositions[index * 3] =
+            T.MathUtils.lerp(slot.x, creature.root.position.x, ease) +
+            Math.cos(slot.phase) * arc * 0.28;
+          effectPositions[index * 3 + 1] =
+            T.MathUtils.lerp(slot.y, 1.1, ease) + arc * 0.67;
+          effectPositions[index * 3 + 2] =
+            T.MathUtils.lerp(slot.z, creature.root.position.z, ease) +
+            Math.sin(slot.phase) * arc * 0.28;
+        } else {
+          effectPositions[index * 3] = slot.x + slot.vx * age;
+          effectPositions[index * 3 + 1] = Math.max(
+            0.08,
+            slot.y +
+              slot.vy * age -
+              (slot.kind === 'water' ? 0.95 : 0.65) * age * age,
+          );
+          effectPositions[index * 3 + 2] = slot.z + slot.vz * age;
+        }
+        effectAlphas[index] =
+          Math.min(1, age * 9) *
+          (1 - fraction) *
+          (slot.kind === 'soil' ? 0.7 : 0.95);
+      });
+      effectPoints.visible = !home && liveEffects > 0;
+      effectGeometry.attributes.position.needsUpdate = true;
+      effectGeometry.attributes.effectAlpha.needsUpdate = true;
+      ripples.forEach((effect) => {
+        const fraction = (elapsed - effect.born) / effect.life;
+        effect.object.visible = !home && fraction >= 0 && fraction < 1;
+        if (!effect.object.visible) return;
+        effect.object.scale.setScalar(
+          reduced.matches ? 1.1 : 0.75 + fraction * 2.5,
+        );
+        effect.material.opacity = (1 - fraction) * 0.65;
+        if (effect.vertical) effect.object.quaternion.copy(camera.quaternion);
+      });
+      bellObjects.forEach((bell, id) => {
+        const strike = bellStrikes.get(id);
+        const age = strike === undefined ? 10 : elapsed - strike;
+        bell.rotation.z =
+          reduced.matches || age > 1.7
+            ? 0
+            : Math.sin(age * 19) * Math.exp(-age * 2.7) * 0.36;
+      });
+      if (forest.bridges) {
+        const bridgeAge =
+          reduced.matches || bridgeStartedAt === null
+            ? 10
+            : elapsed - bridgeStartedAt;
+        bridgePlanks.forEach((plank, index) => {
+          const fraction = T.MathUtils.clamp(
+            (bridgeAge - index * 0.065) / 0.23,
+            0,
+            1,
+          );
+          const remainder = Math.pow(1 - fraction, 3);
+          plank.visible = fraction > 0;
+          plank.position.y = 0.08 + remainder * 0.78;
+          plank.rotation.z = remainder * (index % 2 ? 0.17 : -0.17);
+          if (
+            fraction === 1 &&
+            bridgeStartedAt !== null &&
+            !plank.userData.landingPlayed
+          ) {
+            plank.userData.landingPlayed = true;
+            burst('soil', { x: BRIDGE_X, z: plank.position.z }, '#ffe0a5', 4);
+          }
+        });
+        bridgeRails.visible = bridgeAge > 0.45;
+        bridgeRails.scale.y = T.MathUtils.clamp(
+          (bridgeAge - 0.45) / 0.32,
+          0.001,
           1,
         );
-        const remainder = Math.pow(1 - fraction, 3);
-        plank.visible = fraction > 0;
-        plank.position.y = 0.08 + remainder * 0.78;
-        plank.rotation.z = remainder * (index % 2 ? 0.17 : -0.17);
-        if (
-          fraction === 1 &&
-          bridgeStartedAt !== null &&
-          !plank.userData.landingPlayed
-        ) {
-          plank.userData.landingPlayed = true;
-          burst('soil', { x: BRIDGE_X, z: plank.position.z }, '#ffe0a5', 4);
-        }
-      });
-      bridgeRails.visible = bridgeAge > 0.45;
-      bridgeRails.scale.y = T.MathUtils.clamp(
-        (bridgeAge - 0.45) / 0.32,
-        0.001,
-        1,
+        if (bridgeAge > 1.4) bridgeStartedAt = null;
+      }
+      owlFollower.root.visible = !home && forest.owlChoice === 'invite';
+      if (owlFollower.root.visible) {
+        const slot = forestOwlSlot(creature.root.position, forest.route);
+        owlTarget.set(slot.x, 0, slot.z);
+        const owlDistance = Math.hypot(
+          owlTarget.x - owlFollower.root.position.x,
+          owlTarget.z - owlFollower.root.position.z,
+        );
+        const flying = moving || owlDistance > 0.6;
+        owlTarget.y = reduced.matches
+          ? 0.38
+          : flying
+            ? 0.55 + Math.sin(elapsed * 5) * 0.075
+            : 0.11 + Math.sin(elapsed * 2.4) * 0.018;
+        owlFollower.root.position.lerp(
+          owlTarget,
+          Math.min(1, dt * (flying ? 3.4 : 2.4)),
+        );
+        const owlYaw = flying
+          ? yaw
+          : Math.atan2(
+              creature.root.position.x - owlFollower.root.position.x,
+              creature.root.position.z - owlFollower.root.position.z,
+            );
+        owlFollower.root.rotation.y +=
+          Math.atan2(
+            Math.sin(owlYaw - owlFollower.root.rotation.y),
+            Math.cos(owlYaw - owlFollower.root.rotation.y),
+          ) * Math.min(1, dt * 5);
+        owlFollower.wings.forEach((wing, index) => {
+          wing.rotation.z = reduced.matches
+            ? 0
+            : (index ? -1 : 1) *
+              (flying
+                ? 0.38 + Math.sin(elapsed * 16) * 0.54
+                : 0.05 + Math.sin(elapsed * 2.3) * 0.025);
+        });
+        const blink = elapsed % 4.7;
+        owlFollower.eyes.scale.y =
+          !reduced.matches && blink < 0.16
+            ? 0.12 + Math.abs(blink - 0.08) * 11
+            : 1;
+      }
+      cursor.scale.setScalar(
+        reduced.matches ? 1 : 1 + Math.sin(elapsed * 4) * 0.08,
       );
-      if (bridgeAge > 1.4) bridgeStartedAt = null;
     }
-    owlFollower.root.visible = !home && forest.owlChoice === 'invite';
-    if (owlFollower.root.visible) {
-      const slot = forestOwlSlot(creature.root.position, forest.route);
-      owlTarget.set(slot.x, 0, slot.z);
-      const owlDistance = Math.hypot(
-        owlTarget.x - owlFollower.root.position.x,
-        owlTarget.z - owlFollower.root.position.z,
-      );
-      const flying = moving || owlDistance > 0.6;
-      owlTarget.y = reduced.matches
-        ? 0.38
-        : flying
-          ? 0.55 + Math.sin(elapsed * 5) * 0.075
-          : 0.11 + Math.sin(elapsed * 2.4) * 0.018;
-      owlFollower.root.position.lerp(
-        owlTarget,
-        Math.min(1, dt * (flying ? 3.4 : 2.4)),
-      );
-      const owlYaw = flying
-        ? yaw
-        : Math.atan2(
-            creature.root.position.x - owlFollower.root.position.x,
-            creature.root.position.z - owlFollower.root.position.z,
-          );
-      owlFollower.root.rotation.y +=
-        Math.atan2(
-          Math.sin(owlYaw - owlFollower.root.rotation.y),
-          Math.cos(owlYaw - owlFollower.root.rotation.y),
-        ) * Math.min(1, dt * 5);
-      owlFollower.wings.forEach((wing, index) => {
-        wing.rotation.z = reduced.matches
-          ? 0
-          : (index ? -1 : 1) *
-            (flying
-              ? 0.38 + Math.sin(elapsed * 16) * 0.54
-              : 0.05 + Math.sin(elapsed * 2.3) * 0.025);
-      });
-      const blink = elapsed % 4.7;
-      owlFollower.eyes.scale.y =
-        !reduced.matches && blink < 0.16
-          ? 0.12 + Math.abs(blink - 0.08) * 11
-          : 1;
-    }
-    cursor.scale.setScalar(
-      reduced.matches ? 1 : 1 + Math.sin(elapsed * 4) * 0.08,
-    );
     if (!reduced.matches) {
       hotObjects.forEach((obj, i) => {
         obj.rotation.y = Math.sin(elapsed * 0.7 + i) * 0.06;
@@ -2367,103 +2378,110 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
     }
     const festival =
       !home && (forest.chapter === 'festival' || forest.chapter === 'complete');
-    const peacefulTime = reduced.matches ? 0 : elapsed;
-    const homeEnding = !home && forest.ending === 'home';
-    const skyEnding = !home && forest.ending === 'sky';
-    poseMoonTree();
-    homeLights.visible = homeEnding;
-    houseWindows.emissiveIntensity = reduced.matches
-      ? homeEnding
-        ? 1.3
-        : 0
-      : T.MathUtils.lerp(
-          houseWindows.emissiveIntensity,
-          homeEnding ? 1.3 : 0,
-          dt * 2,
-        );
-    moonGold.emissiveIntensity = T.MathUtils.lerp(
-      moonGold.emissiveIntensity,
-      festival ? 0.8 + forest.lanterns.length * 0.2 : 0.08,
-      dt * 1.5,
-    );
-    moonLight.intensity = T.MathUtils.lerp(
-      moonLight.intensity,
-      festival ? 1.8 + forest.lanterns.length * 0.35 : 0,
-      dt * 1.5,
-    );
-    treeLanterns.forEach((lantern, index) => {
-      lantern.rotation.z = reduced.matches
-        ? 0
-        : Math.sin(peacefulTime * 0.7 + index) * 0.055;
-    });
-    fireflies.geometry.setDrawRange(
-      0,
-      forest.owlChoice === 'listen' || festival ? 36 : 16,
-    );
-    fireflies.material.uniforms.opacity.value = festival
-      ? 0.9
-      : forest.owlChoice === 'listen'
-        ? 0.75
-        : 0.35;
-    const guideHotspot =
-      forest.owlChoice === 'listen'
-        ? forest.chapter === 'grove'
-          ? view.hotspots.find(
-              (hot) => hot.id === view.melody[view.melodyIndex],
-            )
-          : forest.chapter === 'festival'
+    if (!home) {
+      const peacefulTime = reduced.matches ? 0 : elapsed;
+      const homeEnding = !home && forest.ending === 'home';
+      const skyEnding = !home && forest.ending === 'sky';
+      poseMoonTree();
+      homeLights.visible = homeEnding;
+      houseWindows.emissiveIntensity = reduced.matches
+        ? homeEnding
+          ? 1.3
+          : 0
+        : T.MathUtils.lerp(
+            houseWindows.emissiveIntensity,
+            homeEnding ? 1.3 : 0,
+            dt * 2,
+          );
+      moonGold.emissiveIntensity = T.MathUtils.lerp(
+        moonGold.emissiveIntensity,
+        festival ? 0.8 + forest.lanterns.length * 0.2 : 0.08,
+        dt * 1.5,
+      );
+      moonLight.intensity = T.MathUtils.lerp(
+        moonLight.intensity,
+        festival ? 1.8 + forest.lanterns.length * 0.35 : 0,
+        dt * 1.5,
+      );
+      treeLanterns.forEach((lantern, index) => {
+        lantern.rotation.z = reduced.matches
+          ? 0
+          : Math.sin(peacefulTime * 0.7 + index) * 0.055;
+      });
+      fireflies.geometry.setDrawRange(
+        0,
+        forest.owlChoice === 'listen' || festival ? 36 : 16,
+      );
+      fireflies.material.uniforms.opacity.value = festival
+        ? 0.9
+        : forest.owlChoice === 'listen'
+          ? 0.75
+          : 0.35;
+      const guideHotspot =
+        forest.owlChoice === 'listen'
+          ? forest.chapter === 'grove'
             ? view.hotspots.find(
-                (hot) =>
-                  hot.kind === 'lantern' && hot.available && !hot.complete,
+                (hot) => hot.id === view.melody[view.melodyIndex],
               )
-            : null
-        : null;
-    for (let index = 0; index < 36; index++) {
-      if (guideHotspot && index < 12) {
-        const fraction = reduced.matches
-          ? (index + 1) / 13
-          : (elapsed * 0.28 + index / 12) % 1;
-        fireflies.positions[index * 3] = T.MathUtils.lerp(
-          creature.root.position.x,
-          guideHotspot.x,
-          fraction,
-        );
-        fireflies.positions[index * 3 + 1] =
-          0.72 + Math.sin(fraction * Math.PI) * 0.46;
-        fireflies.positions[index * 3 + 2] = T.MathUtils.lerp(
-          creature.root.position.z,
-          guideHotspot.z,
-          fraction,
-        );
-        continue;
-      }
-      const angle = index * 2.399;
-      const radius = 1.3 + (index % 6) * 0.83;
-      fireflies.positions[index * 3] =
-        Math.cos(angle) * radius + Math.sin(peacefulTime * 0.33 + index) * 0.17;
-      fireflies.positions[index * 3 + 1] =
-        0.62 + (index % 5) * 0.29 + Math.sin(peacefulTime * 0.6 + angle) * 0.12;
-      fireflies.positions[index * 3 + 2] =
-        -4.9 + Math.sin(angle) * radius * 0.6;
-    }
-    fireflies.geometry.attributes.position.needsUpdate = true;
-    skyLights.points.visible = skyEnding;
-    if (skyEnding) {
-      const endingTime = reduced.matches ? 2 : elapsed - (endingStartedAt ?? 0);
-      skyLights.material.uniforms.opacity.value = reduced.matches
-        ? 0.86
-        : Math.min(0.86, endingTime * 0.55);
-      for (let index = 0; index < 44; index++) {
+            : forest.chapter === 'festival'
+              ? view.hotspots.find(
+                  (hot) =>
+                    hot.kind === 'lantern' && hot.available && !hot.complete,
+                )
+              : null
+          : null;
+      for (let index = 0; index < 36; index++) {
+        if (guideHotspot && index < 12) {
+          const fraction = reduced.matches
+            ? (index + 1) / 13
+            : (elapsed * 0.28 + index / 12) % 1;
+          fireflies.positions[index * 3] = T.MathUtils.lerp(
+            creature.root.position.x,
+            guideHotspot.x,
+            fraction,
+          );
+          fireflies.positions[index * 3 + 1] =
+            0.72 + Math.sin(fraction * Math.PI) * 0.46;
+          fireflies.positions[index * 3 + 2] = T.MathUtils.lerp(
+            creature.root.position.z,
+            guideHotspot.z,
+            fraction,
+          );
+          continue;
+        }
         const angle = index * 2.399;
-        skyLights.positions[index * 3] =
-          Math.cos(angle) * (1.1 + (index % 5) * 0.85) +
-          Math.sin(peacefulTime * 0.4 + index) * 0.2;
-        skyLights.positions[index * 3 + 1] = reduced.matches
-          ? 1.4 + (index % 9) * 0.5
-          : 0.65 + ((endingTime * 0.6 + index * 0.17) % 5.5);
-        skyLights.positions[index * 3 + 2] = -5.4 + Math.sin(angle) * 2.1;
+        const radius = 1.3 + (index % 6) * 0.83;
+        fireflies.positions[index * 3] =
+          Math.cos(angle) * radius +
+          Math.sin(peacefulTime * 0.33 + index) * 0.17;
+        fireflies.positions[index * 3 + 1] =
+          0.62 +
+          (index % 5) * 0.29 +
+          Math.sin(peacefulTime * 0.6 + angle) * 0.12;
+        fireflies.positions[index * 3 + 2] =
+          -4.9 + Math.sin(angle) * radius * 0.6;
       }
-      skyLights.geometry.attributes.position.needsUpdate = true;
+      fireflies.geometry.attributes.position.needsUpdate = true;
+      skyLights.points.visible = skyEnding;
+      if (skyEnding) {
+        const endingTime = reduced.matches
+          ? 2
+          : elapsed - (endingStartedAt ?? 0);
+        skyLights.material.uniforms.opacity.value = reduced.matches
+          ? 0.86
+          : Math.min(0.86, endingTime * 0.55);
+        for (let index = 0; index < 44; index++) {
+          const angle = index * 2.399;
+          skyLights.positions[index * 3] =
+            Math.cos(angle) * (1.1 + (index % 5) * 0.85) +
+            Math.sin(peacefulTime * 0.4 + index) * 0.2;
+          skyLights.positions[index * 3 + 1] = reduced.matches
+            ? 1.4 + (index % 9) * 0.5
+            : 0.65 + ((endingTime * 0.6 + index * 0.17) % 5.5);
+          skyLights.positions[index * 3 + 2] = -5.4 + Math.sin(angle) * 2.1;
+        }
+        skyLights.geometry.attributes.position.needsUpdate = true;
+      }
     }
     const targetColor = new T.Color(
       festival ? '#66758f' : home ? '#f4ecda' : '#c8dacf',
@@ -2489,23 +2507,28 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
       festival ? 0.9 : 2,
       dt * 0.7,
     );
-    if (reduced.matches) garden.scale.setScalar(1);
-    else garden.scale.lerp(new T.Vector3(1, 1, 1), dt * 3);
-    gardenBeds.forEach((bed, id) => {
-      const sproutStart = sproutStarts.get(id);
-      if (bed.sprout.visible) {
-        const progress =
-          reduced.matches || sproutStart === undefined
-            ? 1
-            : T.MathUtils.clamp((elapsed - sproutStart) / 0.58, 0, 1);
-        bed.sprout.scale.setScalar(
-          0.12 + (1 - Math.pow(1 - progress, 3)) * 0.88,
-        );
-      }
-      if (!bed.bloom.visible) return;
-      if (reduced.matches) bed.bloom.scale.setScalar(1);
-      else bed.bloom.scale.lerp(new T.Vector3(1, 1, 1), Math.min(1, dt * 4));
-    });
+    if (!home) {
+      if (reduced.matches) garden.scale.setScalar(1);
+      else garden.scale.lerp(new T.Vector3(1, 1, 1), dt * 3);
+      gardenBeds.forEach((bed, id) => {
+        const sproutStart = sproutStarts.get(id);
+        if (bed.sprout.visible) {
+          const progress =
+            reduced.matches || sproutStart === undefined
+              ? 1
+              : T.MathUtils.clamp((elapsed - sproutStart) / 0.58, 0, 1);
+          bed.sprout.scale.setScalar(
+            0.12 + (1 - Math.pow(1 - progress, 3)) * 0.88,
+          );
+        }
+        if (!bed.bloom.visible) return;
+        if (reduced.matches) bed.bloom.scale.setScalar(1);
+        else bed.bloom.scale.lerp(new T.Vector3(1, 1, 1), Math.min(1, dt * 4));
+      });
+    }
+    // Offscreen journeys still arrive, but need no label projection, DOM writes
+    // or GPU frame. Visibility resumes all presentation on the next frame.
+    if (!visible) return;
     camera.updateMatrixWorld();
     const actorBounds = (
       home || tags.length === 0 ? [] : [creature.root, ...routeFriends]

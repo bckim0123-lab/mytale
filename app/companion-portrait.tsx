@@ -55,13 +55,19 @@ export function useCompanionPortrait(
           preserveDrawingBuffer: true,
         });
         const cleanup: (() => void)[] = [
-          () => {
-            renderer.dispose();
-            renderer.forceContextLoss();
-          },
+          () => renderer.forceContextLoss(),
+          () => renderer.dispose(),
         ];
         dispose = () => {
-          while (cleanup.length) cleanup.pop()?.();
+          while (cleanup.length) {
+            const release = cleanup.pop();
+            try {
+              release?.();
+            } catch {
+              // A lost GPU must not prevent the other resources from being
+              // released or turn a successful portrait into a rejected task.
+            }
+          }
         };
         renderer.setSize(720, 900, false);
         renderer.setPixelRatio(1);

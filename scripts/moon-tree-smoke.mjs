@@ -80,6 +80,7 @@ const scene = new T.Scene();
 const b = {
   T,
   scene,
+  addForestRoot: (root) => scene.add(root),
   home: false,
   sphere,
   cylinder,
