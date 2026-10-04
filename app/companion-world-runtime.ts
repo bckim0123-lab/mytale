@@ -571,6 +571,40 @@ export type WorldOptions = {
   onStatus: (text: string) => void;
 };
 
+/** Temporary lighting resources are not owned by the mounted world. */
+function createWorldEnvironment(renderer: T.WebGLRenderer) {
+  let pmrem: T.PMREMGenerator | undefined;
+  let room: RoomEnvironment | undefined;
+  let completed = false;
+  const release = (cleanup: () => void) => {
+    try {
+      cleanup();
+    } catch {
+      // One unavailable graphics cleanup must not skip the remaining resources
+      // or replace the initialization error handled by the accessible fallback.
+    }
+  };
+  try {
+    pmrem = new T.PMREMGenerator(renderer);
+    room = new RoomEnvironment();
+    const environment = pmrem.fromScene(room, 0.04);
+    completed = true;
+    // The returned target stays alive until the mounted world's dispose().
+    return environment;
+  } finally {
+    release(() => room?.dispose());
+    release(() => pmrem?.dispose());
+    if (!completed) {
+      // mountCompanionWorld never returns on this path, so its caller cannot
+      // dispose the renderer. fromScene may also have allocated a GPU target
+      // before throwing, without returning that target to us.
+      release(() => renderer.dispose());
+      release(() => renderer.forceContextLoss());
+      release(() => renderer.domElement.remove());
+    }
+  }
+}
+
 /** A real mesh world. The UI only requests destinations; interactions fire after arrival. */
 export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
   const renderer = new T.WebGLRenderer({
@@ -605,13 +639,9 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
   camera.position.set(home ? 3.5 : 0, home ? 2.8 : 6.9, home ? 7.4 : 12.85);
   const lookAt = new T.Vector3(0, home ? 1.3 : 0.94, home ? 0 : 2.85);
   camera.lookAt(lookAt);
-  const pmrem = new T.PMREMGenerator(renderer);
-  const room = new RoomEnvironment();
-  const env = pmrem.fromScene(room, 0.04);
+  const env = createWorldEnvironment(renderer);
   scene.environment = env.texture;
   scene.environmentIntensity = 0.45;
-  room.dispose();
-  pmrem.dispose();
   const hemisphere = new T.HemisphereLight('#ffeed5', '#6a967f', 1);
   scene.add(hemisphere);
   const sun = new T.DirectionalLight('#fff0cf', 2);

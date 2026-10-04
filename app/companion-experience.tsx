@@ -629,7 +629,17 @@ export default function CompanionExperience({
       const old = saveRef.current;
       const previous = old.forest ?? initialForestState();
       const next = transitionForest(previous, event);
-      if (next === previous) return;
+      if (next === previous) {
+        // Rehearing the same owl line is a playback request, not new progress.
+        if (
+          event.type === 'interact' &&
+          event.id === 'owl-grove' &&
+          previous.chapter === 'grove' &&
+          previous.owlChoice
+        )
+          replayMelody();
+        return;
+      }
       const ending = getForestEnding(next);
       const timestamp = Date.now();
       let nextSave = { ...old, forest: next, updatedAt: timestamp };

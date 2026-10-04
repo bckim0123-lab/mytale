@@ -390,6 +390,57 @@ grove = transitionForest(grove, { type: 'interact', id: 'river-gate' });
 const beforeOwl = grove;
 grove = transitionForest(grove, { type: 'choose-owl', choice: 'invite' });
 const melody = getForestMelody(grove);
+for (const difficulty of ['simple', 'standard', 'challenge']) {
+  for (const choice of ['listen', 'invite']) {
+    let selected = transitionForest(
+      { ...beforeOwl, difficulty },
+      { type: 'choose-owl', choice },
+    );
+    selected = transitionForest(selected, {
+      type: 'interact',
+      id: getForestMelody(selected)[0],
+    });
+    const test = dispatchHarness(selected);
+    test.dispatch({ type: 'interact', id: 'owl-grove' });
+    assert.equal(test.calls.filter((call) => call === 'replay').length, 1);
+    const afterFirst = test.current();
+    assert.equal(afterFirst.moves, selected.moves);
+    assert.equal(afterFirst.melody, selected.melody);
+    for (let repeat = 0; repeat < 2; repeat++) {
+      const callCount = test.calls.length;
+      test.dispatch({ type: 'interact', id: 'owl-grove' });
+      assert.strictEqual(
+        test.current(),
+        afterFirst,
+        'Repeated owl listening preserves the saved state and partial melody.',
+      );
+      assert.deepEqual(
+        test.calls.slice(callCount),
+        ['replay'],
+        'Identical owl feedback restarts playback without a save or progress effects.',
+      );
+    }
+  }
+}
+for (const state of [
+  initialForestState(),
+  readyForest(),
+  beforeOwl,
+  { ...grove, chapter: 'festival' },
+  { ...grove, chapter: 'complete' },
+]) {
+  const test = dispatchHarness(state);
+  test.dispatch({ type: 'interact', id: 'owl-grove' });
+  const afterFirst = test.current();
+  const callCount = test.calls.length;
+  test.dispatch({ type: 'interact', id: 'owl-grove' });
+  assert.ok(
+    !test.calls.includes('replay'),
+    'Owl playback still requires the grove chapter and a chosen response.',
+  );
+  assert.strictEqual(test.current(), afterFirst);
+  assert.deepEqual(test.calls.slice(callCount), []);
+}
 let almostFinished = grove;
 for (const id of melody.slice(0, -1))
   almostFinished = transitionForest(almostFinished, { type: 'interact', id });

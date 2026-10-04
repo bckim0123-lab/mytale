@@ -27,6 +27,82 @@ function actualFunction(name) {
   assert.ok(node, `Actual runtime function ${name} exists`);
   return node.getText(ast);
 }
+const environmentFactory = ts.transpileModule(
+  `${actualFunction('createWorldEnvironment')} createWorldEnvironment;`,
+  { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
+).outputText;
+function lightingHarness(failAt, cleanupThrows = false) {
+  const calls = [];
+  const originalError = new Error(`lighting failure: ${failAt}`);
+  const cleanup = (name) => () => {
+    calls.push(name);
+    if (cleanupThrows) throw new Error(`cleanup failure: ${name}`);
+  };
+  const environment = { texture: {}, dispose: cleanup('target') };
+  const renderer = {
+    dispose: cleanup('renderer'),
+    forceContextLoss: cleanup('context'),
+    domElement: { remove: cleanup('canvas') },
+  };
+  const factory = runInNewContext(environmentFactory, {
+    T: {
+      PMREMGenerator: class {
+        constructor(receivedRenderer) {
+          assert.equal(receivedRenderer, renderer);
+          if (failAt === 'pmrem') throw originalError;
+        }
+        fromScene(room, blur) {
+          assert.ok(room);
+          assert.equal(blur, 0.04);
+          if (failAt === 'render') throw originalError;
+          return environment;
+        }
+        dispose = cleanup('pmrem');
+      },
+    },
+    RoomEnvironment: class {
+      constructor() {
+        if (failAt === 'room') throw originalError;
+      }
+      dispose = cleanup('room');
+    },
+  });
+  return { run: () => factory(renderer), calls, originalError, environment };
+}
+for (const failAt of ['pmrem', 'room', 'render']) {
+  for (const cleanupThrows of [false, true]) {
+    const lighting = lightingHarness(failAt, cleanupThrows);
+    assert.throws(
+      lighting.run,
+      (error) => error === lighting.originalError,
+      'Cleanup preserves the original error for the world fallback.',
+    );
+    assert.deepEqual(lighting.calls, [
+      ...(failAt === 'render' ? ['room'] : []),
+      ...(failAt !== 'pmrem' ? ['pmrem'] : []),
+      'renderer',
+      'context',
+      'canvas',
+    ]);
+  }
+}
+for (const cleanupThrows of [false, true]) {
+  const lighting = lightingHarness(null, cleanupThrows);
+  assert.equal(lighting.run(), lighting.environment);
+  assert.deepEqual(
+    lighting.calls,
+    ['room', 'pmrem'],
+    'Successful startup keeps the returned target and renderer alive for world.dispose().',
+  );
+}
+const actualMount = actualFunction('mountCompanionWorld');
+assert.match(actualMount, /const env = createWorldEnvironment\(renderer\)/);
+assert.doesNotMatch(actualMount, /new (?:T\.PMREMGenerator|RoomEnvironment)/);
+assert.ok(
+  actualMount.indexOf('createWorldEnvironment(renderer)') <
+    actualMount.indexOf('const geometries ='),
+  'Lighting initialization cleanup runs before world-owned geometry allocation.',
+);
 const code = ts.transpileModule(
   `
 let paused = true, disposed = false, frame = 0, last = 1000, elapsed = 7;
@@ -328,5 +404,5 @@ assert.match(
   'joystick retains dedicated game gestures',
 );
 console.log(
-  'World suspension passed: actual frame guard/clock, dialog pause/resume, lazy mount, no remount, disposal and forest-only vertical scrolling.',
+  'World suspension passed: lighting startup failures/cleanup ownership, actual frame guard/clock, dialog pause/resume, lazy mount, no remount, disposal and forest-only vertical scrolling.',
 );
