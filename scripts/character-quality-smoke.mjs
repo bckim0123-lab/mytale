@@ -449,6 +449,21 @@ for (const call of calls) {
     /차량·구름·네발동물·팔다리 없는 캐릭터/,
     'all stages preserve non-humanoid anatomy',
   );
+  assert.match(
+    prompt,
+    /원본에 존재하는 팔다리만 자연스럽게/,
+    '2D styling cannot invent limbs during generation, review or correction.',
+  );
+  assert.match(
+    prompt,
+    /3D 볼륨이나 광택은 요구하지 않음/,
+    '2D material quality is judged as illustration, without lowering any numeric gate.',
+  );
+  assert.doesNotMatch(
+    prompt,
+    /둥근 실루엣, 짧은 팔다리|폭신한 손발 끝|모든 귀·발·꼬리가/,
+    'No later unconditional anatomy instruction contradicts the source brief.',
+  );
 }
 exhausted();
 
