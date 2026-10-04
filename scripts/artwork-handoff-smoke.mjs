@@ -38,6 +38,66 @@ const code = ts.transpileModule(
 const settle = async () => {
   for (let turn = 0; turn < 8; turn++) await Promise.resolve();
 };
+
+// Evaluate the callback actually passed by Page, including React's dependency
+// identity semantics. An inline callback must reproduce an effect restart here.
+const pageSource = readFileSync('app/page.tsx', 'utf8');
+const pageAst = ts.createSourceFile(
+  'page.tsx',
+  pageSource,
+  ts.ScriptTarget.Latest,
+  true,
+  ts.ScriptKind.TSX,
+);
+let acceptedProp;
+const declarations = new Map();
+function visitPage(node) {
+  if (
+    ts.isJsxAttribute(node) &&
+    node.name.getText(pageAst) === 'onArtworkAccepted'
+  )
+    acceptedProp = node.initializer.expression;
+  if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name))
+    declarations.set(node.name.text, node.initializer);
+  ts.forEachChild(node, visitPage);
+}
+visitPage(pageAst);
+assert.ok(acceptedProp);
+const callbackExpression = ts.isIdentifier(acceptedProp)
+  ? declarations.get(acceptedProp.text)
+  : acceptedProp;
+assert.ok(callbackExpression);
+const callbackCode = ts.transpileModule(
+  `(${callbackExpression.getText(pageAst)})`,
+  {
+    compilerOptions: {
+      target: ts.ScriptTarget.ES2022,
+      module: ts.ModuleKind.CommonJS,
+    },
+  },
+).outputText;
+function parentCallbackRenderer(onAccepted) {
+  let previous;
+  return () =>
+    runInNewContext(callbackCode, {
+      setCompanionArtwork(value) {
+        assert.equal(value, null);
+        onAccepted();
+      },
+      useCallback(callback, dependencies) {
+        if (
+          previous &&
+          previous.dependencies.length === dependencies.length &&
+          dependencies.every((value, index) =>
+            Object.is(value, previous.dependencies[index]),
+          )
+        )
+          return previous.callback;
+        previous = { callback, dependencies };
+        return callback;
+      },
+    });
+}
 function fixture(options = {}) {
   let resolveSave, rejectSave;
   const gate = new Promise((resolve, reject) => {
@@ -144,6 +204,43 @@ for (const change of [
   assert.equal(race.state.accepted, 1);
 }
 const reset = fixture();
+
+const parentProgress = fixture();
+const rerenderParent = parentCallbackRenderer(
+  () => parentProgress.state.accepted++,
+);
+parentProgress.context.onArtworkAccepted = rerenderParent();
+let cleanupProgress = parentProgress.handlers.start();
+await settle();
+parentProgress.handlers.updateAppearance({
+  drawingAssetId: 'chosen-during-save',
+});
+const newerSelection = parentProgress.state.save;
+for (let tick = 0; tick < 10; tick++) {
+  const nextCallback = rerenderParent();
+  if (nextCallback !== parentProgress.context.onArtworkAccepted) {
+    cleanupProgress();
+    parentProgress.context.onArtworkAccepted = nextCallback;
+    cleanupProgress = parentProgress.handlers.start();
+    await settle();
+  }
+}
+parentProgress.resolveSave();
+await settle();
+assert.strictEqual(
+  parentProgress.state.save,
+  newerSelection,
+  'Background progress rerenders cannot recapture and overwrite a newer friend selection',
+);
+assert.equal(
+  parentProgress.state.assets.length,
+  1,
+  'Renders do not restart the durable handoff',
+);
+assert.equal(parentProgress.state.accepted, 1);
+assert.equal(parentProgress.state.busy, false);
+assert.match(parentProgress.state.notices.at(-1), /지금 고른 친구/);
+
 reset.handlers.start();
 await settle();
 reset.state.generation = 'after';

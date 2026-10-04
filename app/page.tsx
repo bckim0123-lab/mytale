@@ -1,7 +1,7 @@
 'use client';
 /* eslint-disable next/no-img-element */
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import CharacterWelcome from './character-welcome';
 import { characterRecoveryMode } from './character-recovery';
 import { withCharacterDeadline } from './character-request-deadline';
@@ -738,6 +738,12 @@ export default function Home() {
     name: string;
     persona: typeof defaultPersona;
   } | null>(null);
+  // Progress ticks may rerender Page while a durable artwork handoff is pending.
+  // Keep this effect dependency stable so a newer friend choice stays protected.
+  const acknowledgeCompanionArtwork = useCallback(
+    () => setCompanionArtwork(null),
+    [],
+  );
   const reviewTickets = useRef<
     Record<number, { value: string; expiresAt: number }>
   >({});
@@ -2566,7 +2572,7 @@ export default function Home() {
         sourceImage={image}
         age={age}
         incomingArtwork={companionArtwork}
-        onArtworkAccepted={() => setCompanionArtwork(null)}
+        onArtworkAccepted={acknowledgeCompanionArtwork}
       />
     );
 
