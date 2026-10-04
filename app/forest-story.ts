@@ -890,17 +890,31 @@ export function transitionForest(
   if (state.chapter === 'crossing' && state.route === 'garden') {
     if ((FOREST_SEED_IDS as readonly string[]).includes(id)) {
       if (state.collected.includes(id)) return state;
-      if (state.edition === 2)
+      if (state.edition === 2) {
+        const seedIndex = FOREST_SEED_IDS.indexOf(
+          id as (typeof FOREST_SEED_IDS)[number],
+        );
+        const color = ['복숭아빛', '민트빛', '꿀빛'][seedIndex];
+        const found = [
+          '복숭아빛 씨앗이 손바닥에 쏙! 포포가 빈 화단 옆에 조심히 놓았어.',
+          '민트빛 씨앗 발견! 포포가 귀를 쫑긋 세웠어. "저쪽 화단에 어울리겠다."',
+          '풀잎 사이에서 꿀빛 씨앗이 반짝! 포포가 두 손으로 살포시 받아 줬어.',
+        ][seedIndex];
+        const next =
+          state.collected.length === 0
+            ? '이제 두 개만 더 찾아보자.'
+            : '이제 하나만 더!';
         return advance(
           state,
           { collected: [...state.collected, id] },
           state.collected.length === 2
-            ? '씨앗 세 개를 다 모았어! 포포가 화단에 놓는 동안 우리는 물길 조각을 이어 보자.'
-            : '동그란 씨앗을 찾았어! 포포에게 가져다주니 빈 화단 옆에 조심히 놓았어.',
+            ? `마지막은 ${color} 씨앗이네. 세 개 다 모았어! 포포가 화단에 놓는 동안 우리는 물길 조각을 이어 보자.`
+            : `${found} ${next}`,
           state.collected.length === 2
-            ? '세 개 다 찾았어! 포포와 물길을 이어 줘.'
-            : '씨앗을 찾았어! 포포가 잘 보관해 줄게.',
+            ? `${color} 씨앗까지 세 개 다 찾았어! 포포와 물길을 이어 줘.`
+            : `${color} 씨앗을 찾았어! 포포가 잘 보관해 줄게. ${next}`,
         );
+      }
       return advance(
         state,
         { collected: [...state.collected, id] },

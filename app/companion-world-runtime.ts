@@ -1550,7 +1550,13 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
       } else {
         ball(
           g,
-          hot.id.includes('water') ? waterMat : gold,
+          hot.id === 'seed-peach'
+            ? pink
+            : hot.id === 'seed-mint'
+              ? mint
+              : hot.id.includes('water')
+                ? waterMat
+                : gold,
           [0, 0.22, 0],
           [0.2, 0.24, 0.18],
         );
@@ -2020,6 +2026,9 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
             cursor.visible = false;
             const id = pendingId;
             pendingId = null;
+            // Travel has ended even if the current UI rejects this interaction.
+            // Clear first so any new action or error feedback remains visible.
+            options.onStatus('');
             if (id) {
               arrivalFeedback(id);
               options.onInteract(id);
