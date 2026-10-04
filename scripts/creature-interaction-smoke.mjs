@@ -225,6 +225,151 @@ try {
   missing.dispose();
   assert.equal(missing.root.userData.drawingStatus, 'disposed');
 
+  // Exercise actual rig updates without an image decoder/GPU. For a plush rig,
+  // subtract an idle companion at the same clock to isolate lift from breathing.
+  function reactionMotion(kind, fps, reducedMotion) {
+    const drawing = kind === 'drawing';
+    const rig = drawing
+      ? createDrawingCreature({
+          ...DEFAULT_APPEARANCE,
+          drawingImage: 'data:image/png;base64,test',
+        })
+      : createCreature(DEFAULT_APPEARANCE);
+    const reference = drawing ? null : createCreature(DEFAULT_APPEARANCE);
+    const body = rig.root.getObjectByName(
+      drawing ? 'DrawingBody' : 'BodyPivot',
+    );
+    const referenceBody = reference?.root.getObjectByName('BodyPivot');
+    const height = () => body.position.y - (referenceBody?.position.y ?? 0);
+    const motionScale = reducedMotion ? (drawing ? 0.12 : 0.16) : 1;
+    let time = 0;
+    return {
+      get height() {
+        return height();
+      },
+      dispose() {
+        rig.dispose();
+        reference?.dispose();
+      },
+      step(action, actionId, delta = 1 / fps) {
+        const before = height();
+        const elapsed = Math.min(
+          0.08,
+          Math.max(0, Number.isFinite(delta) ? delta : 0),
+        );
+        time += elapsed;
+        rig.update(delta, time, {
+          moving: false,
+          action,
+          actionId,
+          reducedMotion,
+        });
+        reference?.update(delta, time, {
+          moving: false,
+          action: 'idle',
+          reducedMotion,
+        });
+        const after = height();
+        assert.ok(
+          Number.isFinite(after) && after >= 0,
+          'Reaction height stays finite and above ground',
+        );
+        assert.ok(
+          Math.abs(after - before) <= 2 * elapsed * motionScale + 1e-12,
+          `${kind} ${fps}fps ${action}: a new reaction cannot teleport the body`,
+        );
+        return after;
+      },
+    };
+  }
+  for (const kind of ['drawing', 'plush']) {
+    for (const fps of [30, 60]) {
+      for (const reducedMotion of [false, true]) {
+        const drawing = kind === 'drawing';
+        const motionScale = reducedMotion ? (drawing ? 0.12 : 0.16) : 1;
+        const peak = drawing ? 0.46 : 0.47;
+        for (const next of ['hop', 'pet', 'wave']) {
+          const interrupted = reactionMotion(kind, fps, reducedMotion);
+          for (let i = 0; i < Math.round(fps * 0.4); i++)
+            interrupted.step('hop', 1);
+          assert.ok(
+            Math.abs(interrupted.height - peak * motionScale) < 1e-12,
+            'The original hop still reaches its peak at 0.4 seconds',
+          );
+          for (let i = 0; i < fps; i++) {
+            const height = interrupted.step(next, 2);
+            if (next === 'hop' && i === Math.round(fps * 0.4) - 1)
+              assert.ok(
+                Math.abs(height - peak * motionScale) < 1e-12,
+                'A midair repeated hop reaches its next peak without delay',
+              );
+          }
+          assert.equal(interrupted.height, 0, 'Exact final landing');
+          interrupted.dispose();
+        }
+
+        const normal = reactionMotion(kind, fps, reducedMotion);
+        let hopTime = 0;
+        for (let i = 0; i < fps; i++) {
+          hopTime += 1 / fps;
+          const expected =
+            hopTime < 0.8
+              ? Math.pow(
+                  Math.sin((hopTime / 0.8) * Math.PI),
+                  drawing ? 1 : 1.25,
+                ) *
+                peak *
+                motionScale
+              : 0;
+          assert.ok(
+            Math.abs(normal.step('hop', 1) - expected) < 1e-12,
+            'Uninterrupted hop retains its original phase and height',
+          );
+        }
+        assert.equal(normal.height, 0);
+        normal.dispose();
+
+        const celebration = reactionMotion(kind, fps, reducedMotion);
+        for (let i = 0; i < Math.floor(fps * 1.7); i++)
+          celebration.step('celebrate', 1);
+        for (let i = 0; i < fps; i++) celebration.step('idle', 1);
+        assert.equal(
+          celebration.height,
+          0,
+          'Runtime celebration expiry settles fully without a one-frame drop',
+        );
+        celebration.dispose();
+
+        for (const invalidDelta of [0, -1, NaN, Infinity, -Infinity]) {
+          const frozen = reactionMotion(kind, fps, reducedMotion);
+          for (let i = 0; i < Math.round(fps * 0.4); i++) frozen.step('hop', 1);
+          const before = frozen.height;
+          frozen.step('pet', 2, invalidDelta);
+          assert.equal(
+            frozen.height,
+            before,
+            'A reaction at zero effective delta cannot change height',
+          );
+          for (let i = 0; i < fps; i++) frozen.step('pet', 2);
+          assert.equal(frozen.height, 0);
+          frozen.dispose();
+        }
+
+        const capped = reactionMotion(kind, fps, reducedMotion);
+        for (let i = 0; i < Math.round(fps * 0.4); i++) capped.step('hop', 1);
+        const before = capped.height;
+        capped.step('wave', 2, 10);
+        assert.ok(
+          Math.abs(before - capped.height - 0.16 * motionScale) < 1e-12,
+          'A delayed frame retains the existing 0.08-second delta clamp',
+        );
+        for (let i = 0; i < fps; i++) capped.step('wave', 2);
+        assert.equal(capped.height, 0);
+        capped.dispose();
+      }
+    }
+  }
+
   const originalImage = globalThis.Image,
     originalDocument = globalThis.document;
   const loadedImages = [];
@@ -465,7 +610,7 @@ try {
   );
   assert.match(runtime, /actionId \+= 1/, 'every reaction has new actionId');
   console.log(
-    'creature interaction smoke passed: repeated hop/wave, drawing motion, closed alpha geometry, volume/UV/bounds, safe missing image, full stop contract.',
+    'creature interaction smoke passed: repeated hop/wave, both rigs midair continuity at 30/60fps, exact landing/reduced motion/delta bounds, closed alpha geometry, volume/UV/bounds, safe missing image, full stop contract.',
   );
 } finally {
   await server.close();

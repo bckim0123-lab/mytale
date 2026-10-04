@@ -207,13 +207,15 @@ export function ForestMemories({
   return (
     <details className={`fa-memories ${compact ? 'fa-memories-compact' : ''}`}>
       <summary>
-        <span>✧ 숲에서 주운 작은 기억</span>
+        <span>✧ 지금까지 모은 숲의 기억</span>
         <small>
           {FOREST_DISCOVERY_IDS.filter((id) => discovered.includes(id)).length}{' '}
           / 3
         </small>
       </summary>
-      <p>서두르지 않아도 괜찮아요. 강가와 정원을 산책하다 보면 만나요.</p>
+      <p>
+        여러 번의 모험에서 모은 기억이에요. 강가와 정원을 천천히 둘러보세요.
+      </p>
       <div>
         {FOREST_DISCOVERY_IDS.map((id) => {
           const found = discovered.includes(id);

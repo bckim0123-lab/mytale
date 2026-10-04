@@ -374,7 +374,8 @@ export function createDrawingCreature(appearance: CreatureAppearance) {
 
   let localTime = 0,
     actionTime = 0,
-    moveBlend = 0;
+    moveBlend = 0,
+    actionLift = 0;
   let lastAction = 'idle',
     lastActionId: number | undefined;
   function update(dt: number, _time: number, input: CreatureFrame) {
@@ -393,8 +394,8 @@ export function createDrawingCreature(appearance: CreatureAppearance) {
     const gait = Math.sin(localTime * 10.5) * moveBlend * reduce;
     const breath = Math.sin(localTime * 2.05) * 0.012 * reduce;
     const hop =
-      action === 'hop'
-        ? Math.sin(Math.min(actionTime / 0.8, 1) * Math.PI) * 0.46 * reduce
+      action === 'hop' && actionTime < 0.8
+        ? Math.sin((actionTime / 0.8) * Math.PI) * 0.46 * reduce
         : 0;
     const joy =
       action === 'celebrate'
@@ -407,7 +408,15 @@ export function createDrawingCreature(appearance: CreatureAppearance) {
           0.13 *
           reduce
         : 0;
-    body.position.y = Math.abs(gait) * 0.055 + hop + joy;
+    // Keep a new reaction responsive without teleporting an airborne drawing.
+    // Normal hop speed peaks below 2 units/s, so its phase stays unchanged.
+    const liftStep = 2 * delta * reduce;
+    actionLift = THREE.MathUtils.clamp(
+      hop + joy,
+      Math.max(0, actionLift - liftStep),
+      actionLift + liftStep,
+    );
+    body.position.y = Math.abs(gait) * 0.055 + actionLift;
     body.rotation.z =
       gait * 0.045 +
       greet +

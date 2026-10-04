@@ -930,6 +930,7 @@ export function createCreature(
   let moveBlend = 0,
     localTime = 0,
     actionTime = 0,
+    actionLift = 0,
     lastAction = 'idle';
   let lastActionId: number | undefined;
   let headX = 0,
@@ -958,23 +959,27 @@ export function createCreature(
     const pet = action === 'pet';
     const sleeping = action === 'sleep';
     const hop =
-      action === 'hop'
-        ? Math.pow(
-            Math.max(0, Math.sin(Math.min(actionTime / 0.8, 1) * Math.PI)),
-            1.25,
-          ) *
+      action === 'hop' && actionTime < 0.8
+        ? Math.pow(Math.max(0, Math.sin((actionTime / 0.8) * Math.PI)), 1.25) *
           0.47 *
           reduced
         : 0;
     const bouncing = joy
       ? Math.abs(Math.sin(actionTime * 6.5)) * 0.14 * reduced
       : 0;
+    // Preserve the normal hop curve while landing smoothly on a new reaction.
+    // Only action lift is bounded; breathing, gait and sleeping stay independent.
+    const liftStep = 2 * delta * reduced;
+    actionLift = clamp(
+      hop + bouncing,
+      Math.max(0, actionLift - liftStep),
+      actionLift + liftStep,
+    );
     bodyPivot.position.y =
       0.83 +
       breathing +
       Math.abs(gait) * 0.055 +
-      hop +
-      bouncing -
+      actionLift -
       expressionBlend * 0.1;
     bodyPivot.rotation.z =
       gait * 0.048 + (pet ? Math.sin(actionTime * 5) * 0.045 * reduced : 0);

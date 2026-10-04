@@ -70,6 +70,7 @@ import {
   getForestCompanion,
   type ForestEvent,
   type ForestDifficulty,
+  type ForestState,
 } from './forest-story';
 import type { CreatureAppearance, CreatureKind } from './creature-types';
 import './companion.css';
@@ -118,6 +119,11 @@ const notes: Record<string, number> = {
   'bell-leaf': 659.25,
   'bell-star': 783.99,
 };
+function forestMomentKey(
+  forest: Pick<ForestState, 'chapter' | 'bridges' | 'gardenBloom'>,
+) {
+  return `${forest.chapter}-${forest.bridges || forest.gardenBloom}`;
+}
 type Props = {
   onExit: () => void;
   onDrawing: () => void;
@@ -175,6 +181,7 @@ export default function CompanionExperience({
   const backupInput = useRef<HTMLInputElement>(null);
   const acceptedArtwork = useRef<string | null>(null);
   const [mode, setMode] = useState<'home' | 'forest'>('home');
+  const [resumedMomentKey, setResumedMomentKey] = useState<string | null>(null);
   const [panel, setPanel] = useState<'customize' | 'books'>('customize');
   const [notice, setNotice] = useState('안녕! 만나서 반가워. 우리 같이 놀까?');
   const [walking, setWalking] = useState('');
@@ -231,6 +238,7 @@ export default function CompanionExperience({
     if (dismiss) setToybox(null);
   }, []);
   const forest = save.forest ?? initialForestState();
+  const momentKey = forestMomentKey(forest);
   const liveAppearance = useMemo(
     () => ({
       ...save.appearance,
@@ -885,6 +893,11 @@ export default function CompanionExperience({
     setMelodyHelp(false);
     setPetSpeech('');
     cancelToyRequest();
+    setResumedMomentKey(
+      current.forest && current.forest.chapter !== 'complete'
+        ? forestMomentKey(current.forest)
+        : null,
+    );
     if (!current.forest || current.forest.chapter === 'complete')
       commitSave((s) => ({
         ...s,
@@ -1598,6 +1611,7 @@ export default function CompanionExperience({
                         <button
                           key={kind.id}
                           className={
+                            !save.appearance.drawingAssetId &&
                             save.appearance.kind === kind.id
                               ? 'is-selected'
                               : ''
@@ -1948,16 +1962,18 @@ export default function CompanionExperience({
                   onReady={() => setUnavailable(false)}
                 />
               )}
-              <ForestMoment
-                key={`${forest.chapter}-${forest.bridges || forest.gardenBloom}`}
-                chapter={forest.chapter}
-                crafted={forest.bridges || forest.gardenBloom}
-                onDismiss={() =>
-                  gameStage.current
-                    ?.querySelector<HTMLButtonElement>('.cw-pet-friend')
-                    ?.focus({ preventScroll: true })
-                }
-              />
+              {momentKey !== resumedMomentKey && (
+                <ForestMoment
+                  key={momentKey}
+                  chapter={forest.chapter}
+                  crafted={forest.bridges || forest.gardenBloom}
+                  onDismiss={() =>
+                    gameStage.current
+                      ?.querySelector<HTMLButtonElement>('.cw-pet-friend')
+                      ?.focus({ preventScroll: true })
+                  }
+                />
+              )}
               <div className="cw-stage-tools">
                 <button
                   className="cw-pet-friend"

@@ -59,13 +59,16 @@ const {
   initialForestState,
   transitionForest,
   FOREST_WOOD_IDS,
+  FOREST_SEED_IDS,
   FOREST_BELL_IDS,
+  FOREST_LANTERN_IDS,
   getForestMelody,
   getForestEnding,
 } = moduleFromFile('app/forest-story.ts');
 const { forestToyFor, forestToyStillCurrent } = moduleFromFile(
   'app/forest-play-controls.ts',
 );
+const forestMomentKey = load('forestMomentKey', {});
 function readyForest() {
   let state = transitionForest(initialForestState(), {
     type: 'choose-route',
@@ -84,6 +87,7 @@ function harness(overrides = {}) {
   const noop = () => {};
   const bindings = {
     mode: 'forest',
+    resumedMomentKey: null,
     book: null,
     settings: false,
     chat: false,
@@ -109,6 +113,7 @@ function harness(overrides = {}) {
     acceptedArtwork: { current: null },
     colorRequest: { current: 0 },
     initialForestState,
+    forestMomentKey,
     forestToyFor,
     forestToyStillCurrent,
     clearTimeout,
@@ -128,6 +133,9 @@ function harness(overrides = {}) {
     setBackupStatus: (value) => errors.push(value),
     setMode: (value) => {
       bindings.mode = value;
+    },
+    setResumedMomentKey: (value) => {
+      bindings.resumedMomentKey = value;
     },
     setBook: (value) => {
       bindings.book = value;
@@ -181,6 +189,162 @@ function harness(overrides = {}) {
     actions,
     call: (name, ...args) => load(name, bindings)(...args),
   };
+}
+
+// Execute the real start handler and the real JSX gate, with one canonical
+// milestone key shared by the entry capture and the rendered caption.
+const momentKeyDeclaration = findAll(
+  (node) =>
+    ts.isVariableDeclaration(node) && node.name.getText(ast) === 'momentKey',
+)[0];
+const momentElement = findAll(
+  (node) =>
+    ts.isJsxSelfClosingElement(node) &&
+    node.tagName.getText(ast) === 'ForestMoment',
+)[0];
+assert.ok(momentKeyDeclaration?.initializer && momentElement);
+let momentRender = momentElement.parent;
+while (momentRender && !ts.isJsxExpression(momentRender))
+  momentRender = momentRender.parent;
+assert.ok(
+  momentRender?.expression &&
+    ts.isBinaryExpression(momentRender.expression) &&
+    momentRender.expression.operatorToken.kind ===
+      ts.SyntaxKind.AmpersandAmpersandToken,
+);
+const momentKeyAttribute = momentElement.attributes.properties.find(
+  (node) => ts.isJsxAttribute(node) && node.name.getText(ast) === 'key',
+);
+assert.ok(momentKeyAttribute?.initializer?.expression);
+function captionVisible(forest, resumedMomentKey) {
+  const momentKey = evaluate(momentKeyDeclaration.initializer, {
+    forest,
+    forestMomentKey,
+  });
+  const bindings = { momentKey, resumedMomentKey };
+  assert.equal(
+    evaluate(momentKeyAttribute.initializer.expression, bindings),
+    momentKey,
+  );
+  return evaluate(momentRender.expression.left, bindings);
+}
+function adventureEntry(forest) {
+  const test = harness({ mode: 'home', resumedMomentKey: 'arrival-false' });
+  const bindings = test.bindings;
+  const writes = [];
+  bindings.save = { ...bindings.save, forest };
+  bindings.saveRef.current = bindings.save;
+  bindings.commitSave = (update) => {
+    bindings.saveRef.current =
+      typeof update === 'function' ? update(bindings.saveRef.current) : update;
+    bindings.save = bindings.saveRef.current;
+    writes.push(bindings.save);
+  };
+  return { ...test, writes };
+}
+let gardenResume = transitionForest(initialForestState(), {
+  type: 'choose-route',
+  route: 'garden',
+});
+for (const id of FOREST_SEED_IDS)
+  gardenResume = transitionForest(gardenResume, { type: 'interact', id });
+const craftedGarden = transitionForest(gardenResume, {
+  type: 'complete-craft',
+  design: 'heart',
+});
+const groveResume = transitionForest(craftedGarden, {
+  type: 'interact',
+  id: 'garden-gate',
+});
+const owlResumeStates = ['listen', 'invite'].flatMap((choice) => {
+  const chosen = transitionForest(groveResume, { type: 'choose-owl', choice });
+  return [
+    chosen,
+    transitionForest(chosen, {
+      type: 'interact',
+      id: getForestMelody(chosen)[0],
+    }),
+  ];
+});
+for (const state of [gardenResume, craftedGarden, ...owlResumeStates]) {
+  const test = adventureEntry(state);
+  const originalSave = test.bindings.saveRef.current;
+  test.call('startAdventure');
+  assert.equal(test.bindings.mode, 'forest');
+  assert.equal(test.bindings.resumedMomentKey, forestMomentKey(state));
+  assert.equal(captionVisible(state, test.bindings.resumedMomentKey), false);
+  assert.strictEqual(
+    test.bindings.saveRef.current,
+    originalSave,
+    'Resuming preserves all saved progress.',
+  );
+  assert.equal(
+    test.writes.length,
+    0,
+    'Caption suppression is transient, not a save write.',
+  );
+  test.call('goHome');
+  test.call('startAdventure');
+  assert.equal(captionVisible(state, test.bindings.resumedMomentKey), false);
+  assert.equal(test.writes.length, 0);
+  if (state.chapter === 'grove') {
+    const replay = transitionForest(state, {
+      type: 'interact',
+      id: 'owl-grove',
+    });
+    assert.equal(captionVisible(replay, test.bindings.resumedMomentKey), false);
+    let nextChapter = state;
+    for (const id of getForestMelody(state).slice(state.melody))
+      nextChapter = transitionForest(nextChapter, { type: 'interact', id });
+    assert.equal(nextChapter.chapter, 'festival');
+    assert.equal(
+      captionVisible(nextChapter, test.bindings.resumedMomentKey),
+      true,
+    );
+  }
+}
+for (const state of [readyForest(), gardenResume]) {
+  const test = adventureEntry(state);
+  test.call('startAdventure');
+  const crafted = transitionForest(state, {
+    type: 'complete-craft',
+    design: 'star',
+  });
+  assert.equal(crafted.chapter, state.chapter);
+  assert.equal(
+    captionVisible(crafted, test.bindings.resumedMomentKey),
+    true,
+    'A newly completed craft retains its introduction even without changing chapter.',
+  );
+  const crossed = transitionForest(crafted, {
+    type: 'interact',
+    id: state.route === 'river' ? 'river-gate' : 'garden-gate',
+  });
+  assert.equal(crossed.chapter, 'grove');
+  assert.equal(captionVisible(crossed, test.bindings.resumedMomentKey), true);
+}
+let completedResume = owlResumeStates[0];
+for (const id of getForestMelody(completedResume))
+  completedResume = transitionForest(completedResume, { type: 'interact', id });
+for (const id of FOREST_LANTERN_IDS)
+  completedResume = transitionForest(completedResume, { type: 'interact', id });
+completedResume = transitionForest(completedResume, {
+  type: 'choose-ending',
+  choice: 'home',
+});
+assert.equal(completedResume.chapter, 'complete');
+for (const state of [undefined, completedResume]) {
+  const test = adventureEntry(state);
+  test.call('startAdventure');
+  assert.equal(
+    test.bindings.resumedMomentKey,
+    null,
+    'A brand-new adventure clears old suppression.',
+  );
+  assert.equal(test.writes.length, 1);
+  const fresh = test.bindings.saveRef.current.forest;
+  assert.equal(fresh.chapter, 'arrival');
+  assert.equal(captionVisible(fresh, test.bindings.resumedMomentKey), true);
 }
 
 // A real pending flush must never place a toy over the destination screen.

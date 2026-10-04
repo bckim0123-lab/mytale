@@ -150,6 +150,69 @@ function harness() {
   test.unmount();
   assert.equal(test.timers.size, 0);
 }
+
+const memoryComponent = ast.statements.find(
+  (node) =>
+    ts.isFunctionDeclaration(node) && node.name?.text === 'ForestMemories',
+);
+const icons = ast.statements.find(
+  (node) =>
+    ts.isVariableStatement(node) &&
+    node.declarationList.declarations.some(
+      (item) => item.name.getText(ast) === 'discoveryIcons',
+    ),
+);
+assert.ok(memoryComponent && icons);
+const storyExports = {};
+runInNewContext(
+  ts.transpileModule(readFileSync('app/forest-story.ts', 'utf8'), {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2022,
+    },
+  }).outputText,
+  { exports: storyExports },
+);
+const memoryView = runInNewContext(
+  ts.transpileModule(
+    `${icons.getText(ast)}\n${memoryComponent.getText(ast).replace('export function', 'function')}\nForestMemories`,
+    {
+      compilerOptions: {
+        module: ts.ModuleKind.CommonJS,
+        target: ts.ScriptTarget.ES2022,
+        jsx: ts.JsxEmit.ReactJSX,
+      },
+    },
+  ).outputText,
+  {
+    ...storyExports,
+    exports: {},
+    require(name) {
+      assert.equal(name, 'react/jsx-runtime');
+      const jsx = (type, props) => ({ type, props });
+      return { jsx, jsxs: jsx };
+    },
+  },
+);
+const visibleText = (node) =>
+  Array.isArray(node)
+    ? node.map(visibleText).join('')
+    : node?.props
+      ? visibleText(node.props.children)
+      : node == null || typeof node === 'boolean'
+        ? ''
+        : String(node);
+for (const compact of [false, true]) {
+  for (let count = 0; count <= 3; count++) {
+    const tree = memoryView({
+      compact,
+      discovered: storyExports.FOREST_DISCOVERY_IDS.slice(0, count),
+    });
+    assert.match(visibleText(tree), /지금까지 모은 숲의 기억/);
+    assert.match(visibleText(tree), /여러 번의 모험에서 모은 기억/);
+    assert.ok(visibleText(tree.props.children[0]).includes(`${count} / 3`));
+  }
+}
 console.log(
-  'Forest caption smoke passed: focus pauses auto-dismiss, blur resumes, explicit close hands off focus, unmount clears timers.',
+  'Forest caption smoke passed: focus-safe dismissal, timer cleanup and explicit lifetime discovery totals in both views.',
 );

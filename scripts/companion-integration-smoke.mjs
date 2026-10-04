@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import { createServer } from 'vite';
 
@@ -61,6 +62,52 @@ function objectKeys(node) {
         .map((property) => property.name?.getText())
         .filter(Boolean)
     : [];
+}
+
+// The painted selection and the announced selection must identify the same
+// friend. A saved fallback species is not selected while artwork is active.
+const kindButton = nodes(
+  experienceAst,
+  (node) =>
+    ts.isJsxOpeningElement(node) &&
+    node.tagName.getText(experienceAst) === 'button' &&
+    node.attributes.properties.some(
+      (attribute) =>
+        attribute.name?.getText(experienceAst) === 'key' &&
+        attribute.initializer?.expression?.getText(experienceAst) === 'kind.id',
+    ),
+)[0];
+assert.ok(kindButton, 'Actual prepared-friend selection button exists.');
+const kindAttribute = (name, bindings) => {
+  const attribute = kindButton.attributes.properties.find(
+    (item) => item.name?.getText(experienceAst) === name,
+  );
+  assert.ok(
+    attribute?.initializer?.expression,
+    `Actual ${name} expression exists.`,
+  );
+  const expression = attribute.initializer.expression.getText(experienceAst);
+  return runInNewContext(`(${expression})`, bindings);
+};
+for (const drawingAssetId of [undefined, 'a'.repeat(64)]) {
+  for (const savedKind of ['sprout', 'bunny', 'cat', 'bear']) {
+    let selectedCount = 0;
+    for (const id of ['sprout', 'bunny', 'cat', 'bear']) {
+      const bindings = {
+        kind: { id },
+        save: { appearance: { kind: savedKind, drawingAssetId } },
+      };
+      const selected = !drawingAssetId && savedKind === id;
+      assert.equal(kindAttribute('aria-pressed', bindings), selected);
+      assert.equal(
+        kindAttribute('className', bindings).includes('is-selected'),
+        selected,
+        `Visible selection matches active friend: ${savedKind}/${id}/${!!drawingAssetId}`,
+      );
+      if (selected) selectedCount += 1;
+    }
+    assert.equal(selectedCount, drawingAssetId ? 0 : 1);
+  }
 }
 
 const server = await createServer({
