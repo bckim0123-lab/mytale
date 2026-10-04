@@ -20,6 +20,8 @@ try {
   const art = await server.ssrLoadModule('/app/storybook-export.ts');
   const source = readFileSync('app/companion-bookshelf.tsx', 'utf8');
   const exports = {};
+  let previewCalls = [];
+  let previewLibrary = {};
   let requestedPage = 0;
   let refIndex = 0,
     focusCalls = 0;
@@ -40,6 +42,17 @@ try {
       require(name) {
         if (name.endsWith('.css')) return {};
         if (name === './storybook-export') return art;
+        if (name === './use-drawing-previews')
+          return {
+            useDrawingPreviews(ids) {
+              previewCalls.push([...ids]);
+              return Object.fromEntries(
+                ids
+                  .filter((id) => previewLibrary[id])
+                  .map((id) => [id, previewLibrary[id]]),
+              );
+            },
+          };
         if (name === 'react')
           return {
             ...React,
@@ -60,7 +73,7 @@ try {
           };
         assert.ok(
           ['react/jsx-runtime', 'lucide-react'].includes(name),
-          'Covers must not import storage, network, or a WebGL renderer',
+          'Covers load through one bounded preview hook, never a network or WebGL renderer',
         );
         return nativeRequire(name);
       },
@@ -78,7 +91,7 @@ try {
     bodyColor: '#ffffff',
     accentColor: '#ffffff',
     accessory: 'star',
-    drawingAssetId: 'saved-hero',
+    drawingAssetId: 'a'.repeat(64),
   };
   const books = Array.from({ length: 100 }, (_, index) => ({
     id: `book-${index}`,
@@ -90,15 +103,15 @@ try {
     ending: '함께했어요',
     choices: { route: 'river', owl: 'invite', ending: 'sky' },
   }));
-  const assets = [
-    {
-      id: 'saved-hero',
-      png: 'data:image/png;base64,c2F2ZWQ=',
-      name: '지금 바꾼 이름',
-    },
-    { id: 'current-friend', png: 'CURRENT_FRIEND_MUST_NOT_APPEAR' },
-  ];
-  assert.equal(bookshelfCover(books[0], assets).hero, assets[0].png);
+  const assets = {
+    [appearance.drawingAssetId]: 'data:image/png;base64,c2F2ZWQ=',
+    'current-friend': 'CURRENT_FRIEND_MUST_NOT_APPEAR',
+  };
+  previewLibrary = assets;
+  assert.equal(
+    bookshelfCover(books[0], assets).hero,
+    assets[appearance.drawingAssetId],
+  );
   assert.equal(
     bookshelfCover(books[0], assets).caption,
     '그날의 달콩의 이야기',
@@ -108,7 +121,7 @@ try {
     undefined,
   );
   assert.equal(
-    bookshelfCover(books[0], []).hero,
+    bookshelfCover(books[0], {}).hero,
     undefined,
     'Missing historical art never borrows the current friend',
   );
@@ -161,7 +174,6 @@ try {
     refIndex = 0;
     const tree = Shelf({
       books: selectedBooks,
-      assets,
       onOpen: (book) => {
         opened = book;
       },
@@ -171,6 +183,10 @@ try {
     return tree;
   };
   const first = render();
+  assert.equal(previewCalls.at(-1).length, 6);
+  assert.ok(
+    previewCalls.at(-1).every((id) => id === appearance.drawingAssetId),
+  );
   assert.equal(focusCalls, 0, 'Opening the shelf does not steal focus');
   const html = renderToStaticMarkup(first);
   assert.equal((html.match(/class="cbl-book"/g) ?? []).length, 6);
@@ -230,6 +246,24 @@ try {
   );
   assert.doesNotMatch(attack, /<script>/);
   assert.match(attack, /&lt;script&gt;/);
+  requestedPage = 1;
+  previewCalls = [];
+  const distinctBooks = books.slice(0, 12).map((book, index) => ({
+    ...book,
+    heroAppearance: {
+      ...appearance,
+      drawingAssetId: index.toString(16).padStart(64, '0'),
+    },
+  }));
+  render(distinctBooks);
+  assert.deepEqual(
+    previewCalls[0],
+    distinctBooks
+      .slice(6, 12)
+      .map((book) => book.heroAppearance.drawingAssetId),
+    'Only the current shelf asks for historical preview IDs.',
+  );
+  assert.doesNotMatch(source, /listDrawingAssets|<canvas|artLibrary/);
   const css = readFileSync('app/companion-bookshelf.css', 'utf8');
   assert.match(css, /object-fit: contain/);
   assert.match(css, /:focus-visible/);
@@ -237,11 +271,11 @@ try {
   const homeCss = readFileSync('app/companion.css', 'utf8');
   assert.match(
     homeCss,
-    /@media \(max-width: 760px\) \{\s*\.cw-home-books \.cw-home-stage \{\s*position: relative;/,
-    'The mobile home stage must not cover focused book covers',
+    /@media \(max-width: 760px\) \{[\s\S]*?\.cw-home-stage \{\s*position: relative;/,
+    'The mobile home stage must not cover focused books or friend cards',
   );
   console.log(
-    'Bookshelf passed: historical hero identity, 8 worlds, all 0–100 book counts, six-cover cap, paging/open/restore continuity, no storage or WebGL imports, lazy decorative images and escaping.',
+    'Bookshelf passed: historical hero identity, 8 worlds, all 0–100 book counts, six-cover/preview cap, paging/open/restore continuity, bounded local preview hook, lazy decorative images and escaping.',
   );
 } finally {
   await server.close();

@@ -126,7 +126,7 @@ try {
   });
 
   // Execute the actual nested UI function rather than a reimplementation.
-  async function runExport(onList) {
+  async function runExport(onList, pngLength = artwork.png.length) {
     const saveRef = { current: structuredClone(saved) };
     let generation = 'before';
     const downloads = [];
@@ -149,6 +149,7 @@ try {
             saveRef.current = createCompanionSave();
           },
         }),
+      listDrawingAssetMetadata: async () => [{ id: artwork.id, pngLength }],
       validDrawingAsset: () => true,
       artworkId: async () => artwork.id,
       downloadLocalFile: (...args) => downloads.push(args),
@@ -169,6 +170,14 @@ try {
     artwork.id,
   );
   assert.deepEqual(portable.assets[0].persona, artwork.persona);
+  const oversizedExport = await runExport(
+    async () => {
+      throw new Error('Full PNG read must not begin for an oversized library');
+    },
+    32 * 1024 * 1024 + 1,
+  );
+  assert.equal(oversizedExport.downloads.length, 0);
+  assert.match(oversizedExport.statuses.at(-1), /32MB/);
   const rescueDownloads = [];
   const noStorage = () => {
     throw new Error('Storage inaccessible');
@@ -346,7 +355,7 @@ try {
           ? { ok: false, error: '저장 공간이 부족해요.' }
           : { ok: true };
       },
-      listDrawingAssets: async () => {
+      listDrawingAssetMetadata: async () => {
         if (mode === 'library-failed') throw new Error('read failed');
         return [artwork];
       },

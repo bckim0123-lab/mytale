@@ -22,6 +22,9 @@ let failNextWrite = false;
 let digestGate = null;
 let lockTail = Promise.resolve();
 let artworkEvents = 0;
+let getAllReads = 0;
+let cursorReads = 0;
+let cursorPause = null;
 const lockNames = [];
 const fakeWindow = new EventTarget();
 fakeWindow.localStorage = {
@@ -45,13 +48,14 @@ const indexedDB = {
           const transaction = {};
           const working = new Map(stored);
           let aborted = false;
+          let cursorWaiting = false;
           let timer;
           const shouldFail = mode === 'readwrite' && failNextWrite;
           if (mode === 'readwrite') failNextWrite = false;
           const complete = () => {
             clearTimeout(timer);
             timer = setTimeout(() => {
-              if (aborted) return;
+              if (aborted || cursorWaiting) return;
               if (shouldFail) {
                 transaction.onerror?.();
                 return;
@@ -87,7 +91,39 @@ const indexedDB = {
               return read(() => working.get(id));
             },
             getAll() {
+              getAllReads += 1;
               return read(() => [...working.values()]);
+            },
+            openCursor() {
+              cursorReads += 1;
+              const entry = {};
+              const values = working.values();
+              let position = 0;
+              const deliver = () => {
+                queueMicrotask(() => {
+                  if (aborted) return;
+                  cursorWaiting = false;
+                  const next = values.next();
+                  entry.result = next.done
+                    ? null
+                    : { value: next.value, continue: advance };
+                  entry.onsuccess?.();
+                  complete();
+                });
+              };
+              const advance = () => {
+                clearTimeout(timer);
+                cursorWaiting = true;
+                const index = position++;
+                if (cursorPause?.at === index) {
+                  const pause = cursorPause;
+                  cursorPause = null;
+                  pause.started();
+                  void pause.wait.then(deliver);
+                } else deliver();
+              };
+              advance();
+              return entry;
             },
             delete(id) {
               working.delete(id);
@@ -155,6 +191,8 @@ try {
     putDrawingAssets,
     readDrawingAsset,
     listDrawingAssets,
+    drawingAssetMetadata,
+    listDrawingAssetMetadata,
     clearDrawingAssets,
     captureDrawingGeneration,
   } = await server.ssrLoadModule('/app/drawing-assets.ts');
@@ -169,6 +207,21 @@ try {
   assert.equal(stored.get(asset.id).generation, 'initial');
   assert.deepEqual(await readDrawingAsset(asset.id), asset);
   assert.deepEqual(await listDrawingAssets(), [asset]);
+  assert.deepEqual(await listDrawingAssetMetadata(), [
+    {
+      id: asset.id,
+      createdAt: asset.createdAt,
+      name: asset.name,
+      pngLength: png.length,
+    },
+  ]);
+  const legacyId = 'd'.repeat(64);
+  stored.set(legacyId, { ...asset, id: legacyId });
+  assert.ok(
+    (await listDrawingAssetMetadata()).some((item) => item.id === legacyId),
+    'Legacy assets without a generation remain visible in the initial generation',
+  );
+  stored.delete(legacyId);
   assert.equal(artworkEvents, 1);
   const persona = {
     likes: '작은 별',
@@ -180,6 +233,23 @@ try {
     persona: { ...persona, privatePhoto: 'PRIVATE_PERSONA_EXTRA' },
   });
   assert.deepEqual(personalized.persona, persona);
+  const projection = drawingAssetMetadata({
+    ...personalized,
+    generation: 'PRIVATE_GENERATION',
+    sourcePhoto: 'PRIVATE_ORIGINAL',
+    persona: { ...persona, privatePhoto: 'PRIVATE_PERSONA_EXTRA' },
+  });
+  assert.deepEqual(projection, {
+    id: personalized.id,
+    createdAt: personalized.createdAt,
+    name: personalized.name,
+    persona,
+    pngLength: png.length,
+  });
+  assert.notStrictEqual(projection.persona, personalized.persona);
+  projection.persona.likes = '메타데이터 객체만 바꾸기';
+  assert.deepEqual(personalized.persona, persona);
+  assert.doesNotMatch(JSON.stringify(projection), /PRIVATE_|data:image|"png":/);
   assert.deepEqual((await readDrawingAsset(personalized.id)).persona, persona);
   assert.equal(
     JSON.stringify([...stored.values()]).includes('PRIVATE_PERSONA_'),
@@ -209,6 +279,11 @@ try {
     (await listDrawingAssets())[0].name,
     '별방울',
     'library and portable backup source see the new name',
+  );
+  assert.deepEqual(
+    await listDrawingAssetMetadata(),
+    [drawingAssetMetadata(renamed)],
+    'A same-ID rename updates metadata without changing image length or historical bytes',
   );
   const renamedBytes = JSON.stringify([...stored]);
   await assert.rejects(
@@ -370,6 +445,7 @@ try {
     'Old-generation artwork is hidden before cleanup finishes.',
   );
   assert.deepEqual(await listDrawingAssets(), []);
+  assert.deepEqual(await listDrawingAssetMetadata(), []);
   await clearDrawingAssets({
     expectedGeneration: resetGeneration,
     preserveCurrentGeneration: true,
@@ -430,7 +506,12 @@ try {
   });
   for (let index = 0; index < 99; index += 1) {
     const id = index.toString(16).padStart(64, '0');
-    stored.set(id, { ...asset, id, generation: generationAtCapacity });
+    stored.set(id, {
+      ...asset,
+      id,
+      createdAt: asset.createdAt + index + 1,
+      generation: generationAtCapacity,
+    });
   }
   assert.equal(stored.size, 100);
   await keepDrawingAsset(png, '같은 친구의 새 이름', {
@@ -455,6 +536,77 @@ try {
     beforeCapacityWrite,
     'Capacity failure never silently prunes an existing friend.',
   );
+  const allReadsBefore = getAllReads;
+  const cursorsBefore = cursorReads;
+  const metadataAtCapacity = await listDrawingAssetMetadata();
+  assert.equal(metadataAtCapacity.length, 100);
+  assert.equal(
+    getAllReads,
+    allReadsBefore,
+    'Metadata enumeration never calls getAll',
+  );
+  assert.equal(cursorReads, cursorsBefore + 1);
+  assert.ok(
+    metadataAtCapacity.every(
+      (item, index) =>
+        !('png' in item) &&
+        !('generation' in item) &&
+        item.pngLength === png.length &&
+        (index === 0 ||
+          metadataAtCapacity[index - 1].createdAt >= item.createdAt),
+    ),
+    'All 100 metadata records exclude PNGs and internal fields and sort newest-first',
+  );
+  const fullBackupAssets = await listDrawingAssets();
+  assert.equal(fullBackupAssets.length, 100);
+  assert.ok(fullBackupAssets.every((item) => item.png === png));
+  assert.deepEqual(
+    fullBackupAssets.map(drawingAssetMetadata),
+    metadataAtCapacity,
+    'The complete backup API still returns every PNG, not only visible previews',
+  );
+  const staleId = 'e'.repeat(64);
+  const invalidId = 'f'.repeat(64);
+  stored.set(staleId, { ...asset, id: staleId, generation: oldGeneration });
+  stored.set(invalidId, {
+    ...asset,
+    id: invalidId,
+    png: 'data:image/svg+xml;base64,PHN2Zz4=',
+    generation: generationAtCapacity,
+  });
+  stored.set(legacyId, { ...asset, id: legacyId });
+  assert.deepEqual(
+    await listDrawingAssetMetadata(),
+    metadataAtCapacity,
+    'Invalid images, old generations and generationless legacy rows after reset stay hidden',
+  );
+  const beforeMetadataReset = JSON.stringify([...stored]);
+  let releaseCursor;
+  let markCursorStarted;
+  const cursorStarted = new Promise((resolve) => {
+    markCursorStarted = resolve;
+  });
+  cursorPause = {
+    at: 1,
+    wait: new Promise((resolve) => {
+      releaseCursor = resolve;
+    }),
+    started: markCursorStarted,
+  };
+  const lateMetadata = listDrawingAssetMetadata();
+  await cursorStarted;
+  assert.equal((await resetCompanionSave()).ok, true);
+  releaseCursor();
+  assert.deepEqual(
+    await lateMetadata,
+    [],
+    'A reset partway through the cursor discards already collected old-generation metadata',
+  );
+  assert.equal(
+    JSON.stringify([...stored]),
+    beforeMetadataReset,
+    'Metadata reads and a metadata-only reset never mutate or prune stored PNGs',
+  );
   assert.ok(
     lockNames.every((name) => name === `${COMPANION_SAVE_KEY}:write`),
     'Metadata reset, artwork writes and cleanup share one cross-tab lock.',
@@ -464,7 +616,7 @@ try {
     'Successful writes and clears notify the portrait cache.',
   );
   console.log(
-    'Artwork persistence passed: checksum/PNG bounds, persona and field allowlists, atomic failures, shared metadata lock, stale-generation rejection, reset-gap import preservation, standalone-clear epoch, cache notifications and 100-friend capacity.',
+    'Artwork persistence passed: checksum/PNG bounds, persona and field allowlists, atomic failures, shared metadata lock, stale-generation rejection, reset-gap import preservation, standalone-clear epoch, cache notifications, 100-friend capacity, cursor-only PNG-free metadata and complete backup compatibility.',
   );
 } finally {
   for (const [key, descriptor] of Object.entries(originalGlobals)) {

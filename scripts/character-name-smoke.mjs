@@ -60,6 +60,7 @@ function deferred() {
   return { promise, resolve };
 }
 function fixture(options = {}) {
+  const metadata = ({ png, ...asset }) => ({ ...asset, pngLength: png.length });
   const a = { id: 'a'.repeat(64), name: '몽글', png: 'A', createdAt: 1 };
   const b = { id: 'b'.repeat(64), name: '달콩', png: 'B', createdAt: 2 };
   const assets = new Map([
@@ -78,7 +79,7 @@ function fixture(options = {}) {
     flush: async () => {},
     nameWrite: { current: null },
     friendSelection: { current: 0 },
-    artLibraryRef: { current: [...assets.values()] },
+    artLibraryRef: { current: [...assets.values()].map(metadata) },
     libraryReadEpoch: { current: 0 },
     mounted: { current: true },
     saveRef: {
@@ -114,7 +115,8 @@ function fixture(options = {}) {
           : bindings.saveRef.current,
       snapshot: { generation: state.generation },
     }),
-    listDrawingAssets: async () => [...assets.values()],
+    listDrawingAssetMetadata: async () => [...assets.values()].map(metadata),
+    drawingAssetMetadata: metadata,
     readDrawingAsset: async (id) => {
       state.reads++;
       const captured = assets.get(id);

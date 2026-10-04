@@ -25,6 +25,7 @@ import {
 import { CompanionWorld, type CompanionWorldHandle } from './companion-world';
 import CompanionStorybook from './companion-storybook';
 import CompanionBookshelf from './companion-bookshelf';
+import CompanionArtLibrary from './companion-art-library';
 import ForestToybox from './forest-toybox';
 import {
   ForestCompanionFace,
@@ -43,11 +44,14 @@ import {
   putDrawingAssets,
   clearDrawingAssets,
   listDrawingAssets,
+  listDrawingAssetMetadata,
+  drawingAssetMetadata,
   readDrawingAsset,
   renameDrawingAsset,
   validDrawingAsset,
   artworkId,
   type DrawingAsset,
+  type DrawingAssetMetadata,
 } from './drawing-assets';
 import {
   type CompanionSave,
@@ -161,8 +165,8 @@ export default function CompanionExperience({
     save: CompanionSave;
     assets: DrawingAsset[];
   } | null>(null);
-  const [artLibrary, setArtLibrary] = useState<DrawingAsset[]>([]);
-  const artLibraryRef = useRef<DrawingAsset[]>([]);
+  const [artLibrary, setArtLibrary] = useState<DrawingAssetMetadata[]>([]);
+  const artLibraryRef = useRef<DrawingAssetMetadata[]>([]);
   const libraryReadEpoch = useRef(0);
   const nameWrite = useRef<Promise<boolean> | null>(null);
   const friendSelection = useRef(0);
@@ -351,19 +355,31 @@ export default function CompanionExperience({
     artworkRetry,
   ]);
   useEffect(() => {
-    const epoch = ++libraryReadEpoch.current;
     let canceled = false;
-    void listDrawingAssets()
-      .then((assets) => {
-        if (canceled || epoch !== libraryReadEpoch.current) return;
-        artLibraryRef.current = assets;
-        setArtLibrary(assets);
-      })
-      .catch(() => {});
+    const refresh = () => {
+      const epoch = ++libraryReadEpoch.current;
+      void listDrawingAssetMetadata()
+        .then((assets) => {
+          if (canceled || epoch !== libraryReadEpoch.current) return;
+          artLibraryRef.current = assets;
+          setArtLibrary(assets);
+        })
+        .catch(() => {});
+    };
+    const changed = (event: StorageEvent) => {
+      if (event.key === null || event.key === COMPANION_SAVE_KEY) refresh();
+    };
+    refresh();
+    window.addEventListener('drawing-friend-artworks-changed', refresh);
+    window.addEventListener('focus', refresh);
+    window.addEventListener('storage', changed);
     return () => {
       canceled = true;
+      window.removeEventListener('drawing-friend-artworks-changed', refresh);
+      window.removeEventListener('focus', refresh);
+      window.removeEventListener('storage', changed);
     };
-  }, [save.appearance.drawingAssetId, artworkBusy]);
+  }, []);
   useEffect(() => {
     artLibraryRef.current = artLibrary;
   }, [artLibrary]);
@@ -496,7 +512,7 @@ export default function CompanionExperience({
         // Invalidate a library read begun before this transaction completed.
         libraryReadEpoch.current++;
         const assets = artLibraryRef.current.map((item) =>
-          item.id === id ? renamed : item,
+          item.id === id ? drawingAssetMetadata(renamed) : item,
         );
         artLibraryRef.current = assets;
         if (mounted.current) {
@@ -519,7 +535,7 @@ export default function CompanionExperience({
           // Refresh the compare-and-set baseline after a conflict. A second,
           // explicit retry may keep this window's name; never overwrite silently.
           const epoch = ++libraryReadEpoch.current;
-          void listDrawingAssets()
+          void listDrawingAssetMetadata()
             .then((assets) => {
               if (!mounted.current || epoch !== libraryReadEpoch.current)
                 return;
@@ -636,8 +652,10 @@ export default function CompanionExperience({
           event.id === 'owl-grove' &&
           previous.chapter === 'grove' &&
           previous.owlChoice
-        )
+        ) {
+          setWalking('');
           replayMelody();
+        }
         return;
       }
       const ending = getForestEnding(next);
@@ -928,6 +946,16 @@ export default function CompanionExperience({
       const exportGeneration = before.snapshot.generation;
       const serialized = serializeCompanionBackup(exportSave);
       if (!serialized.ok) throw new Error(serialized.error);
+      // Reject an already oversized library before allocating every PNG plus
+      // the serialized JSON and UTF-8 copy. The final exact-size check remains.
+      const metadata = await listDrawingAssetMetadata();
+      if (
+        metadata.reduce((size, asset) => size + asset.pngLength, 0) >
+        32 * 1024 * 1024
+      )
+        throw new Error(
+          '보관한 그림이 많아 전체 백업이 32MB를 넘었어요. 각 친구 그림도 별도로 저장해 주세요.',
+        );
       const assets = await listDrawingAssets();
       const required = [
         exportSave.appearance.drawingAssetId,
@@ -1136,7 +1164,7 @@ export default function CompanionExperience({
       if (!result.ok) throw new Error(result.error);
       recordRestored = true;
       setPendingBackup(null);
-      setArtLibrary(await listDrawingAssets());
+      setArtLibrary(await listDrawingAssetMetadata());
       setBackupStatus(
         '친구와 책을 가져왔어요. 같은 책은 중복하지 않고, 보관함에 이미 있는 그림의 이름과 취향은 유지했어요.',
       );
@@ -1522,32 +1550,11 @@ export default function CompanionExperience({
               </div>
               {panel === 'customize' ? (
                 <div className="cw-customize">
-                  {artLibrary.length > 0 && (
-                    <div className="cw-art-library">
-                      <span className="cw-label">내가 만든 그림친구</span>
-                      <div>
-                        {artLibrary.map((asset) => (
-                          <button
-                            key={asset.id}
-                            aria-pressed={
-                              save.appearance.drawingAssetId === asset.id
-                            }
-                            onClick={() => void selectDrawingFriend(asset.id)}
-                          >
-                            <img
-                              src={asset.png}
-                              alt={asset.name || '보관한 그림친구'}
-                            />
-                            <span>{asset.name || '그림친구'}</span>
-                          </button>
-                        ))}
-                      </div>
-                      <p className="cw-fine">
-                        그림의 실루엣에 두께를 준 입체 그림인형이에요.
-                        얼굴·무늬는 생성한 모습 그대로예요.
-                      </p>
-                    </div>
-                  )}
+                  <CompanionArtLibrary
+                    assets={artLibrary}
+                    selectedId={save.appearance.drawingAssetId}
+                    onSelect={(id) => void selectDrawingFriend(id)}
+                  />
                   <label className="cw-label" htmlFor="companion-name">
                     친구에게 이름을 지어 주세요
                   </label>
@@ -1818,7 +1825,6 @@ export default function CompanionExperience({
                   ) : (
                     <CompanionBookshelf
                       books={save.storyBooks}
-                      assets={artLibrary}
                       onOpen={openBook}
                     />
                   )}
@@ -2681,7 +2687,7 @@ export default function CompanionExperience({
                           expectedGeneration: cleared.snapshot.generation,
                           preserveCurrentGeneration: true,
                         });
-                        setArtLibrary(await listDrawingAssets());
+                        setArtLibrary(await listDrawingAssetMetadata());
                       } catch {
                         setBackupStatus(
                           '놀이 기록은 지웠지만 그림 보관함 삭제를 완료하지 못했어요. 다시 확인해 주세요.',

@@ -15,6 +15,13 @@ export type DrawingAsset = {
   name?: string;
   persona?: DrawingAssetPersona;
 };
+export type DrawingAssetMetadata = {
+  id: string;
+  createdAt: number;
+  name?: string;
+  persona?: DrawingAssetPersona;
+  pngLength: number;
+};
 export type DrawingAssetPersona = {
   likes: string;
   traits: string;
@@ -106,6 +113,26 @@ function publicAsset(asset: DrawingAsset): DrawingAsset {
         }
       : {}),
   };
+}
+
+/** A lightweight, explicit projection. Never retain PNGs or unknown backup fields. */
+export function drawingAssetMetadata(
+  asset: DrawingAsset,
+): DrawingAssetMetadata {
+  const metadata: DrawingAssetMetadata = {
+    id: asset.id,
+    createdAt: asset.createdAt,
+    pngLength: asset.png.length,
+  };
+  if (asset.name) metadata.name = asset.name;
+  if (asset.persona)
+    metadata.persona = {
+      likes: asset.persona.likes,
+      traits: asset.persona.traits,
+      ability: asset.persona.ability,
+      quirk: asset.persona.quirk,
+    };
+  return metadata;
 }
 
 function isVisibleAsset(
@@ -429,6 +456,46 @@ export async function listDrawingAssets(): Promise<DrawingAsset[]> {
         }
       };
       request.onerror = () => reject(new Error('친구 보관함을 읽지 못했어요.'));
+    });
+  } finally {
+    db.close();
+  }
+}
+
+/** Enumerate one record at a time so the library never retains every PNG. */
+export async function listDrawingAssetMetadata(): Promise<
+  DrawingAssetMetadata[]
+> {
+  const generation = captureDrawingGeneration();
+  const db = await openDatabase();
+  try {
+    return await new Promise((resolve, reject) => {
+      const metadata: DrawingAssetMetadata[] = [];
+      const transaction = db.transaction(TABLE);
+      const request = transaction.objectStore(TABLE).openCursor();
+      request.onsuccess = () => {
+        try {
+          const cursor = request.result;
+          if (cursor) {
+            if (isVisibleAsset(cursor.value, generation))
+              metadata.push(drawingAssetMetadata(cursor.value));
+            cursor.continue();
+          } else {
+            resolve(
+              captureDrawingGeneration() === generation
+                ? metadata.sort((a, b) => b.createdAt - a.createdAt)
+                : [],
+            );
+          }
+        } catch {
+          // A reset or blocked metadata store must not expose an older library.
+          resolve([]);
+        }
+      };
+      const fail = () => reject(new Error('친구 보관함을 읽지 못했어요.'));
+      request.onerror = fail;
+      transaction.onerror = fail;
+      transaction.onabort = fail;
     });
   } finally {
     db.close();

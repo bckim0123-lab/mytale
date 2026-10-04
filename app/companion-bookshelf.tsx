@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { BookOpen, ChevronLeft, ChevronRight } from 'lucide-react';
 import type { CompanionStoryBook } from './companion-save';
-import type { DrawingAsset } from './drawing-assets';
+import { useDrawingPreviews } from './use-drawing-previews';
 import { storybookWorldSvg } from './storybook-export';
 import './companion-bookshelf.css';
 
@@ -12,11 +12,11 @@ export const BOOKS_PER_SHELF = 6;
 /** A cover uses its historical hero only, never the currently selected friend. */
 export function bookshelfCover(
   book: CompanionStoryBook,
-  assets: readonly DrawingAsset[],
+  previews: Readonly<Record<string, string>>,
 ) {
   const id = book.heroAppearance?.drawingAssetId;
   return {
-    hero: id ? assets.find((asset) => asset.id === id)?.png : undefined,
+    hero: id ? previews[id] : undefined,
     background: book.illustrationTheme
       ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(storybookWorldSvg(book.illustrationTheme, 0))}`
       : `/moon-forest-scene-${book.choices?.ending === 'home' ? 4 : book.choices?.route === 'garden' ? 2 : 1}.webp`,
@@ -37,17 +37,19 @@ export function bookshelfPage(total: number, requestedPage: number) {
 
 export default function CompanionBookshelf({
   books,
-  assets,
   onOpen,
 }: {
   books: readonly CompanionStoryBook[];
-  assets: readonly DrawingAsset[];
   onOpen: (book: CompanionStoryBook) => void;
 }) {
   const [requestedPage, setPage] = useState(0);
   const firstCover = useRef<HTMLButtonElement>(null);
   const focusAfterPaging = useRef(false);
   const shelf = bookshelfPage(books.length, requestedPage);
+  const visible = books.slice(shelf.start, shelf.end);
+  const previews = useDrawingPreviews(
+    visible.map((book) => book.heroAppearance?.drawingAssetId),
+  );
   useEffect(() => {
     if (focusAfterPaging.current) {
       focusAfterPaging.current = false;
@@ -65,8 +67,8 @@ export default function CompanionBookshelf({
         표지를 톡 눌러, 그날의 모험으로
       </p>
       <ul className="cbl-grid" aria-label="보관한 동화책">
-        {books.slice(shelf.start, shelf.end).map((book, index) => {
-          const cover = bookshelfCover(book, assets);
+        {visible.map((book, index) => {
+          const cover = bookshelfCover(book, previews);
           const number = books.length - shelf.start - index;
           return (
             <li key={book.id}>

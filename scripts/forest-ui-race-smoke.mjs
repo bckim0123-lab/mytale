@@ -362,6 +362,7 @@ function dispatchHarness(forest) {
     transitionForest,
     getForestEnding,
     replayMelody: () => calls.push('replay'),
+    setWalking: (value) => calls.push(`walking:${value}`),
     setTimeout: () => 1,
     commitSave: (next) => {
       b.saveRef.current = next;
@@ -416,8 +417,8 @@ for (const difficulty of ['simple', 'standard', 'challenge']) {
       );
       assert.deepEqual(
         test.calls.slice(callCount),
-        ['replay'],
-        'Identical owl feedback restarts playback without a save or progress effects.',
+        ['walking:', 'replay'],
+        'Identical owl feedback clears arrival status and restarts playback without save or progress effects.',
       );
     }
   }
