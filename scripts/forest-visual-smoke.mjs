@@ -18,9 +18,12 @@ const server = await createServer({
   server: { middlewareMode: true },
 });
 try {
-  const { createForestVisuals, forestCameraFrame } = await server.ssrLoadModule(
-    '/app/forest-diorama-visuals.ts',
-  );
+  const {
+    createForestVisuals,
+    forestCameraFrame,
+    forestRouteFriendSlot,
+    forestOwlSlot,
+  } = await server.ssrLoadModule('/app/forest-diorama-visuals.ts');
   const { initialForestState, transitionForest } = await server.ssrLoadModule(
     '/app/forest-story.ts',
   );
@@ -331,6 +334,50 @@ try {
     assert.equal(momo.visible, route === 'river');
     assert.equal(popo.visible, route === 'garden');
     const npc = route === 'river' ? momo : popo;
+    const playerAtStart = { x: 0, z: 3.3 };
+    const startSlot = forestRouteFriendSlot(playerAtStart, route);
+    assert.equal(
+      Math.sign(npc.position.x),
+      Math.sign(startSlot.x),
+      'Friend spawns on the same side it will follow',
+    );
+    let closestApproach = Infinity;
+    for (let frame = 0; frame < 180; frame++) {
+      time += 1 / 60;
+      visual.update({
+        dt: 1 / 60,
+        time,
+        player: playerAtStart,
+        moving: false,
+        reducedMotion: false,
+        walkable: (point) => isForestWalkablePoint(point, false),
+        path: (from, to) => getCompanionNavigationPath(from, to, false),
+      });
+      closestApproach = Math.min(
+        closestApproach,
+        Math.hypot(npc.position.x, npc.position.z - playerAtStart.z),
+      );
+    }
+    assert.ok(
+      closestApproach > 1.4,
+      'Greeting follower does not walk through the player center',
+    );
+    assert.ok(
+      npc.position.z < playerAtStart.z,
+      'Settled follower stays on the camera-far side',
+    );
+    const owlSlot = forestOwlSlot(playerAtStart, route);
+    assert.equal(
+      Math.sign(owlSlot.x),
+      -Math.sign(startSlot.x),
+      'Owl occupies the opposite side regardless of movement heading',
+    );
+    assert.ok(owlSlot.z < playerAtStart.z);
+    assert.equal(
+      forestRouteFriendSlot(playerAtStart, route, () => false),
+      null,
+      'No safe slot never targets the player center',
+    );
     // Include either bank and travel over the real bridge, not a straight-line shortcut.
     const targets =
       route === 'river'
@@ -401,6 +448,9 @@ try {
       time + 1,
       targets.at(-1),
     );
+    // A late movement/event may leave a follower too close; celebration must
+    // finish spacing the group instead of freezing this overlap.
+    npc.position.set(targets.at(-1).x, 0, targets.at(-1).z);
     visual.update({
       dt: 0.05,
       time: time + 1.1,
@@ -431,6 +481,13 @@ try {
       Math.abs(Math.atan2(Math.sin(npc.rotation.y), Math.cos(npc.rotation.y))) <
         0.35,
       'ending companion turns forward for a shared celebration portrait',
+    );
+    assert.ok(
+      Math.hypot(
+        npc.position.x - targets.at(-1).x,
+        npc.position.z - targets.at(-1).z,
+      ) > 1.35,
+      'Completion resolves an overlapping companion before settling',
     );
     visual.sync(initialForestState(), time + 4, { x: 0, z: 3.3 });
     assert.equal(momo.visible, false);

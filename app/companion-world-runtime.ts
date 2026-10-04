@@ -2,6 +2,7 @@ import * as T from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { createCreature } from './creature-rig';
 import {
+  forestOwlSlot,
   createForestVisuals,
   forestCameraFrame,
 } from './forest-diorama-visuals';
@@ -2110,16 +2111,8 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
     }
     owlFollower.root.visible = !home && forest.owlChoice === 'invite';
     if (owlFollower.root.visible) {
-      const trailing = moving ? 0.95 : 0.68;
-      owlTarget.set(
-        creature.root.position.x -
-          Math.sin(yaw) * trailing +
-          Math.cos(yaw) * 0.8,
-        0,
-        creature.root.position.z -
-          Math.cos(yaw) * trailing -
-          Math.sin(yaw) * 0.8,
-      );
+      const slot = forestOwlSlot(creature.root.position, forest.route);
+      owlTarget.set(slot.x, 0, slot.z);
       const owlDistance = Math.hypot(
         owlTarget.x - owlFollower.root.position.x,
         owlTarget.z - owlFollower.root.position.z,

@@ -1428,6 +1428,7 @@ export default function Home() {
       generationRun.current === requestRun &&
       reviewTickets.current === ticketStore;
     const form = new FormData();
+    form.append('consent', 'true');
     form.append('drawing', blob, 'drawing.jpg');
     form.append('styleIndex', String(index));
     form.append('favoriteColor', favoriteColor);

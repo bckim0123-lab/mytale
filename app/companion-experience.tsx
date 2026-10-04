@@ -149,6 +149,8 @@ export default function CompanionExperience({
   } = useCompanionStorage(initialName);
   const art = useDrawingAsset(save.appearance.drawingAssetId);
   const [artworkBusy, setArtworkBusy] = useState(false);
+  const [artworkError, setArtworkError] = useState('');
+  const [artworkRetry, setArtworkRetry] = useState(0);
   const [backupBusy, setBackupBusy] = useState(false);
   const artworkEpoch = useRef(0);
   const backupOperation = useRef(false);
@@ -230,6 +232,14 @@ export default function CompanionExperience({
     [save.appearance, art.png],
   );
   const view = getForestView(forest);
+  const compactNextTarget = view.hotspots.find(
+    (hot) =>
+      hot.available &&
+      !hot.complete &&
+      ['wood', 'seed', 'flower', 'water', 'bridge', 'lantern'].includes(
+        hot.kind,
+      ),
+  );
   const memories = Array.from(
     new Set([
       ...(forest.discoveries ?? []),
@@ -246,6 +256,7 @@ export default function CompanionExperience({
       return;
     let canceled = false;
     const operation = ++artworkEpoch.current;
+    const selection = friendSelection.current;
     const snapshot = readCompanionSave();
     if (snapshot.status !== 'ready' && snapshot.status !== 'empty') return;
     const generation = snapshot.snapshot.generation;
@@ -259,7 +270,10 @@ export default function CompanionExperience({
       );
     };
     queueMicrotask(() => {
-      if (!canceled) setArtworkBusy(true);
+      if (!canceled) {
+        setArtworkBusy(true);
+        setArtworkError('');
+      }
     });
     void portableArtwork(incomingArtwork.png)
       .then((png) => {
@@ -273,14 +287,22 @@ export default function CompanionExperience({
       })
       .then((asset) => {
         if (!stillCurrent()) {
-          setArtworkBusy(false);
-          if (!canceled) {
+          if (!canceled && operation === artworkEpoch.current) {
+            setArtworkBusy(false);
             acceptedArtwork.current = incomingArtwork.png;
             onArtworkAccepted?.();
           }
           return;
         }
         acceptedArtwork.current = incomingArtwork.png;
+        if (selection !== friendSelection.current) {
+          setNotice(
+            '새 그림친구는 보관함에 담았어요. 지금 고른 친구와 계속 놀 수 있어요.',
+          );
+          setArtworkBusy(false);
+          onArtworkAccepted?.();
+          return;
+        }
         commitSave((current) => ({
           ...current,
           name: incomingArtwork.name.trim() || current.name,
@@ -297,7 +319,7 @@ export default function CompanionExperience({
       .catch((error) => {
         if (!canceled) {
           acceptedArtwork.current = null;
-          setBackupStatus(
+          setArtworkError(
             error instanceof Error
               ? error.message
               : '친구 그림을 보관하지 못했어요.',
@@ -311,7 +333,14 @@ export default function CompanionExperience({
     return () => {
       canceled = true;
     };
-  }, [hydrated, incomingArtwork, blocked, commitSave, onArtworkAccepted]);
+  }, [
+    hydrated,
+    incomingArtwork,
+    blocked,
+    commitSave,
+    onArtworkAccepted,
+    artworkRetry,
+  ]);
   useEffect(() => {
     const epoch = ++libraryReadEpoch.current;
     let canceled = false;
@@ -1242,12 +1271,26 @@ export default function CompanionExperience({
             <button onClick={openSettings}>백업·복구 열기</button>
           </div>
         )}
-        {(backupStatus || artworkBusy || art.error) && (
+        {(backupStatus || artworkBusy || artworkError || art.error) && (
           <output className="cw-alert">
             {artworkBusy
               ? '완성한 친구를 안전하게 보관하고 있어요…'
-              : art.error || backupStatus}
+              : artworkError || art.error || backupStatus}
           </output>
+        )}
+        {incomingArtwork && artworkError && !artworkBusy && (
+          <div className="cw-artwork-retry">
+            <button
+              className="cw-outline"
+              disabled={blocked}
+              onClick={() => setArtworkRetry((attempt) => attempt + 1)}
+            >
+              친구 보관 다시 시도
+            </button>
+            <small>
+              이미 만든 친구를 저장해요. AI 이미지를 새로 만들지 않아요.
+            </small>
+          </div>
         )}
         {mode === 'home' ? (
           <div className="cw-home-layout">
@@ -1886,7 +1929,7 @@ export default function CompanionExperience({
                   <small>
                     {forest.route === 'undecided'
                       ? '숲에서 온 초대장'
-                      : `${getForestCompanion(forest.route)}와 함께`}
+                      : '함께 걷는 이야기'}
                   </small>
                   <p aria-live="polite">{view.dialogue}</p>
                 </div>
@@ -2014,50 +2057,64 @@ export default function CompanionExperience({
                 </div>
               )}
               {forest.chapter !== 'complete' && (
-                <details
-                  className="cw-action-guide"
-                  open={unavailable || undefined}
-                  key={`${forest.chapter}-${unavailable}`}
-                >
-                  <summary>
-                    {unavailable
-                      ? '이야기 모드로 함께하기'
-                      : '길을 찾기 어려워? 여기를 눌러 봐'}
-                  </summary>
-                  <div className="cw-nearby">
-                    <h2>{unavailable ? '함께할 행동' : '어디로 가 볼까?'}</h2>
-                    {view.hotspots
-                      .filter((h) => h.available && !h.complete)
-                      .map((h) => (
-                        <button
-                          key={h.id}
-                          className={activeNote === h.id ? 'is-playing' : ''}
-                          disabled={replaying && h.kind === 'bell'}
-                          onClick={() => goTo(h.id)}
-                        >
-                          <span>
-                            {h.kind === 'wood'
-                              ? '🪵'
-                              : h.kind === 'seed'
-                                ? '🌱'
-                                : h.kind === 'flower'
-                                  ? '🌷'
-                                  : h.kind === 'bell'
-                                    ? '🔔'
-                                    : h.kind === 'water'
-                                      ? '💧'
-                                      : h.kind === 'lantern'
-                                        ? '✨'
-                                        : h.kind === 'npc'
-                                          ? '🦉'
-                                          : '✦'}
-                          </span>
-                          {h.label}
-                          <ChevronRight size={16} />
-                        </button>
-                      ))}
-                  </div>
-                </details>
+                <>
+                  {compactNextTarget && (
+                    <button
+                      className="cw-compact-next"
+                      onClick={() => goTo(compactNextTarget.id)}
+                    >
+                      <Sparkles size={18} />
+                      <span>
+                        <small>다음 반짝임을 찾아서</small>
+                        <strong>{compactNextTarget.label} · 찾아가기</strong>
+                      </span>
+                    </button>
+                  )}
+                  <details
+                    className="cw-action-guide"
+                    open={unavailable || undefined}
+                    key={`${forest.chapter}-${unavailable}`}
+                  >
+                    <summary>
+                      {unavailable
+                        ? '이야기 모드로 함께하기'
+                        : '길을 찾기 어려워? 여기를 눌러 봐'}
+                    </summary>
+                    <div className="cw-nearby">
+                      <h2>{unavailable ? '함께할 행동' : '어디로 가 볼까?'}</h2>
+                      {view.hotspots
+                        .filter((h) => h.available && !h.complete)
+                        .map((h) => (
+                          <button
+                            key={h.id}
+                            className={activeNote === h.id ? 'is-playing' : ''}
+                            disabled={replaying && h.kind === 'bell'}
+                            onClick={() => goTo(h.id)}
+                          >
+                            <span>
+                              {h.kind === 'wood'
+                                ? '🪵'
+                                : h.kind === 'seed'
+                                  ? '🌱'
+                                  : h.kind === 'flower'
+                                    ? '🌷'
+                                    : h.kind === 'bell'
+                                      ? '🔔'
+                                      : h.kind === 'water'
+                                        ? '💧'
+                                        : h.kind === 'lantern'
+                                          ? '✨'
+                                          : h.kind === 'npc'
+                                            ? '🦉'
+                                            : '✦'}
+                            </span>
+                            {h.label}
+                            <ChevronRight size={16} />
+                          </button>
+                        ))}
+                    </div>
+                  </details>
+                </>
               )}
               {forest.edition === 2 && forest.route !== 'undecided' && (
                 <ForestMemories compact discovered={memories} />

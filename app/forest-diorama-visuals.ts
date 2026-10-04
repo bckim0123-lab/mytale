@@ -15,6 +15,31 @@ type Frame = {
   path: (from: Point, to: Point) => Point[];
 };
 
+/** Stable screen-side slots keep friends beside the hero, not across its face. */
+export function forestRouteFriendSlot(
+  player: Point,
+  route: ForestState['route'],
+  walkable: (point: Point) => boolean = () => true,
+): Point | null {
+  const side = route === 'river' ? -1 : 1;
+  const candidates = [
+    { x: player.x + side * 1.5, z: player.z - 0.45 },
+    { x: player.x + side * 1.5, z: player.z + 0.2 },
+    { x: player.x, z: player.z - 1.5 },
+    { x: player.x + side * 1.5, z: player.z + 0.9 },
+    { x: player.x - side * 1.5, z: player.z - 0.45 },
+    { x: player.x, z: player.z + 1.5 },
+  ];
+  return candidates.find(walkable) ?? null;
+}
+
+export function forestOwlSlot(
+  player: Point,
+  route: ForestState['route'],
+): Point {
+  return { x: player.x + (route === 'river' ? 1.5 : -1.5), z: player.z - 0.85 };
+}
+
 /** Pure camera framing: stay near the child, with a small chapter/event glance.
  * It never jumps to an offscreen objective or takes away movement control. */
 export function forestCameraFrame(
@@ -458,11 +483,8 @@ export function createForestVisuals(initial: ForestState) {
     }
     if (changedRoute && next.route !== 'undecided') {
       const rig = next.route === 'river' ? otter : rabbit;
-      rig.root.position.set(
-        player.x + (next.route === 'river' ? 1.25 : -1.25),
-        0,
-        player.z - 0.1,
-      );
+      const slot = forestRouteFriendSlot(player, next.route)!;
+      rig.root.position.set(slot.x, 0, slot.z);
       npcAction = 'wave';
       npcActionUntil = time + 2;
       actionId++;
@@ -501,11 +523,8 @@ export function createForestVisuals(initial: ForestState) {
     rabbit.root.visible = next.route === 'garden';
   }
   // On reload the selected friend starts beside the player, never across a river.
-  activeRig().root.position.set(
-    initial.route === 'river' ? 1.25 : -1.25,
-    0,
-    3.3,
-  );
+  const initialSlot = forestRouteFriendSlot({ x: 0, z: 3.3 }, initial.route)!;
+  activeRig().root.position.set(initialSlot.x, 0, initialSlot.z);
   sync(initial, 0, { x: 0, z: 3.3 });
   const tempTarget = new T.Vector3();
   let disposed = false;
@@ -515,12 +534,9 @@ export function createForestVisuals(initial: ForestState) {
     const dt = T.MathUtils.clamp(frame.dt, 0, 0.05);
     const rig = activeRig();
     if (state.route !== 'undecided') {
-      const side = state.route === 'river' ? -1 : 1;
-      const beside = { x: player.x + side * 1.2, z: player.z + 0.28 };
-      const target = frame.walkable(beside)
-        ? beside
-        : { x: player.x, z: player.z + 0.9 };
-      const targetSafe = frame.walkable(target) ? target : player;
+      const targetSafe =
+        forestRouteFriendSlot(player, state.route, frame.walkable) ??
+        rig.root.position;
       if (time > nextPathAt) {
         nextPathAt = time + 0.35;
         followPath = frame.path(rig.root.position, targetSafe);
@@ -532,9 +548,9 @@ export function createForestVisuals(initial: ForestState) {
       if (
         posing &&
         Math.hypot(
-          player.x - rig.root.position.x,
-          player.z - rig.root.position.z,
-        ) < 2.8
+          targetSafe.x - rig.root.position.x,
+          targetSafe.z - rig.root.position.z,
+        ) < 0.14
       )
         followPath = [];
       let npcMoving = false;

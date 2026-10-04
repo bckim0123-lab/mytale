@@ -228,8 +228,10 @@ async function request({
   stream = false,
   clientId,
   preferences = {},
+  consent = 'true',
 } = {}) {
   const form = new FormData();
+  if (consent !== null) form.append('consent', consent);
   form.append(
     'drawing',
     new Blob([drawing], { type: 'image/png' }),
@@ -267,6 +269,19 @@ async function request({
     return { response, data: events.at(-1).data, events };
   }
   return { response, data: await response.json() };
+}
+
+for (const consent of [null, 'false', '1', 'TRUE', '']) {
+  const before = calls.length;
+  const result = await request({ consent });
+  assert.equal(result.response.status, 403);
+  assert.equal(result.data.code, 'consent_required');
+  assert.equal(result.data.retryable, false);
+  assert.equal(
+    calls.length,
+    before,
+    'Unconfirmed picture never reaches any provider',
+  );
 }
 function plan(...items) {
   planned = items;
@@ -832,6 +847,7 @@ exhausted();
     { kind: 'review', gate: gates[3] },
   );
   const form = new FormData();
+  form.append('consent', 'true');
   form.append(
     'drawing',
     new Blob([source], { type: 'image/png' }),

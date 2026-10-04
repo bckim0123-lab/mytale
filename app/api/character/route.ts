@@ -837,6 +837,15 @@ async function handleCharacterRequest(
       );
     }
     operationSignal.throwIfAborted();
+    if (form.get('consent') !== 'true')
+      return json(
+        {
+          error: '그림을 보내기 전에 보호자와 함께 전송 동의를 확인해 주세요.',
+          code: 'consent_required',
+          retryable: false,
+        },
+        403,
+      );
     const formBytes = Array.from(form.values()).reduce(
       (total, part) =>
         total +

@@ -130,7 +130,7 @@
   color: #627b47;
 }
 .cw-home-heading p {
-  font-size: 13px;
+  font-size: 16px;
   line-height: 1.7;
   color: #7b8771;
 }
@@ -214,7 +214,7 @@
   padding: 16px 20px;
   border-radius: 22px 22px 22px 3px;
   font-weight: 650;
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.6;
   box-shadow: 0 8px 30px #536b3920;
   pointer-events: none;
@@ -1342,7 +1342,7 @@
     max-width: 170px;
     right: 16px;
     top: 235px;
-    font-size: 12px;
+    font-size: 14px;
   }
   .cw-home-stage {
     min-height: 685px;
@@ -1415,7 +1415,7 @@
     display: none;
   }
   .cw-home-heading .cw-eyebrow {
-    font-size: 8px;
+    font-size: 12px;
   }
   .cw-home-stage .cw-world {
     inset: 16px -15px 42px;
@@ -1425,7 +1425,7 @@
     bottom: 64px;
     right: 12px;
     max-width: 150px;
-    font-size: 9px;
+    font-size: 14px;
     padding: 8px 11px;
   }
   .cw-pet-controls {
@@ -1770,6 +1770,15 @@
     animation: none !important;
     transition: none !important;
     scroll-behavior: auto !important;
+  }
+}
+@media (min-width: 761px) {
+  .cw-home-stage {
+    align-self: start;
+    position: sticky;
+    top: 16px;
+    height: clamp(420px, calc(100svh - 130px), 760px);
+    min-height: 0;
   }
 }
 @media print {
