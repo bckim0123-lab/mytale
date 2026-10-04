@@ -379,14 +379,14 @@ function characterFailureMessage(error: unknown) {
   if (error.code === 'rate_limited')
     return 'AI 친구들이 잠깐 숨을 고르고 있어요. 네 그림에는 문제가 없어요. 잠시 뒤 이 스타일만 다시 불러 주세요.';
   if (error.retryMode === 'review-only' && error.reviewTicket)
-    return '그림은 만들었지만 마지막 검사가 잠시 멈췄어요. 5분 안에 이 스타일을 다시 누르면 같은 그림의 검사만 이어가요. 새 이미지를 만들지 않아요.';
+    return '그림은 만들었지만 마지막 검사가 잠시 멈췄어요. 잠시 뒤 같은 그림의 검사만 이어가요. 새 이미지는 만들지 않으며, 검사 가능 시간은 재시도해도 늘어나지 않아요.';
   if (
     error.code === 'quality_review_failed' ||
     error.code === 'quality_review_timeout'
   )
     return '마지막 검사를 끝내지 못해 결과는 아직 보여 주지 않았어요. 검사 이어하기 정보를 받지 못했으니 원한다면 새 모습으로 다시 시도해 주세요.';
   if (error.code === 'alpha_failed' || error.code === 'quality_failed')
-    return '첫 결과가 투명 배경과 귀여움 기준을 통과하지 못해 보여 주지 않았어요. 기기 미리보기로 놀거나 이 스타일만 새로 만들어 주세요.';
+    return '이번 결과가 투명 배경과 귀여움 기준을 통과하지 못해 보여 주지 않았어요. 기기 미리보기로 놀거나 이 스타일만 새로 만들어 주세요.';
   return error.retryable
     ? 'AI 작업실이 잠깐 쉬고 있어요. 네 그림에는 문제가 없어요. 기기 미리보기로 놀거나 잠시 뒤 이 스타일만 다시 불러 주세요.'
     : error.message;
@@ -1615,7 +1615,9 @@ export default function Home() {
       return next;
     });
     setGenerationNote(
-      `‘${characterStyles[requestedStyle].name}’의 새 모습을 만들고 있어요. 이미 완성한 친구는 그대로 남아요.`,
+      reviewTickets.current[requestedStyle]
+        ? `‘${characterStyles[requestedStyle].name}’의 검사만 이어가요. 새 이미지는 만들지 않아요.`
+        : `‘${characterStyles[requestedStyle].name}’의 새 모습을 만들고 있어요. 이미 완성한 친구는 그대로 남아요.`,
     );
     setStep('character');
     try {
@@ -3214,13 +3216,19 @@ export default function Home() {
               : generationRetryRemainingSeconds > 0
                 ? `${formatGenerationTime(generationRetryRemainingSeconds)} 뒤 다시 시도`
                 : generating
-                  ? '친구가 태어나는 중…'
-                  : `${characterStyles[preferredStyle].name} 고화질로 AI 완성하기`}
+                  ? reviewTicketStyles.includes(preferredStyle)
+                    ? '같은 그림을 검사하는 중…'
+                    : '친구가 태어나는 중…'
+                  : reviewTicketStyles.includes(preferredStyle)
+                    ? '같은 그림 검사 이어가기'
+                    : `${characterStyles[preferredStyle].name} 고화질로 AI 완성하기`}
           </Button>
           {image && !generationBusy && (
             <small className="generation-expectation">
-              <LoaderCircle /> 만들기와 품질 확인을 차례로 진행해요. 기다리는
-              동안 내 그림 친구와 먼저 놀 수 있어요.
+              <LoaderCircle />{' '}
+              {reviewTicketStyles.includes(preferredStyle)
+                ? '이미 만들어진 같은 결과를 검사해요. 검사 가능 시간은 최초 발급 후 5분이며, 재시도로 연장되지 않아요.'
+                : '만들기와 품질 확인을 차례로 진행해요. 기다리는 동안 내 그림 친구와 먼저 놀 수 있어요.'}
             </small>
           )}
           {generating && (
@@ -3228,8 +3236,9 @@ export default function Home() {
               <i />
               <span>{generationNote}</span>
               <small>
-                선택한 한 모습만 만들어요. 다른 스타일은 카드를 눌렀을 때만
-                추가해요.
+                {reviewTicketStyles.includes(preferredStyle)
+                  ? '새 이미지를 만들지 않고 검사만 이어가요.'
+                  : '선택한 한 모습만 만들어요. 다른 스타일은 카드를 눌렀을 때만 추가해요.'}
               </small>
             </output>
           )}
@@ -3270,7 +3279,9 @@ export default function Home() {
           <h2>
             {selectedHasAiCharacter
               ? '원본의 매력을 살린 친구를 만나요'
-              : '기다리는 동안 먼저 인사해 보세요'}
+              : generationBusy
+                ? '기다리는 동안 먼저 인사해 보세요'
+                : '내 그림 친구와 먼저 인사해 보세요'}
           </h2>
           <p aria-live="polite" aria-atomic="true">
             {generationNote}
@@ -3518,7 +3529,9 @@ export default function Home() {
                             : status === 'generating'
                               ? '이 스타일로 완성하는 중…'
                               : status === 'temporary'
-                                ? 'AI 작업실이 쉬는 중 · 톡 눌러 다시 부르기'
+                                ? reviewTicketStyles.includes(i)
+                                  ? '그림 검사가 남았어요 · 톡 눌러 이어가기'
+                                  : '아직 완성되지 않았어요 · 톡 눌러 다시 만들기'
                                 : '톡 눌러 이 모습만 AI로 만들기'}
                         </small>
                       </>

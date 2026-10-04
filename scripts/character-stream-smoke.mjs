@@ -107,6 +107,22 @@ await assert.rejects(
   },
 );
 assert.equal(activity, 2);
+const expiringReviewError = new api.CharacterRequestError(
+  ticketError.error,
+  ticketError.code,
+  true,
+  5000,
+  { ...ticketError, reviewTicketExpiresAt: Date.now() + 60_000 },
+);
+assert.match(
+  api.characterFailureMessage(expiringReviewError),
+  /재시도해도 늘어나지/,
+);
+assert.doesNotMatch(
+  api.characterFailureMessage(expiringReviewError),
+  /5분 안에/,
+  'An existing receipt must not be described as granting five fresh minutes',
+);
 const stages = [];
 assert.deepEqual(
   await api.readCharacterStream(

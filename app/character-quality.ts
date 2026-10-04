@@ -77,6 +77,53 @@ export function isHardQualityFailure(review: CutenessReview) {
   );
 }
 
+export function characterFailedCriteria(review: CutenessReview): string[] {
+  return [
+    ...Object.entries(CHARACTER_QUALITY_THRESHOLDS)
+      .filter(
+        ([key, minimum]) =>
+          review[key as keyof typeof CHARACTER_QUALITY_THRESHOLDS] < minimum,
+      )
+      .map(([key]) => key),
+    ...(!review.singleCharacter ? ['singleCharacter'] : []),
+    ...(review.scaryOrUncanny ? ['scaryOrUncanny'] : []),
+    ...(review.backgroundArtifact ? ['backgroundArtifact'] : []),
+  ];
+}
+
+/** Only server-authored repair directions; never interpolate the model's issue
+ * text, which may have repeated instructions embedded in an input image. */
+export function characterCorrectionBrief(
+  review: CutenessReview,
+  styleIndex: number,
+) {
+  const directions: Record<string, string> = {
+    score:
+      '원본의 개성을 유지하면서 다정한 표정과 읽기 쉬운 실루엣을 완성한다.',
+    sourceFidelity:
+      '원본의 바라보는 방향, 외곽선, 대표 색과 무늬를 다시 맞춘다. 별도의 머리나 팔다리를 추가하지 않는다.',
+    fullBody:
+      '원본 비율을 유지하고 긴 쪽 치수를 캔버스의 76–84% 안에 맞춘다. 잘린 부분 없이 모든 지느러미·꼬리·장식을 담는다.',
+    anatomy:
+      '원본에 있는 눈·팔다리·지느러미·꼬리의 개수와 연결만 바로잡는다. 없는 부위를 만들지 않는다.',
+    styleMatch:
+      '요청한 스타일의 표현 재료와 외곽선으로 통일하되 원본 형태는 바꾸지 않는다.',
+    materialQuality:
+      styleIndex === 0
+        ? '색연필 선과 과슈 색면의 겹침을 선명하게 정리하고, 그린 질감은 캐릭터 안에만 남긴다. 3D 조명·광택·입체 재질로 바꾸지 않는다.'
+        : '요청한 재질의 표면과 가장자리를 정리하고 자연스럽고 부드러운 빛을 사용한다.',
+    naturalPose:
+      '원본이 바라보는 방향을 유지하고 몸과 부속 부위의 연결을 편안하게 정돈한다. 옆모습을 억지로 정면으로 바꾸지 않는다.',
+    singleCharacter: '첫 원본에 대응하는 주인공 하나만 남긴다.',
+    scaryOrUncanny: '날카롭거나 기괴한 요소 없이 원본의 순한 표정을 회복한다.',
+    backgroundArtifact:
+      '캐릭터 밖의 색면·후광·바닥·카드·글자·프레임을 제거하고 완전 투명 알파로 만든다. 캐릭터 자체의 밝은 무늬나 흰 테두리는 보존한다.',
+  };
+  return characterFailedCriteria(review)
+    .map((key) => `${key}: ${directions[key]}`)
+    .join(' ');
+}
+
 export const REVIEW_TICKET_TTL_MS = 5 * 60_000;
 // Leave room below Vercel's 4.5 MB request/response ceiling, including multipart framing.
 export const MAX_CHARACTER_BODY_BYTES = 4_000_000;

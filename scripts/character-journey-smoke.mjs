@@ -231,6 +231,39 @@ try {
     'A review-only resume must not be described as generating another image',
   );
 
+  for (const hasTicket of [false, true]) {
+    const uploadNotes = [];
+    const beforeCalls = calls.length;
+    await loadArrow('generateCharacter', {
+      ...base,
+      preferredStyle: 0,
+      reviewTickets: {
+        current: hasTicket
+          ? { 0: { value: 'existing-ticket', expiresAt: Date.now() + 60_000 } }
+          : {},
+      },
+      setGenerating: set('busy'),
+      setStep: set('step'),
+      setGenerationNote: (value) => uploadNotes.push(value),
+    })();
+    assert.equal(
+      calls.length,
+      beforeCalls + 1,
+      'Upload retry causes one request only',
+    );
+    assert.match(
+      uploadNotes[0],
+      hasTicket
+        ? /검사만 이어가요\. 새 이미지는 만들지 않아요/
+        : /새 모습을 만들고 있어요/,
+    );
+    assert.equal(
+      state.generated[2],
+      'new-reviewed-image',
+      'Upload retry preserves the other approved style',
+    );
+  }
+
   const persona = {
     name: '별콩',
     likes: '별',
