@@ -538,6 +538,24 @@ export function mergeCompanionChanges(
   current: CompanionSave,
   base: CompanionSave | null,
 ): CompanionSave | null {
+  if (base) {
+    const incomingId = incoming.appearance.drawingAssetId;
+    const currentId = current.appearance.drawingAssetId;
+    const baseId = base.appearance.drawingAssetId;
+    const incomingIdentityEdited =
+      !equal(incoming.name, base.name) ||
+      !equal(incoming.persona, base.persona);
+    const currentIdentityEdited =
+      !equal(current.name, base.name) || !equal(current.persona, base.persona);
+    // A rename belongs to the friend the editor saw. Never combine that name
+    // or persona with a different picture selected concurrently in another tab.
+    if (
+      incomingId !== currentId &&
+      ((currentId !== baseId && incomingIdentityEdited) ||
+        (incomingId !== baseId && currentIdentityEdited))
+    )
+      return null;
+  }
   let conflict = false;
   const field = <T>(next: T, stored: T, before: T | undefined): T => {
     if (equal(next, stored)) return next;

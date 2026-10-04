@@ -235,8 +235,7 @@ function SceneDetails({
         <g>
           {Array.from({ length: page === 3 ? 7 : 11 }, (_, i) => {
             const x = 60 + ((i * 97) % 520);
-            const y =
-              sky || page === 3 ? 85 + ((i * 61) % 300) : 400 + (i % 3) * 45;
+            const y = sky ? 85 + ((i * 61) % 300) : 400 + (i % 3) * 45;
             return (
               <g key={i} transform={`translate(${x},${y})`}>
                 <circle r="27" fill="#ffdb8b" opacity=".08" />

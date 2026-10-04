@@ -193,7 +193,7 @@ export class CompanionStorageSession {
   /** Backup import is explicit; books already on this device are merged, not replaced. */
   restoreSave = async (
     incoming: CompanionSave,
-    options: { expectedGeneration?: string } = {},
+    options: { expectedGeneration?: string; expectedRevision?: number } = {},
   ): Promise<CompanionSaveResult> => {
     // Bind the whole import, including its pending flush, to the generation in
     // which the user started it. A reset during that await must win.
@@ -222,6 +222,15 @@ export class CompanionStorageSession {
       this.publish({ blocked: true, saveError: error });
       return { ok: false, error };
     }
+    if (
+      options.expectedRevision !== undefined &&
+      current.snapshot.revision !== options.expectedRevision
+    )
+      return {
+        ok: false,
+        error:
+          '다른 창에서 기록이 바뀌어 가져오기를 멈췄어요. 최신 기록을 확인한 뒤 다시 가져와 주세요.',
+      };
     this.base = current.snapshot;
     this.commitSave(valid);
     await this.flush();

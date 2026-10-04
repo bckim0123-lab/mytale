@@ -37,6 +37,7 @@ try {
     serializeCompanionBackup,
     parseCompanionBackup,
     sanitizeCompanionSave,
+    mergeCompanionChanges,
     MAX_COMPANION_SAVE_BYTES,
   } = await server.ssrLoadModule('/app/companion-save.ts');
   const { initialForestState, transitionForest } = await server.ssrLoadModule(
@@ -572,6 +573,53 @@ try {
   assert.equal(mergedB.save.name, '달콩');
   assert.equal(mergedB.save.appearance.pattern, 'heart');
   assert.equal(mergedB.save.completedAdventures, 2);
+
+  const originalFriend = createCompanionSave({
+    name: '몽글',
+    appearance: { ...fresh.appearance, drawingAssetId: 'a'.repeat(64) },
+  });
+  const differentFriend = {
+    ...originalFriend,
+    appearance: {
+      ...originalFriend.appearance,
+      drawingAssetId: 'b'.repeat(64),
+    },
+  };
+  for (const edited of [
+    { ...originalFriend, name: 'A에게만 붙인 이름' },
+    {
+      ...originalFriend,
+      persona: {
+        likes: '별',
+        traits: '다정함',
+        ability: '반짝',
+        quirk: '쫑긋',
+      },
+    },
+  ]) {
+    assert.equal(
+      mergeCompanionChanges(edited, differentFriend, originalFriend),
+      null,
+      'A stale name/persona cannot migrate onto a newly selected picture',
+    );
+    assert.equal(
+      mergeCompanionChanges(differentFriend, edited, originalFriend),
+      null,
+      'The same identity conflict is protected in the reverse write order',
+    );
+  }
+  const unrelatedProgress = { ...originalFriend, storyBooks: [books[0]] };
+  const validIdentityMerge = mergeCompanionChanges(
+    unrelatedProgress,
+    differentFriend,
+    originalFriend,
+  );
+  assert.equal(validIdentityMerge.appearance.drawingAssetId, 'b'.repeat(64));
+  assert.equal(
+    validIdentityMerge.storyBooks.length,
+    1,
+    'Independent completed books still merge across a friend selection',
+  );
 
   const clashA = readCompanionSave(shared).snapshot;
   const clashB = readCompanionSave(shared).snapshot;

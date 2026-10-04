@@ -264,6 +264,23 @@ try {
       unknown: 'PRIVATE_EXTRA',
     },
   ]);
+  assert.deepEqual(
+    await readDrawingAsset(personalized.id),
+    personalized,
+    'Importing an older copy cannot erase a current name or persona before record restore',
+  );
+  await putDrawingAssets([
+    {
+      ...asset,
+      name: '오래된 백업 이름',
+      persona: { ...persona, likes: '옛날 취향' },
+    },
+  ]);
+  assert.deepEqual(
+    await readDrawingAsset(personalized.id),
+    personalized,
+    'Backup merges preserve existing metadata even if a subsequent record restore fails',
+  );
   assert.equal(
     JSON.stringify([...stored.values()]).includes('PRIVATE_'),
     false,

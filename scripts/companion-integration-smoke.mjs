@@ -247,11 +247,13 @@ try {
   let importOptions;
   const importStatus = [];
   const importBackup = loadFunction(experienceAst, 'importBackup', {
+    MAX_COMPANION_BOOKS: 100,
     pendingBackup: { save: saved, assets: [artwork] },
     backupOperation: { current: false },
     artworkBusy: false,
     artworkEpoch: { current: 0 },
     setBackupBusy: () => {},
+    flush: async () => {},
     readCompanionSave: () => ({
       status: 'ready',
       save: saved,
@@ -274,6 +276,146 @@ try {
   assert.equal(importOptions.expectedGeneration, 'before');
   assert.equal(restored, false);
   assert.ok(importStatus.some((message) => message.includes('기록이 바뀌어')));
+
+  for (const mode of [
+    'full',
+    'restore-failed',
+    'library-failed',
+    'missing-art',
+    'changed-record',
+    'success',
+  ]) {
+    let assetWrites = 0,
+      recordWrites = 0,
+      cleared = false;
+    const statuses = [];
+    const currentSave = {
+      ...saved,
+      storyBooks:
+        mode === 'full'
+          ? Array.from({ length: 100 }, (_, index) => ({
+              id: `existing-${index}`,
+            }))
+          : saved.storyBooks,
+    };
+    const incomingSave = {
+      ...saved,
+      storyBooks: mode === 'full' ? [{ id: 'new-book' }] : saved.storyBooks,
+    };
+    const execute = loadFunction(experienceAst, 'importBackup', {
+      MAX_COMPANION_BOOKS: 100,
+      pendingBackup: { save: incomingSave, assets: [artwork] },
+      backupOperation: { current: false },
+      artworkBusy: false,
+      artworkEpoch: { current: 0 },
+      setBackupBusy: () => {},
+      flush: async () => {},
+      readCompanionSave: () => ({
+        status: 'ready',
+        save: currentSave,
+        snapshot: {
+          generation: 'stable',
+          revision: mode === 'changed-record' && assetWrites ? 2 : 1,
+          save: currentSave,
+        },
+      }),
+      putDrawingAssets: async (_assets, options) => {
+        assetWrites++;
+        assert.equal(options.cancelled(), false);
+      },
+      readDrawingAsset: async () => (mode === 'missing-art' ? null : artwork),
+      restoreSave: async (incoming, options) => {
+        recordWrites++;
+        assert.equal(
+          incoming.name,
+          artwork.name,
+          'Active friend uses the preserved library name',
+        );
+        assert.deepEqual(
+          incoming.persona,
+          artwork.persona,
+          'Active friend uses the preserved library persona',
+        );
+        assert.deepEqual(
+          incoming.storyBooks,
+          incomingSave.storyBooks,
+          'Historical book identity is not rewritten',
+        );
+        assert.equal(options.expectedRevision, 1);
+        return mode === 'restore-failed'
+          ? { ok: false, error: '저장 공간이 부족해요.' }
+          : { ok: true };
+      },
+      listDrawingAssets: async () => {
+        if (mode === 'library-failed') throw new Error('read failed');
+        return [artwork];
+      },
+      setArtLibrary: () => {},
+      setPendingBackup: (value) => {
+        cleared = value === null;
+      },
+      setBackupStatus: (value) => statuses.push(value),
+    });
+    await execute();
+    assert.equal(
+      assetWrites,
+      mode === 'full' ? 0 : 1,
+      'Book capacity is checked before any artwork write',
+    );
+    assert.equal(
+      recordWrites,
+      ['full', 'missing-art', 'changed-record'].includes(mode) ? 0 : 1,
+    );
+    assert.equal(
+      cleared,
+      ['library-failed', 'success'].includes(mode),
+      'A committed restore is not offered again after a display-only failure',
+    );
+    assert.match(
+      statuses.at(-1),
+      {
+        full: /아직 그림이나 기록을 바꾸지 않았어요/,
+        'restore-failed': /새로 가져온 그림은 보관함에 남아 있을 수 있어요/,
+        'library-failed': /기록은 가져왔지만/,
+        'missing-art': /가져올 친구의 그림을 확인하지 못했어요/,
+        'changed-record': /다른 창에서 기록이 바뀌어/,
+        success: /이미 있는 그림의 이름과 취향은 유지/,
+      }[mode],
+    );
+  }
+
+  // Revision checking must happen after the awaited flush, not just in the UI.
+  {
+    const memory = new Map();
+    const storage = {
+      getItem: (key) => memory.get(key) ?? null,
+      setItem: (key, value) => memory.set(key, value),
+      removeItem: (key) => memory.delete(key),
+    };
+    const session = new CompanionStorageSession({ storage });
+    session.hydrate();
+    const before = readCompanionSave(storage).snapshot;
+    const importing = session.restoreSave(saved, {
+      expectedGeneration: before.generation,
+      expectedRevision: before.revision,
+    });
+    const other = new CompanionStorageSession({ storage });
+    other.hydrate();
+    other.commitSave(createCompanionSave({ name: '다른 창의 새 이름' }));
+    await other.flush();
+    const latest = JSON.stringify([...memory]);
+    const result = await importing;
+    assert.equal(
+      result.ok,
+      false,
+      'Concurrent record changes must cancel the stale import',
+    );
+    assert.equal(
+      JSON.stringify([...memory]),
+      latest,
+      'Rejected import preserves the latest record',
+    );
+  }
 
   // Wiring guards are AST-based; extraction above tests behavior, not just wording.
   const kept = called(experienceAst, 'keepDrawingAsset');

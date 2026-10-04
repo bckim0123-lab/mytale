@@ -29,9 +29,11 @@ function findNode(predicate) {
 }
 function compileReader(source, resultName, bindings) {
   const compiled = ts.transpileModule(source, {
+    fileName: 'reader-under-test.tsx',
     compilerOptions: {
       target: ts.ScriptTarget.ES2022,
       module: ts.ModuleKind.ESNext,
+      jsx: ts.JsxEmit.React,
     },
   }).outputText;
   // oxlint-disable-next-line typescript/no-implied-eval -- Execute only parsed repository UI code with deterministic mocks; never user content.
@@ -111,7 +113,15 @@ try {
   assert.match(html, /connect-src 'none'/);
   assert.match(html, /@page\{size:A4 portrait/);
   assert.match(html, /break-after:page/);
-  assert.equal((html.match(/data-story-page="\d+"/g) ?? []).length, 5);
+  assert.match(
+    html,
+    /\.story-page\[data-story-page="3"\] \.hero\{left:6%;width:60%;height:78%\}/,
+    'The owl page reserves a separate place for the hero instead of covering the owl',
+  );
+  assert.equal(
+    (html.match(/<section[^>]*data-story-page="\d+"/g) ?? []).length,
+    5,
+  );
   let previousIndex = -1;
   for (const page of book.pages) {
     const index = html.indexOf(page);
@@ -292,10 +302,62 @@ try {
   for (const route of ['river', 'garden'])
     for (const owl of ['listen', 'invite'])
       for (const ending of ['sky', 'home']) {
-        const branch = exportStorybookHtml({
+        const branchBook = {
           ...book,
           choices: { route, owl, ending },
+        };
+        const branch = exportStorybookHtml(branchBook);
+        const illustrated = exportStorybookHtml(branchBook, {
+          illustrations: [png, png, png, png, png],
         });
+        for (const rendered of [branch, illustrated]) {
+          assert.match(rendered, new RegExp(`data-scene-route="${route}"`));
+          assert.match(rendered, new RegExp(`data-scene-owl="${owl}"`));
+          assert.equal(
+            (
+              rendered.match(
+                new RegExp(`data-scene-lanterns="${ending}"`, 'g'),
+              ) ?? []
+            ).length,
+            2,
+          );
+        }
+        const overlays = [
+          ...illustrated.matchAll(
+            /<svg class="scene-art scene-details"[\s\S]*?<\/svg>/g,
+          ),
+        ].map((match) => match[0]);
+        assert.equal(
+          overlays.length,
+          5,
+          'Every embedded-background page retains its branch details',
+        );
+        assert.ok(
+          overlays.every((overlay) => !overlay.includes('<rect width="640"')),
+          'Choice details must not paint over the embedded illustration',
+        );
+        assert.match(
+          overlays[1],
+          route === 'river' ? /stroke-width="41"/ : /<ellipse cy="-11"/,
+        );
+        assert.match(overlays[2], owl === 'invite' ? /♪/ : /circle cx="464"/);
+        const SceneDetails = readerFunction('SceneDetails', {
+          React,
+          useId: () => 'scene-test',
+        });
+        for (const page of [3, 4]) {
+          const details = renderToStaticMarkup(
+            React.createElement(SceneDetails, { page, book: branchBook }),
+          );
+          const lanternYs = [
+            ...details.matchAll(/transform="translate\(\d+,(\d+)\)"/g),
+          ].map((match) => Number(match[1]));
+          assert.equal(lanternYs.length, page === 3 ? 7 : 11);
+          assert.ok(
+            lanternYs.every((y) => (ending === 'sky' ? y < 400 : y >= 400)),
+            'Both ending pages show lights in the chosen sky or home location',
+          );
+        }
         assert.ok(
           branch.includes(
             route === 'river' ? '첨벙! 시냇물 길' : '톡톡! 비밀 정원',
@@ -315,7 +377,10 @@ try {
               : '친구들의 집 앞을 밝혀 줄래',
           ),
         );
-        assert.equal((branch.match(/data-story-page="\d+"/g) ?? []).length, 5);
+        assert.equal(
+          (branch.match(/<section[^>]*data-story-page="\d+"/g) ?? []).length,
+          5,
+        );
       }
 
   const attack =
@@ -381,7 +446,10 @@ try {
       `${index + 1}장. ${'우리의 이야기는 빠짐없이 여기 남아요. '.repeat(20)}`,
   );
   const longBook = exportStorybookHtml({ ...book, pages: longPages });
-  assert.equal((longBook.match(/data-story-page="\d+"/g) ?? []).length, 12);
+  assert.equal(
+    (longBook.match(/<section[^>]*data-story-page="\d+"/g) ?? []).length,
+    12,
+  );
   for (const page of longPages) assert.ok(longBook.includes(page));
   assert.throws(() => exportStorybookHtml({ ...book, pages: [] }), TypeError);
   assert.throws(() => exportStorybookHtml({ ...book, pages: [42] }), TypeError);

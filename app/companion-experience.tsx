@@ -55,6 +55,7 @@ import {
   parseCompanionBackup,
   readCompanionSave,
   COMPANION_SAVE_KEY,
+  MAX_COMPANION_BOOKS,
 } from './companion-save';
 import {
   initialForestState,
@@ -1063,32 +1064,80 @@ export default function CompanionExperience({
     backupOperation.current = true;
     setBackupBusy(true);
     const operation = ++artworkEpoch.current;
+    let assetsStaged = false;
+    let recordRestored = false;
     try {
+      await flush();
       const before = readCompanionSave();
       if (before.status !== 'ready' && before.status !== 'empty')
         throw new Error('먼저 기존 기록의 저장 문제를 확인해 주세요.');
-      await putDrawingAssets(pendingBackup.assets, {
+      const bookIds = new Set(
+        [
+          ...(before.status === 'ready' ? before.save.storyBooks : []),
+          ...pendingBackup.save.storyBooks,
+        ].map((book) => book.id),
+      );
+      if (bookIds.size > MAX_COMPANION_BOOKS)
+        throw new Error(
+          '기존 책과 합치면 100권을 넘어요. 먼저 파일로 보관해 주세요. 아직 그림이나 기록을 바꾸지 않았어요.',
+        );
+      const selectedId = pendingBackup.save.appearance.drawingAssetId;
+      const incomingAssets = pendingBackup.assets.map((asset) =>
+        asset.id === selectedId
+          ? {
+              ...asset,
+              name: asset.name ?? pendingBackup.save.name,
+              persona: asset.persona ?? pendingBackup.save.persona,
+            }
+          : asset,
+      );
+      await putDrawingAssets(incomingAssets, {
         expectedGeneration: before.snapshot.generation,
+        cancelled: () => operation !== artworkEpoch.current,
       });
+      assetsStaged = true;
       const after = readCompanionSave();
       if (
         operation !== artworkEpoch.current ||
         (after.status !== 'ready' && after.status !== 'empty') ||
-        after.snapshot.generation !== before.snapshot.generation
+        after.snapshot.generation !== before.snapshot.generation ||
+        after.snapshot.revision !== before.snapshot.revision
       )
         throw new Error('다른 창에서 기록이 바뀌어 가져오기를 멈췄어요.');
-      const result = await restoreSave(pendingBackup.save, {
+      // Existing artwork wins on identity too, not just in the library. Otherwise
+      // a later name flush could copy the backup's old identity over that artwork.
+      const kept = selectedId ? await readDrawingAsset(selectedId) : null;
+      if (selectedId && !kept)
+        throw new Error(
+          '가져올 친구의 그림을 확인하지 못했어요. 다시 확인해 주세요.',
+        );
+      const incomingSave = kept
+        ? {
+            ...pendingBackup.save,
+            name: kept.name ?? pendingBackup.save.name,
+            persona: kept.persona,
+          }
+        : pendingBackup.save;
+      const result = await restoreSave(incomingSave, {
         expectedGeneration: before.snapshot.generation,
+        expectedRevision: after.snapshot.revision,
       });
       if (!result.ok) throw new Error(result.error);
-      setArtLibrary(await listDrawingAssets());
+      recordRestored = true;
       setPendingBackup(null);
+      setArtLibrary(await listDrawingAssets());
       setBackupStatus(
-        '친구와 책을 가져왔어요. 같은 책은 중복해서 넣지 않았어요.',
+        '친구와 책을 가져왔어요. 같은 책은 중복하지 않고, 보관함에 이미 있는 그림의 이름과 취향은 유지했어요.',
       );
     } catch (error) {
+      const message =
+        error instanceof Error ? error.message : '백업을 가져오지 못했어요.';
       setBackupStatus(
-        error instanceof Error ? error.message : '백업을 가져오지 못했어요.',
+        recordRestored
+          ? '기록은 가져왔지만 보관함 화면을 새로 읽지 못했어요. 새로고침하면 저장된 기록을 다시 볼 수 있어요.'
+          : assetsStaged
+            ? `${message} 새로 가져온 그림은 보관함에 남아 있을 수 있어요. 기존 그림의 이름과 취향은 덮어쓰지 않았어요.`
+            : message,
       );
     } finally {
       backupOperation.current = false;

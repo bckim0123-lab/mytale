@@ -242,7 +242,9 @@ export async function putDrawingAssets(
   assets: DrawingAsset[],
   options: DrawingAssetWriteOptions = {},
 ): Promise<void> {
-  return putAssets(assets, writeContext(options));
+  // Backup merge is additive. A failed record restore must not have already
+  // replaced the name/persona of an identical picture on this device.
+  return putAssets(assets, writeContext(options), true);
 }
 
 /** Update only the existing friend's name. Never re-create a deleted image or
@@ -309,6 +311,7 @@ export async function renameDrawingAsset(
 async function putAssets(
   assets: DrawingAsset[],
   context: WriteContext,
+  preserveExisting = false,
 ): Promise<void> {
   if (assets.length > 100)
     throw new Error('한 번에 가져올 수 있는 친구 그림은 100개까지예요.');
@@ -339,13 +342,16 @@ async function putAssets(
                 )
                 .map((asset: DrawingAsset) => asset.id),
             );
+            const existingIds = new Set(ids);
             for (const asset of validated) ids.add(asset.id);
             if (ids.size > 100)
               throw new Error(
                 '친구 보관함에 100명이 모였어요. 먼저 파일로 보관해 주세요. 기존 친구는 지우지 않았어요.',
               );
-            for (const asset of validated)
+            for (const asset of validated) {
+              if (preserveExisting && existingIds.has(asset.id)) continue;
               store.put({ ...asset, generation: context.generation });
+            }
           } catch (error) {
             transaction.abort();
             reject(error);

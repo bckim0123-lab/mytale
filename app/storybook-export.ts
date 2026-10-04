@@ -142,7 +142,11 @@ function imageData(value: string | null | undefined): string | null {
   return value;
 }
 
-function forestArt(page: number, book: CompanionStoryBook): string {
+function forestArt(
+  page: number,
+  book: CompanionStoryBook,
+  detailsOnly = false,
+): string {
   const river = page === 1 && book.choices?.route === 'river';
   const flowers = page === 1 && book.choices?.route === 'garden';
   const owl = page === 2;
@@ -163,14 +167,20 @@ function forestArt(page: number, book: CompanionStoryBook): string {
     .join('');
   const blossom = (x: number, y: number, color: string) =>
     `<g transform="translate(${x} ${y})"><path d="M0 5v48m0-10q-25-22-25-4q5 12 25 14m0-25q20-18 23-3q-6 11-23 12" fill="#76926b" stroke="#76926b" stroke-width="3"/>${[0, 60, 120, 180, 240, 300].map((angle) => `<ellipse cy="-11" rx="10" ry="17" fill="${color}" transform="rotate(${angle})"/>`).join('')}<circle r="9" fill="#e3ae59"/></g>`;
-  return `<svg class="scene-art" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 520" aria-hidden="true">
+  return `<svg class="scene-art${detailsOnly ? ' scene-details' : ''}" data-scene-route="${river ? 'river' : flowers ? 'garden' : 'none'}" data-scene-owl="${owl ? (book.choices?.owl === 'invite' ? 'invite' : 'listen') : 'none'}" data-scene-lanterns="${lanterns ? (book.choices?.ending === 'home' ? 'home' : 'sky') : 'none'}" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 520" aria-hidden="true">
+  ${
+    detailsOnly
+      ? ''
+      : `
   <defs><linearGradient id="${id}" x2="0" y2="1"><stop stop-color="#254d51"/><stop offset="1" stop-color="#b8cbb5"/></linearGradient><radialGradient id="${id}-moon"><stop stop-color="#fff8d6"/><stop offset="1" stop-color="#f1d6a0"/></radialGradient></defs>
   <rect width="640" height="520" fill="url(#${id})"/><circle cx="447" cy="103" r="79" fill="#fff2c6" opacity=".06"/><circle cx="447" cy="103" r="55" fill="#fff2c6" opacity=".08"/><circle cx="447" cy="103" r="34" fill="url(#${id}-moon)"/>
   <g fill="#fff1b7" opacity=".8">${stars}</g>
   <g fill="#264f47" opacity=".62"><path d="M-35 470V-10H50q-23 120 15 240l-15 240zM590 500V-10h74v510z"/><ellipse cx="43" cy="23" rx="153" ry="86"/><ellipse cx="629" cy="57" rx="151" ry="93"/></g>
   <g fill="#5d826e" opacity=".7"><ellipse cx="27" cy="360" rx="89" ry="74"/><ellipse cx="588" cy="376" rx="112" ry="84"/></g>
   <path d="M0 430q165-90 300-13q160-79 340-1v104H0z" fill="#98b197"/><path d="M0 478q170-88 338-5q141-56 302-1v48H0z" fill="#bfcea9"/>
-  ${river ? `<path d="M0 480q190-63 328-3t312-9v52H0z" fill="#9acdd0"/><path d="M80 486q241-98 474-18" fill="none" stroke="#765245" stroke-width="25" stroke-linecap="round"/>${Array.from({ length: 9 }, (_, index) => `<path d="M${100 + index * 53} ${472 - Math.sin((index / 8) * Math.PI) * 42}l-5 32" stroke="${index % 2 ? '#d7a77c' : '#eccca0'}" stroke-width="41" stroke-linecap="round"/>`).join('')}` : ''}
+  `
+  }
+  ${river ? `<path d="M-1000 491Q-350 454 0 480q190-63 328-3t312-9q350-40 1000 20v160H-1000z" fill="#9acdd0" opacity=".76"/><path d="M80 486q241-98 474-18" fill="none" stroke="#765245" stroke-width="25" stroke-linecap="round"/>${Array.from({ length: 9 }, (_, index) => `<path d="M${100 + index * 53} ${472 - Math.sin((index / 8) * Math.PI) * 42}l-5 32" stroke="${index % 2 ? '#d7a77c' : '#eccca0'}" stroke-width="41" stroke-linecap="round"/>`).join('')}` : ''}
   ${flowers ? blossom(100, 407, '#e9abc0') + blossom(523, 416, '#f0cf7b') + blossom(566, 466, '#d3b9df') + blossom(58, 474, '#f2e0a3') : ''}
   ${owl ? `<g transform="translate(514 317)"><ellipse cy="28" rx="40" ry="48" fill="#a8816d"/><ellipse cy="32" rx="27" ry="32" fill="#f3dcba"/><path d="M-35-8l3-27 22 20M35-8l-3-27-22 20" fill="#9c735f"/><circle cx="-17" r="20" fill="#fff1d1"/><circle cx="17" r="20" fill="#fff1d1"/><circle cx="-16" cy="2" r="8" fill="#493a35"/><circle cx="18" cy="2" r="8" fill="#493a35"/><circle cx="-18" r="2.5" fill="white"/><circle cx="16" r="2.5" fill="white"/><path d="M-6 17h12l-6 10z" fill="#e6ae66"/><path d="M-49 76q49-10 95 0" fill="none" stroke="#78604e" stroke-width="10" stroke-linecap="round"/></g>${book.choices?.owl === 'invite' ? '<text x="459" y="229" fill="#ffedb3" font-size="35">♪</text><text x="555" y="269" fill="#ffedb3" font-size="29">♫</text>' : '<g fill="#fff8a0"><circle cx="464" cy="214" r="3"/><circle cx="570" cy="254" r="4"/><circle cx="533" cy="191" r="3"/></g>'}` : ''}
   ${
@@ -266,7 +276,7 @@ export function exportStorybookHtml(
               ? choiceLines.find(([label]) => label === '마지막 빛을 보낸 곳')
               : undefined;
       return `<section class="sheet story-page" aria-labelledby="chapter-${index + 1}" data-story-page="${index + 1}">
-      <div class="illustration">${book.illustrationTheme ? storybookWorldSvg(book.illustrationTheme, index) : backgrounds[index] ? `<img class="scene-art" src="${backgrounds[index]}" alt=""/>` : forestArt(index, book)}${hero(portrait, name)}${forestKeepsakeSvg(book, index)}<div class="art-caption"><span>${title}</span><strong>${escapeHtml(heading)}</strong></div></div>
+      <div class="illustration">${book.illustrationTheme ? storybookWorldSvg(book.illustrationTheme, index) : backgrounds[index] ? `<img class="scene-art" src="${backgrounds[index]}" alt=""/>${forestArt(index, book, true)}` : forestArt(index, book)}${hero(portrait, name)}${forestKeepsakeSvg(book, index)}<div class="art-caption"><span>${title}</span><strong>${escapeHtml(heading)}</strong></div></div>
       <div class="paper"><span class="eyebrow">우리의 이야기 · ${String(index + 1).padStart(2, '0')}</span><h2 id="chapter-${index + 1}">${escapeHtml(heading)}</h2><p class="story-text">${escapeHtml(text)}</p>${choice ? `<aside class="choice"><span>${escapeHtml(choice[0])}</span><q>${escapeHtml(choice[1])}</q></aside>` : ''}<footer><span>나와 ${safeName}, 우리가 고른 이야기</span><b>${index + 1} / ${book.pages.length}</b></footer></div>
     </section>`;
     })
@@ -280,6 +290,8 @@ export function exportStorybookHtml(
 @media(max-width:600px){body{padding:12px 9px 30px}.guide{font-size:11px;padding:0 15px}.sheet{margin-bottom:18px}.cover{min-height:650px;padding:48px 28px 34px}.cover h1{font-size:31px}.cover .hero-wrap{height:340px}.cover-subtitle{font-size:15px}.illustration{height:310px}.paper{padding:28px 27px}.paper h2{font-size:23px}.story-text{font-size:18px;line-height:1.95}.story-page{min-height:0}.afterword{min-height:0;padding:48px 36px}.afterword h2{font-size:25px}.ending{font-size:19px}.art-caption strong{font-size:20px}.cover::before,.afterword::before{inset:14px}}
 @media print{@page{size:A4 portrait;margin:12mm}html,body{background:white;padding:0;margin:0}.guide{display:none}main{max-width:none}.sheet{width:100%;margin:0;border:0;box-shadow:none;print-color-adjust:exact;-webkit-print-color-adjust:exact}.cover{min-height:270mm;padding:19mm 13mm 13mm}.cover h1{font-size:32pt}.cover .hero-wrap{height:142mm}.cover-subtitle{font-size:15pt}.story-page{min-height:270mm}.illustration{height:121mm;flex-shrink:0}.paper{padding:11mm 13mm 9mm}.story-text{font-size:14pt;line-height:1.9}.paper h2{font-size:20pt}.choice{break-inside:avoid;page-break-inside:avoid}.afterword{min-height:270mm;padding:18mm 16mm}.questions,.keepsake{break-inside:avoid;page-break-inside:avoid}.cover::before,.afterword::before{inset:5mm}.hero,.hero-wrap::after{filter:none}h1,h2,h3{break-after:avoid;page-break-after:avoid}}
 .forest-keepsake-art{position:absolute;right:3%;bottom:3%;width:24%;height:auto;max-width:144px;z-index:3;pointer-events:none}
+.scene-details{z-index:1;pointer-events:none;overflow:visible}
+.story-page[data-story-page="3"] .hero{left:6%;width:60%;height:78%}
 </style></head><body><p class="guide">우리의 동화책을 파일로 간직했어요. 인터넷 없이 열어 볼 수 있어요.<br/>종이에 담고 싶을 때는 브라우저의 인쇄 메뉴에서 A4 또는 PDF 저장을 골라 주세요.</p>
 <main><section class="sheet cover" aria-labelledby="book-title"><span class="eyebrow">우리가 만든 동화책</span><h1 id="book-title">${title}</h1><div class="hero-wrap">${hero(portrait, name, true)}</div><p class="cover-subtitle">나와 ${safeName}, 우리가 고른 이야기</p><p class="date">${escapeHtml(dateLabel)}</p><span class="brand">그림친구 · OUR LITTLE STORY</span></section>
 ${sheets}
