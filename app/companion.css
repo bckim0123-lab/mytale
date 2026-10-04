@@ -138,6 +138,30 @@
   position: relative;
   isolation: isolate;
 }
+.cw-name-status,
+.cw-name-error {
+  display: block;
+  font-size: 14px;
+  line-height: 1.7;
+  margin: 8px 0 16px;
+}
+.cw-name-status {
+  color: #55705b;
+}
+.cw-name-error {
+  color: #964b35;
+}
+.cw-name-error p {
+  margin: 0 0 8px;
+}
+.cw-name-error button {
+  border: 1px solid #d7c6aa;
+  background: #fffdf4;
+  border-radius: 12px;
+  padding: 8px 12px;
+  min-height: 44px;
+  font-size: 14px;
+}
 .cw-home-stage .cw-world {
   position: absolute;
   inset: 60px 0 50px;

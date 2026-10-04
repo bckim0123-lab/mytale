@@ -17,6 +17,23 @@ export type CreatureAppearance = {
   drawingImage?: string;
 };
 
+/** Storage normalization may clone appearances without changing the character. */
+export function sameCreatureAppearance(
+  a: CreatureAppearance,
+  b: CreatureAppearance,
+) {
+  return (
+    a.kind === b.kind &&
+    a.bodyColor === b.bodyColor &&
+    a.accentColor === b.accentColor &&
+    a.accessory === b.accessory &&
+    (a.pattern ?? 'plain') === (b.pattern ?? 'plain') &&
+    (a.earStyle ?? 'upright') === (b.earStyle ?? 'upright') &&
+    a.drawingAssetId === b.drawingAssetId &&
+    a.drawingImage === b.drawingImage
+  );
+}
+
 export const DEFAULT_APPEARANCE: CreatureAppearance = {
   kind: 'sprout',
   bodyColor: '#fff0d9',

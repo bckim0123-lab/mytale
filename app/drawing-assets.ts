@@ -245,6 +245,67 @@ export async function putDrawingAssets(
   return putAssets(assets, writeContext(options));
 }
 
+/** Update only the existing friend's name. Never re-create a deleted image or
+ * acquire the metadata write lock recursively through a save/keep operation. */
+export async function renameDrawingAsset(
+  id: string,
+  name: string,
+  options: DrawingAssetWriteOptions & { expectedName: string },
+): Promise<DrawingAsset> {
+  if (!/^[a-f0-9]{64}$/.test(id))
+    throw new Error('보관한 친구를 찾지 못했어요.');
+  const normalized = name.trim().slice(0, 24) || '몽글';
+  const context = writeContext(options);
+  const result = await withWriteLock(async () => {
+    assertCurrent(context);
+    const db = await openDatabase();
+    try {
+      return await new Promise<DrawingAsset>((resolve, reject) => {
+        const transaction = db.transaction(TABLE, 'readwrite');
+        const store = transaction.objectStore(TABLE);
+        const request = store.get(id);
+        let renamed: DrawingAsset | undefined;
+        request.onsuccess = () => {
+          try {
+            assertCurrent(context);
+            const stored: unknown = request.result;
+            if (!isVisibleAsset(stored, context.generation))
+              throw new Error(
+                '보관한 친구가 바뀌었어요. 그림을 다시 불러와 주세요.',
+              );
+            if (
+              (stored.name || '') !== options.expectedName &&
+              stored.name !== normalized
+            )
+              throw new Error(
+                '다른 창에서 친구 이름이 바뀌었어요. 보관함을 다시 확인해 주세요.',
+              );
+            renamed = publicAsset({ ...stored, name: normalized });
+            store.put({ ...stored, name: normalized });
+          } catch (error) {
+            transaction.abort();
+            reject(error);
+          }
+        };
+        transaction.oncomplete = () =>
+          renamed
+            ? resolve(renamed)
+            : reject(new Error('친구 이름을 아직 보관하지 못했어요.'));
+        transaction.onerror = () =>
+          reject(
+            new Error('친구 이름을 보관하지 못했어요. 기존 그림은 그대로예요.'),
+          );
+        transaction.onabort = () =>
+          reject(new Error('이름 보관이 중단됐어요. 다시 저장해 주세요.'));
+      });
+    } finally {
+      db.close();
+    }
+  });
+  notifyArtworkChange();
+  return result;
+}
+
 async function putAssets(
   assets: DrawingAsset[],
   context: WriteContext,

@@ -5,7 +5,10 @@ import {
   createForestVisuals,
   forestCameraFrame,
 } from './forest-diorama-visuals';
-import type { CreatureAppearance } from './creature-types';
+import {
+  sameCreatureAppearance,
+  type CreatureAppearance,
+} from './creature-types';
 import {
   FOREST_BED_IDS,
   FOREST_BELL_IDS,
@@ -178,7 +181,7 @@ export function layoutForestLabels(
 ) {
   const right = Math.max(100, width - (width >= 1000 ? 340 : 14));
   const bottom = Math.max(80, height - 108);
-  const top = Math.min(width < 650 ? 172 : 188, bottom - 34);
+  const top = Math.min(width < 650 ? 186 : 212, bottom - 34);
   const visible = labels.filter((label) => label.onscreen);
   const isSecret = (label: ForestLabel) => label.id.startsWith('secret-');
   const nearestRequired = [...labels]
@@ -1024,7 +1027,8 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
   let nextPaw = 0;
   let stepDistance = 0;
   const lastStepPosition = new T.Vector3(0, 0, 3.3);
-  let creature = createCreature(options.appearance);
+  let currentAppearance = { ...options.appearance };
+  let creature = createCreature(currentAppearance);
   scene.add(creature.root);
   creature.root.scale.setScalar(home ? 1 : 0.8);
   creature.root.position.set(0, 0, home ? 0 : 3.3);
@@ -1330,6 +1334,8 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
       button.type = 'button';
       button.textContent = hot.label;
       button.className = 'cw-world-tag';
+      // Measure now, but do not flash new targets over the title at (0, 0).
+      button.style.visibility = 'hidden';
       button.setAttribute('aria-label', `${hot.label} · 이동하기`);
       labelDisposers.push(
         bindForestHotspotButton(button, () => {
@@ -1504,7 +1510,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
       (h) => h.id === id && h.available && !h.complete,
     );
     if (!hot) return;
-    options.onStatus(`${hot.label} 쪽으로 가고 있어요`);
+    options.onStatus(`${hot.label} · 친구가 가고 있어요`);
     navigate(new T.Vector3(hot.x, 0, hot.z + 0.5), id);
   }
   const pointerGesture = createWorldPointerGesture();
@@ -2230,6 +2236,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
         `${position.edge ? '화면 밖 ' : ''}${tag.label} · 이동하기`,
       );
       tag.node.style.transform = `translate(${position.x}px,${position.y}px) translate(-50%,-100%)`;
+      tag.node.style.visibility = 'visible';
     }
     renderer.render(scene, camera);
   }
@@ -2249,12 +2256,17 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
       joystick.set(x, z);
     },
     setAppearance(appearance: CreatureAppearance) {
+      // Progress/name saves clone the appearance. Keep the live rig, texture,
+      // movement and reaction unless its actual visual settings changed.
+      if (disposed || sameCreatureAppearance(currentAppearance, appearance))
+        return;
       const old = creature;
       const position = old.root.position.clone();
       const rotation = old.root.rotation.clone();
       scene.remove(old.root);
       old.dispose();
-      creature = createCreature(appearance);
+      currentAppearance = { ...appearance };
+      creature = createCreature(currentAppearance);
       watchDrawing(creature);
       creature.root.scale.setScalar(home ? 1 : 0.8);
       creature.root.position.copy(position);

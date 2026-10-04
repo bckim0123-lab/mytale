@@ -22,7 +22,12 @@ export function useDrawingAsset(id?: string) {
   useEffect(() => {
     let canceled = false;
     queueMicrotask(() => {
-      if (!canceled) setState({ id, loading: !!id, error: '' });
+      if (!canceled)
+        setState((previous) =>
+          previous.id === id && previous.png
+            ? { ...previous, loading: !!id, error: '' }
+            : { id, loading: !!id, error: '' },
+        );
     });
     if (id)
       void readDrawingAsset(id)

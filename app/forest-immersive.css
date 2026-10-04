@@ -103,13 +103,13 @@
   flex: none;
 }
 .cw-forest-immersive .cw-narrator p {
-  font-size: 13px;
+  font-size: 16px;
   line-height: 1.85;
   margin: 5px 0 0;
   color: #445d48;
 }
 .cw-forest-immersive .cw-narrator small {
-  font-size: 10px;
+  font-size: 12px;
   color: #858665;
 }
 .cw-forest-immersive .cw-objective {
@@ -117,11 +117,11 @@
   padding: 13px 2px 0;
 }
 .cw-forest-immersive .cw-objective strong {
-  font-size: 12px;
+  font-size: 16px;
   color: #465f46;
 }
 .cw-forest-immersive .cw-progress {
-  font-size: 9px;
+  font-size: 12px;
 }
 .cw-forest-immersive .cw-progress > div {
   height: 4px;
@@ -140,11 +140,11 @@
   box-shadow: 0 6px 14px #64784b16;
 }
 .cw-forest-immersive .cw-choices strong {
-  font-size: 13px;
+  font-size: 16px;
   margin: 2px 4px 4px;
 }
 .cw-forest-immersive .cw-choices span {
-  font-size: 11px;
+  font-size: 14px;
   margin: 0 4px;
 }
 .cw-forest-immersive .cw-choices button > svg:not(.fa-route-art) {
@@ -164,7 +164,8 @@
   background: #ffffffc9;
   border-radius: 40px;
   color: #466347;
-  font-size: 11px;
+  font-size: 14px;
+  line-height: 1.5;
   pointer-events: none;
   box-shadow: 0 3px 15px #496a3220;
 }
@@ -222,13 +223,13 @@
   margin-top: 10px;
 }
 .cw-action-guide .cw-nearby button {
-  font-size: 11px;
-  min-height: 40px;
+  font-size: 14px;
+  min-height: 44px;
   margin: 6px 0;
   background: #fffdf3;
 }
 .cw-melody-instruction {
-  font-size: 11px;
+  font-size: 14px;
   line-height: 1.7;
   color: #758060;
   margin: 9px 0;
@@ -237,7 +238,8 @@
   border: 0;
   background: none;
   color: #7f7962;
-  font-size: 10px;
+  font-size: 14px;
+  min-height: 44px;
   padding: 10px 0;
   text-decoration: underline;
   text-underline-offset: 4px;
@@ -257,7 +259,7 @@
   border: 1px solid #d0dac4;
   border-radius: 13px;
   background: #f2f3e3;
-  font-size: 11px;
+  font-size: 14px;
   color: #547352;
   box-shadow: 0 3px 0 #becdaf80;
 }
@@ -291,11 +293,11 @@
 }
 .cw-craft-launch strong {
   display: block;
-  font-size: 12px;
+  font-size: 16px;
 }
 .cw-craft-launch small {
   display: block;
-  font-size: 10px;
+  font-size: 12px;
   opacity: 0.8;
   margin-top: 6px;
 }
@@ -345,7 +347,7 @@
 }
 .cw-forest-immersive .cw-autosave {
   margin-top: auto;
-  font-size: 9px;
+  font-size: 12px;
 }
 @media (max-width: 999px) {
   .cw-forest-immersive {
@@ -413,7 +415,7 @@
     padding: 12px;
   }
   .cw-forest-immersive .cw-choices strong {
-    font-size: 14px;
+    font-size: 16px;
   }
   .cw-forest-immersive .cw-choices span {
     font-size: 12px;
@@ -446,7 +448,7 @@
     top: 113px;
     max-width: calc(100% - 36px);
     padding: 9px 13px;
-    font-size: 10px;
+    font-size: 14px;
   }
   .cw-forest-immersive .cw-story-panel {
     display: flex;
@@ -459,11 +461,11 @@
     box-shadow: 0 -8px 22px #2a452418;
   }
   .cw-forest-immersive .cw-narrator p {
-    font-size: 13px;
+    font-size: 16px;
     line-height: 1.8;
   }
   .cw-forest-immersive .cw-progress {
-    font-size: 9px;
+    font-size: 12px;
   }
   .cw-forest-immersive .cw-choices {
     gap: 9px;
@@ -472,11 +474,11 @@
     padding: 8px 9px 12px;
   }
   .cw-forest-immersive .cw-choices strong {
-    font-size: 12px;
+    font-size: 16px;
     line-height: 1.6;
   }
   .cw-forest-immersive .cw-choices span {
-    font-size: 10px;
+    font-size: 14px;
     line-height: 1.7;
   }
   .cw-forest-immersive .cw-stick {
@@ -506,14 +508,14 @@
     padding: 14px 16px;
   }
   .cw-forest-immersive .cw-melody > button {
-    font-size: 12px;
+    font-size: 14px;
   }
   .cw-forest-immersive .cw-melody > div {
     justify-content: center;
   }
   .cw-bell-keys button {
     min-height: 70px;
-    font-size: 12px;
+    font-size: 14px;
   }
   .cw-action-guide .cw-nearby button {
     margin: 0;
@@ -525,7 +527,7 @@
     padding: 16px;
   }
   .cw-craft-launch strong {
-    font-size: 14px;
+    font-size: 16px;
   }
 }
 

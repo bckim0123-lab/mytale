@@ -133,6 +133,7 @@ try {
     const statuses = [];
     const exportBackup = loadFunction(experienceAst, 'exportBackup', {
       saveRef,
+      flushCharacterName: async () => true,
       flush: async () => {},
       serializeCompanionBackup,
       readCompanionSave: () => ({

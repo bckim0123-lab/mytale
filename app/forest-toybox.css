@@ -45,7 +45,7 @@
   gap: 12px;
 }
 .ftb-eyebrow {
-  font-size: 11px;
+  font-size: 12px;
   letter-spacing: 0.12em;
   font-weight: 750;
   color: #89916e;
@@ -61,8 +61,8 @@
   background: #f4eedf;
   border: 1px solid #e4ddcb;
   color: #7b816c;
-  width: 40px;
-  height: 40px;
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
   font-size: 27px !important;
   flex-shrink: 0;
@@ -74,7 +74,7 @@
   list-style: none;
   padding: 0;
   margin: 22px 0 16px;
-  font-size: 11px;
+  font-size: 14px;
   font-weight: 750;
   color: #9a9e8a;
 }
@@ -91,7 +91,7 @@
   height: 22px;
   background: #eeecdd;
   border-radius: 50%;
-  font-size: 10px;
+  font-size: 12px;
 }
 .ftb-steps li[aria-current='step'] {
   color: #347966;
@@ -101,7 +101,7 @@
   color: white;
 }
 .ftb-description {
-  font-size: 14px;
+  font-size: 16px;
   line-height: 1.8;
   word-break: keep-all;
   margin: 0 0 18px;
@@ -204,7 +204,7 @@
   left: 4px;
   top: -9px;
   color: #769a88;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 750;
 }
 .ftb-pond svg {
@@ -320,14 +320,14 @@
   background: #eff0df;
   border: 1px solid #e3e4cf;
   border-radius: 14px;
-  font-size: 12px;
+  font-size: 14px;
 }
 .ftb-progress > span:first-child {
   font-size: 17px;
   flex-shrink: 0;
 }
 .ftb-progress strong {
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.5;
   flex: 1;
 }
@@ -352,6 +352,7 @@
 }
 .ftb-tools {
   display: flex;
+  flex-wrap: wrap;
   gap: 9px;
   margin-top: 15px;
 }
@@ -363,7 +364,7 @@
   color: #64785a;
   padding: 10px 14px;
   min-height: 44px;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 750;
 }
 .ftb-tools button:hover,
@@ -380,7 +381,7 @@
   color: #8a8d77;
 }
 .ftb-reassurance {
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.8;
   color: #8b947e;
   margin: 13px 0 0;
@@ -395,7 +396,7 @@
 }
 .ftb-hint p {
   margin: 0 0 12px;
-  font-size: 13px;
+  font-size: 16px;
   line-height: 1.8;
   color: #876f47;
   word-break: keep-all;
@@ -409,12 +410,12 @@
   display: block;
   margin-top: 8px;
   color: #9a875f;
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.6;
 }
 .ftb-design h3 {
   margin: 19px 0 12px;
-  font-size: 14px;
+  font-size: 16px;
   letter-spacing: -0.02em;
 }
 .ftb-designs {
@@ -446,12 +447,12 @@
 }
 .ftb-designs strong {
   display: block;
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.5;
 }
 .ftb-designs small {
   display: block;
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.55;
   color: #90937c;
   margin-top: 3px;
@@ -472,7 +473,7 @@
   border-radius: 14px;
   color: #fffdf1;
   padding: 15px;
-  font-size: 14px !important;
+  font-size: 16px !important;
   font-weight: 800 !important;
   box-shadow: 0 5px 0 #2f614e;
   margin-top: 15px;
@@ -537,16 +538,17 @@
     font-size: 22px;
   }
   .ftb-eyebrow {
-    font-size: 10px;
+    font-size: 12px;
   }
   .ftb-close {
-    width: 35px;
-    height: 35px;
+    width: 44px;
+    height: 44px;
   }
   .ftb-steps {
-    gap: 12px;
+    gap: 10px;
+    flex-wrap: wrap;
     margin: 18px 0 14px;
-    font-size: 10px;
+    font-size: 14px;
   }
   .ftb-steps li {
     gap: 5px;
@@ -556,7 +558,7 @@
     height: 20px;
   }
   .ftb-description {
-    font-size: 12px;
+    font-size: 16px;
     line-height: 1.8;
     margin-bottom: 14px;
   }
@@ -599,12 +601,12 @@
   }
   .ftb-progress {
     padding: 10px;
-    font-size: 11px;
+    font-size: 14px;
     gap: 7px;
     margin-top: 12px;
   }
   .ftb-progress strong {
-    font-size: 11px;
+    font-size: 14px;
   }
   .ftb-progress-dots {
     gap: 4px;
@@ -618,14 +620,15 @@
     margin-top: 12px;
   }
   .ftb-tools button {
-    font-size: 11px;
+    font-size: 14px;
     padding: 10px 11px;
   }
   .ftb-reassurance {
-    font-size: 10px;
+    font-size: 12px;
   }
   .ftb-designs {
     gap: 8px;
+    grid-template-columns: 1fr;
   }
   .ftb-designs button {
     padding: 10px 7px;
@@ -636,23 +639,23 @@
     width: 37px;
   }
   .ftb-designs strong {
-    font-size: 11px;
+    font-size: 14px;
   }
   .ftb-designs small {
-    font-size: 9px;
+    font-size: 12px;
   }
   .ftb-design h3 {
-    font-size: 13px;
+    font-size: 16px;
     margin-top: 16px;
   }
   .ftb-hint {
     padding: 12px;
   }
   .ftb-hint p {
-    font-size: 12px;
+    font-size: 16px;
   }
   .ftb-finish {
-    font-size: 13px !important;
+    font-size: 16px !important;
   }
 }
 @media (prefers-reduced-motion: reduce) {

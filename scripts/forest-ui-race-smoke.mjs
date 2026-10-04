@@ -93,6 +93,7 @@ function harness(overrides = {}) {
     artworkBusy: false,
     art: { loading: false, error: '' },
     mounted: { current: true },
+    friendSelection: { current: 0 },
     toyOpening: { current: null },
     toyRequestEpoch: { current: 0 },
     forestInteractionEnabled: { current: true },

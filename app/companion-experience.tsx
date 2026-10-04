@@ -42,6 +42,8 @@ import {
   putDrawingAssets,
   clearDrawingAssets,
   listDrawingAssets,
+  readDrawingAsset,
+  renameDrawingAsset,
   validDrawingAsset,
   artworkId,
   type DrawingAsset,
@@ -156,6 +158,12 @@ export default function CompanionExperience({
     assets: DrawingAsset[];
   } | null>(null);
   const [artLibrary, setArtLibrary] = useState<DrawingAsset[]>([]);
+  const artLibraryRef = useRef<DrawingAsset[]>([]);
+  const libraryReadEpoch = useRef(0);
+  const nameWrite = useRef<Promise<boolean> | null>(null);
+  const friendSelection = useRef(0);
+  const [nameSaving, setNameSaving] = useState(false);
+  const [nameSaveError, setNameSaveError] = useState('');
   const backupInput = useRef<HTMLInputElement>(null);
   const acceptedArtwork = useRef<string | null>(null);
   const [mode, setMode] = useState<'home' | 'forest'>('home');
@@ -305,10 +313,22 @@ export default function CompanionExperience({
     };
   }, [hydrated, incomingArtwork, blocked, commitSave, onArtworkAccepted]);
   useEffect(() => {
+    const epoch = ++libraryReadEpoch.current;
+    let canceled = false;
     void listDrawingAssets()
-      .then(setArtLibrary)
+      .then((assets) => {
+        if (canceled || epoch !== libraryReadEpoch.current) return;
+        artLibraryRef.current = assets;
+        setArtLibrary(assets);
+      })
       .catch(() => {});
+    return () => {
+      canceled = true;
+    };
   }, [save.appearance.drawingAssetId, artworkBusy]);
+  useEffect(() => {
+    artLibraryRef.current = artLibrary;
+  }, [artLibrary]);
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -343,11 +363,151 @@ export default function CompanionExperience({
     } else if (current.open) current.close();
   }, [book, chat, settings]);
   function updateAppearance(change: Partial<CreatureAppearance>) {
+    friendSelection.current++;
     commitSave((s) => ({
       ...s,
       appearance: { ...s.appearance, ...change },
       updatedAt: Date.now(),
     }));
+  }
+  async function flushCharacterName(): Promise<boolean> {
+    // A blur and the following card click may arrive together. Join that write,
+    // then re-read the latest draft rather than enqueueing a stale name.
+    while (nameWrite.current) {
+      if (!(await nameWrite.current)) return false;
+    }
+    if (blocked) {
+      setNameSaveError(
+        '먼저 기기 저장 문제를 확인해 주세요. 보관한 친구 이름은 바꾸지 않았어요.',
+      );
+      return false;
+    }
+    const current = saveRef.current;
+    const id = current.appearance.drawingAssetId;
+    const name = current.name.trim().slice(0, 24) || '몽글';
+    if (current.name !== name)
+      commitSave((s) => ({ ...s, name, updatedAt: Date.now() }));
+    if (!id) {
+      setNotice(`나는 ${name}! 네가 지어 준 이름이 좋아.`);
+      return true;
+    }
+    const asset = artLibraryRef.current.find((item) => item.id === id);
+    if (asset?.name === name) return true;
+    const before = readCompanionSave();
+    if (!asset || (before.status !== 'ready' && before.status !== 'empty')) {
+      setNameSaveError(
+        '친구 보관함을 아직 읽지 못했어요. 잠시 뒤 이름을 다시 저장해 주세요.',
+      );
+      return false;
+    }
+    setNameSaving(true);
+    setNameSaveError('');
+    const pending = (async () => {
+      // Finish the local save first, outside the asset lock. A failed save must
+      // not leave the active name and the library claiming different success.
+      await flush();
+      const stored = readCompanionSave();
+      if (
+        stored.status !== 'ready' ||
+        stored.snapshot.generation !== before.snapshot.generation ||
+        stored.save.appearance.drawingAssetId !== id ||
+        stored.save.name.trim() !== name
+      )
+        throw new Error(
+          '이름을 기기 기록에 저장하지 못했어요. 보관함 이름은 바꾸지 않았어요.',
+        );
+      return renameDrawingAsset(id, name, {
+        expectedGeneration: before.snapshot.generation,
+        expectedName: asset.name || '',
+      });
+    })()
+      .then((renamed) => {
+        const after = readCompanionSave();
+        if (
+          (after.status !== 'ready' && after.status !== 'empty') ||
+          after.snapshot.generation !== before.snapshot.generation
+        )
+          return false;
+        // Metadata-only rename never changes the current selection or any book.
+        // Invalidate a library read begun before this transaction completed.
+        libraryReadEpoch.current++;
+        const assets = artLibraryRef.current.map((item) =>
+          item.id === id ? renamed : item,
+        );
+        artLibraryRef.current = assets;
+        if (mounted.current) {
+          setArtLibrary(assets);
+          if (
+            saveRef.current.appearance.drawingAssetId === id &&
+            saveRef.current.name.trim() === name
+          )
+            setNotice(`나는 ${name}! 네가 지어 준 이름이 좋아.`);
+        }
+        return true;
+      })
+      .catch((error: unknown) => {
+        if (mounted.current) {
+          setNameSaveError(
+            error instanceof Error
+              ? error.message
+              : '친구 이름을 아직 보관하지 못했어요. 다시 저장해 주세요.',
+          );
+          // Refresh the compare-and-set baseline after a conflict. A second,
+          // explicit retry may keep this window's name; never overwrite silently.
+          const epoch = ++libraryReadEpoch.current;
+          void listDrawingAssets()
+            .then((assets) => {
+              if (!mounted.current || epoch !== libraryReadEpoch.current)
+                return;
+              artLibraryRef.current = assets;
+              setArtLibrary(assets);
+            })
+            .catch(() => {});
+        }
+        return false;
+      })
+      .finally(() => {
+        if (nameWrite.current === pending) nameWrite.current = null;
+        if (mounted.current) setNameSaving(false);
+      });
+    nameWrite.current = pending;
+    return pending;
+  }
+  async function selectDrawingFriend(id: string) {
+    const selection = ++friendSelection.current;
+    const previousId = saveRef.current.appearance.drawingAssetId;
+    const before = readCompanionSave();
+    if (before.status !== 'ready' && before.status !== 'empty') return;
+    if (!(await flushCharacterName())) return;
+    try {
+      const asset = await readDrawingAsset(id);
+      const after = readCompanionSave();
+      if (
+        !mounted.current ||
+        selection !== friendSelection.current ||
+        saveRef.current.appearance.drawingAssetId !== previousId ||
+        (after.status !== 'ready' && after.status !== 'empty') ||
+        after.snapshot.generation !== before.snapshot.generation
+      )
+        return;
+      if (!asset)
+        throw new Error(
+          '그 친구 그림을 아직 불러오지 못했어요. 보관함을 다시 확인해 주세요.',
+        );
+      commitSave((current) => ({
+        ...current,
+        name: asset.name || current.name,
+        persona: asset.persona,
+        appearance: { ...current.appearance, drawingAssetId: asset.id },
+        updatedAt: Date.now(),
+      }));
+      setNotice('내가 만든 모습 그대로, 다시 만났네!');
+    } catch (error) {
+      if (mounted.current && selection === friendSelection.current)
+        setNameSaveError(
+          error instanceof Error ? error.message : '친구를 불러오지 못했어요.',
+        );
+    }
   }
   const playTone = useCallback((id: string, delay = 0) => {
     if (!soundRef.current) return;
@@ -399,7 +559,7 @@ export default function CompanionExperience({
         setReplaying(false);
       }, melody.length * 720),
     );
-  }, [playTone, saveRef]);
+  }, [playTone, saveRef, setReplaying, setActiveNote]);
   const dispatch = useCallback(
     (event: ForestEvent) => {
       const old = saveRef.current;
@@ -483,7 +643,7 @@ export default function CompanionExperience({
       )
         replayMelody();
     },
-    [commitSave, playTone, replayMelody, saveRef],
+    [commitSave, playTone, replayMelody, saveRef, setActiveNote],
   );
   function closeToybox() {
     cancelToyRequest();
@@ -607,6 +767,7 @@ export default function CompanionExperience({
     }
   }
   function startAdventure() {
+    friendSelection.current++;
     if (artworkBusy || art.loading || art.error) {
       setBackupStatus(
         art.error || '친구 모습을 준비하고 있어요. 잠깐만 기다려 주세요.',
@@ -650,6 +811,7 @@ export default function CompanionExperience({
     setMode('forest');
   }
   function goHome(showBooks = false) {
+    friendSelection.current++;
     cancelToyRequest();
     timers.current.forEach(clearTimeout);
     timers.current = [];
@@ -678,6 +840,10 @@ export default function CompanionExperience({
   async function exportBackup() {
     setBackupStatus('친구와 책을 백업에 담고 있어요…');
     try {
+      if (!(await flushCharacterName()))
+        throw new Error(
+          '친구 이름 보관을 먼저 마쳐 주세요. 원래 백업과 그림은 그대로예요.',
+        );
       await flush();
       const exportSave = structuredClone(saveRef.current);
       const before = readCompanionSave();
@@ -998,12 +1164,14 @@ export default function CompanionExperience({
     }
   }
   function openBook(item: CompanionStoryBook) {
+    friendSelection.current++;
     cancelToyRequest();
     setSettings(false);
     setChat(false);
     setBook(item);
   }
   function openChat() {
+    friendSelection.current++;
     cancelToyRequest();
     setGuardianQuestion({
       a: 13 + Math.floor(Math.random() * 14),
@@ -1014,14 +1182,17 @@ export default function CompanionExperience({
     setChat(true);
   }
   function openSettings() {
+    friendSelection.current++;
     cancelToyRequest();
     setSettings(true);
   }
   function exitCompanion() {
+    friendSelection.current++;
     cancelToyRequest();
     onExit();
   }
   function openDrawing() {
+    friendSelection.current++;
     cancelToyRequest();
     onDrawing();
   }
@@ -1223,19 +1394,7 @@ export default function CompanionExperience({
                             aria-pressed={
                               save.appearance.drawingAssetId === asset.id
                             }
-                            onClick={() => {
-                              commitSave((current) => ({
-                                ...current,
-                                name: asset.name || current.name,
-                                persona: asset.persona,
-                                appearance: {
-                                  ...current.appearance,
-                                  drawingAssetId: asset.id,
-                                },
-                                updatedAt: Date.now(),
-                              }));
-                              setNotice('내가 만든 모습 그대로, 다시 만났네!');
-                            }}
+                            onClick={() => void selectDrawingFriend(asset.id)}
                           >
                             <img
                               src={asset.png}
@@ -1257,28 +1416,36 @@ export default function CompanionExperience({
                   <input
                     id="companion-name"
                     maxLength={24}
+                    disabled={nameSaving}
                     value={save.name}
-                    onChange={(e) =>
+                    onChange={(e) => {
+                      friendSelection.current++;
                       commitSave((s) => ({
                         ...s,
                         name: e.target.value,
                         updatedAt: Date.now(),
-                      }))
-                    }
-                    onBlur={() => {
-                      if (!save.name.trim())
-                        commitSave((s) => ({
-                          ...s,
-                          name: '몽글',
-                          updatedAt: Date.now(),
-                        }));
-                      setNotice(
-                        `나는 ${save.name.trim() || '몽글'}! 네가 지어 준 이름이 좋아.`,
-                      );
+                      }));
                     }}
+                    onBlur={() => void flushCharacterName()}
                     placeholder="몽글"
                     autoComplete="off"
                   />
+                  {nameSaving && (
+                    <output className="cw-name-status">
+                      친구 이름을 보관하고 있어요…
+                    </output>
+                  )}
+                  {nameSaveError && (
+                    <div className="cw-name-error" role="alert">
+                      <p>{nameSaveError}</p>
+                      <button
+                        type="button"
+                        onClick={() => void flushCharacterName()}
+                      >
+                        이름 다시 저장하기
+                      </button>
+                    </div>
+                  )}
                   <fieldset>
                     <legend>어떤 친구를 만날까?</legend>
                     <div className="cw-kinds">

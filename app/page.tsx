@@ -1573,41 +1573,45 @@ export default function Home() {
     setGenerationRetryRemainingSeconds(0);
     setGenerationFailureDismissed(false);
     setPick(requestedStyle);
-    setGenerated(Array.from<string>({ length: characterStyleCount }).fill(''));
-    setGeneratedQuality(
-      Array.from<CharacterQuality | null>({ length: characterStyleCount }).fill(
-        null,
-      ),
-    );
-    const initialStatuses = Array.from<GenerationStatus>({
-      length: characterStyleCount,
-    }).fill('unrequested');
-    initialStatuses[requestedStyle] = 'generating';
-    setGenerationStatuses(initialStatuses);
+    // Re-entering preferences is not choosing a new source. Keep every approved
+    // result until its own reviewed replacement succeeds; load() resets a new source.
+    setGenerationStatuses((previous) => {
+      const next = Array.from<GenerationStatus>({
+        length: characterStyleCount,
+      }).map((_, index) => previous[index] || 'unrequested');
+      next[requestedStyle] = 'generating';
+      return next;
+    });
     setGenerationNote(
-      `기기에서 먼저 살아난 친구와 인사해 보세요. ‘${characterStyles[requestedStyle].name}’ 모습으로 AI가 완성하고 있어요.`,
+      `‘${characterStyles[requestedStyle].name}’의 새 모습을 만들고 있어요. 이미 완성한 친구는 그대로 남아요.`,
     );
     setStep('character');
     try {
-      const blob = await fetch(image).then((r) => r.blob());
+      const blob = await fetch(image, { signal }).then((r) => r.blob());
+      if (signal.aborted || runId !== generationRun.current) return;
       const result = await requestVariant(blob, requestedStyle, signal, true);
-      if (runId !== generationRun.current)
-        throw new DOMException('Aborted', 'AbortError');
-      const images = Array.from<string>({
-        length: characterStyleCount,
-      }).fill('');
-      images[result.index] = result.image;
-      const qualities = Array.from<CharacterQuality | null>({
-        length: characterStyleCount,
-      }).fill(null);
-      qualities[result.index] = result.quality;
-      const statuses = Array.from<GenerationStatus>({
-        length: characterStyleCount,
-      }).fill('unrequested');
-      statuses[result.index] = 'ready';
-      setGenerated(images);
-      setGeneratedQuality(qualities);
-      setGenerationStatuses(statuses);
+      if (signal.aborted || runId !== generationRun.current) return;
+      setGenerated((previous) => {
+        const next = Array.from<string>({ length: characterStyleCount }).map(
+          (_, index) => previous[index] || '',
+        );
+        next[result.index] = result.image;
+        return next;
+      });
+      setGeneratedQuality((previous) => {
+        const next = Array.from<CharacterQuality | null>({
+          length: characterStyleCount,
+        }).map((_, index) => previous[index] || null);
+        next[result.index] = result.quality;
+        return next;
+      });
+      setGenerationStatuses((previous) => {
+        const next = Array.from<GenerationStatus>({
+          length: characterStyleCount,
+        }).map((_, index) => previous[index] || 'unrequested');
+        next[result.index] = 'ready';
+        return next;
+      });
       setPick(result.index);
       setArrivalDismissed(false);
       setGenerationNote(
@@ -2519,7 +2523,11 @@ export default function Home() {
         <CompanionExperience
           onExit={() => setStep('welcome')}
           onDrawing={() =>
-            setStep(guardianVerified && photoConsent ? 'upload' : 'guardian')
+            generationBusy
+              ? openGenerationView()
+              : setStep(
+                  guardianVerified && photoConsent ? 'upload' : 'guardian',
+                )
           }
           sourceImage={image}
           age={age}
@@ -3373,7 +3381,11 @@ export default function Home() {
                   : '배경 정리가 이상한가요? 원본 미리보기 사용하기'}
               </button>
             )}
-          <div className="preference-summary" aria-label="반영한 캐릭터 취향">
+          <div
+            className="preference-summary"
+            aria-label="현재 선택한 만들기 설정. 이미 완성한 모습은 바뀌지 않아요."
+          >
+            <span>선택한 만들기 설정</span>
             <span>{age} 맞춤</span>
             {childGender !== genderChoices[0] && (
               <span>{childGender} 참고</span>

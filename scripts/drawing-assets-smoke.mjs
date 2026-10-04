@@ -151,6 +151,7 @@ try {
     artworkId,
     validDrawingAsset,
     keepDrawingAsset,
+    renameDrawingAsset,
     putDrawingAssets,
     readDrawingAsset,
     listDrawingAssets,
@@ -195,6 +196,66 @@ try {
     validDrawingAsset({ ...asset, persona: { ...persona, ability: 42 } }),
     false,
   );
+  const renamed = await renameDrawingAsset(personalized.id, '  별방울  ', {
+    expectedName: personalized.name,
+  });
+  assert.deepEqual(
+    renamed,
+    { ...personalized, name: '별방울' },
+    'renaming changes no image, checksum, persona or creation date',
+  );
+  assert.deepEqual(await readDrawingAsset(renamed.id), renamed);
+  assert.equal(
+    (await listDrawingAssets())[0].name,
+    '별방울',
+    'library and portable backup source see the new name',
+  );
+  const renamedBytes = JSON.stringify([...stored]);
+  await assert.rejects(
+    () =>
+      renameDrawingAsset(renamed.id, '다른 창의 오래된 이름', {
+        expectedName: personalized.name,
+      }),
+    /다른 창/,
+  );
+  assert.equal(
+    JSON.stringify([...stored]),
+    renamedBytes,
+    'stale name CAS cannot overwrite a newer name',
+  );
+  await assert.rejects(
+    () => renameDrawingAsset('f'.repeat(64), '없는 친구', { expectedName: '' }),
+    /바뀌었어요/,
+  );
+  assert.equal(
+    JSON.stringify([...stored]),
+    renamedBytes,
+    'rename never recreates a missing friend',
+  );
+  failNextWrite = true;
+  await assert.rejects(
+    () =>
+      renameDrawingAsset(renamed.id, '실패한 이름', {
+        expectedName: renamed.name,
+      }),
+    /보관하지 못했어요/,
+  );
+  assert.equal(
+    JSON.stringify([...stored]),
+    renamedBytes,
+    'failed rename leaves original bytes untouched',
+  );
+  const blankRenamed = await renameDrawingAsset(renamed.id, '   ', {
+    expectedName: renamed.name,
+  });
+  assert.equal(
+    blankRenamed.name,
+    '몽글',
+    'blank name is normalized consistently',
+  );
+  await renameDrawingAsset(renamed.id, personalized.name, {
+    expectedName: '몽글',
+  });
   await putDrawingAssets([
     {
       ...asset,
@@ -277,6 +338,15 @@ try {
   assert.equal((await resetCompanionSave()).ok, true);
   const resetGeneration = captureDrawingGeneration();
   assert.notEqual(resetGeneration, oldGeneration);
+  await assert.rejects(
+    () =>
+      renameDrawingAsset(asset.id, '삭제 전 이름', {
+        expectedName: personalized.name,
+        expectedGeneration: oldGeneration,
+      }),
+    /기록을 지웠어요/,
+    'old-generation rename cannot restore cleared metadata',
+  );
   assert.equal(
     await readDrawingAsset(asset.id),
     null,

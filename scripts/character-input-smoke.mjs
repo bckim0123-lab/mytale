@@ -32,6 +32,54 @@ function loadArrow(name, bindings) {
   );
 }
 
+function loadJsxHandler(component, property, bindings) {
+  let found;
+  function visit(node) {
+    if (
+      (ts.isJsxSelfClosingElement(node) || ts.isJsxOpeningElement(node)) &&
+      node.tagName.getText(ast) === component
+    ) {
+      found = node.attributes.properties.find(
+        (attribute) => attribute.name?.getText(ast) === property,
+      )?.initializer?.expression;
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(ast);
+  assert.ok(found, `${component}.${property} exists`);
+  const code = ts.transpileModule(`const handler = ${found.getText(ast)};`, {
+    compilerOptions: {
+      target: ts.ScriptTarget.ES2022,
+      module: ts.ModuleKind.ESNext,
+    },
+  }).outputText;
+  // oxlint-disable-next-line typescript/no-implied-eval -- Execute only the actual JSX callback with offline bindings.
+  return new Function(...Object.keys(bindings), `${code}\nreturn handler;`)(
+    ...Object.values(bindings),
+  );
+}
+for (const component of ['CompanionExperience', 'CharacterWelcome']) {
+  const property =
+    component === 'CompanionExperience' ? 'onDrawing' : 'onCreate';
+  for (const busy of [true, false]) {
+    for (const consent of [true, false]) {
+      const steps = [];
+      loadJsxHandler(component, property, {
+        generationBusy: busy,
+        guardianVerified: true,
+        photoConsent: consent,
+        setStep: (step) => steps.push(step),
+        openGenerationView: () => steps.push('character'),
+      })();
+      assert.deepEqual(
+        steps,
+        [busy ? 'character' : consent ? 'upload' : 'guardian'],
+        'creation entries cannot expose editable tastes during an active request',
+      );
+    }
+  }
+}
+
 function createFixture() {
   const state = {
     image: 'previous-drawing',
@@ -568,6 +616,92 @@ assert.equal(
   true,
   'retry unlocks when the absolute deadline passes',
 );
+// Preferences can be revisited after several styles have already completed.
+// Exercise the actual main handler, not a duplicate implementation of its updates.
+for (const outcome of ['failure', 'cancel', 'success', 'superseded-source']) {
+  const kept = createFixture();
+  const oldImages = ['approved-2d', 'approved-sticker', 'approved-plush'];
+  const oldQualities = [
+    { passed: true, score: 90 },
+    { passed: true, score: 91 },
+    { passed: true, score: 92 },
+  ];
+  kept.state.generated = [...oldImages];
+  kept.state.generatedQuality = [...oldQualities];
+  kept.state.generationStatuses = ['ready', 'ready', 'ready'];
+  let finish;
+  let requests = 0;
+  const replacement = {
+    index: 2,
+    image: 'reviewed-new-plush',
+    quality: { passed: true, score: 95 },
+  };
+  const handler = loadArrow('generateCharacter', {
+    ...kept.bindings,
+    generating: false,
+    regenerating: false,
+    characterStyleCount: 3,
+    characterStyles: [{ name: '2D' }, { name: '스티커' }, { name: '보송' }],
+    fetch: async () => ({ blob: async () => new Blob(['synthetic source']) }),
+    requestVariant: () => {
+      requests++;
+      return new Promise((resolve, reject) => {
+        finish = { resolve, reject };
+      });
+    },
+    rememberGenerationFailure: () => {
+      kept.state.failed = true;
+    },
+  });
+  const pending = handler();
+  for (let index = 0; index < 8 && !finish; index++) await Promise.resolve();
+  assert.equal(requests, 1);
+  assert.deepEqual(
+    kept.state.generated,
+    oldImages,
+    'starting replacement retains every completed style',
+  );
+  assert.deepEqual(
+    kept.state.generatedQuality,
+    oldQualities,
+    'previous approval is not erased while waiting',
+  );
+  if (outcome === 'failure') finish.reject(new Error('provider unavailable'));
+  else if (outcome === 'cancel') {
+    kept.bindings.generationRequest.current.abort();
+    kept.bindings.generationRun.current++;
+    finish.resolve(replacement); // Even a provider ignoring cancellation must be ignored.
+  } else if (outcome === 'superseded-source') {
+    kept.bindings.generationRun.current++;
+    kept.state.generated = ['', '', ''];
+    kept.state.generatedQuality = [null, null, null];
+    finish.resolve(replacement);
+  } else finish.resolve(replacement);
+  await pending;
+  if (outcome === 'success') {
+    assert.deepEqual(kept.state.generated, [
+      ...oldImages.slice(0, 2),
+      replacement.image,
+    ]);
+    assert.deepEqual(kept.state.generatedQuality, [
+      ...oldQualities.slice(0, 2),
+      replacement.quality,
+    ]);
+  } else if (outcome === 'superseded-source') {
+    assert.deepEqual(
+      kept.state.generated,
+      ['', '', ''],
+      'old replacement cannot attach to a newer source',
+    );
+  } else {
+    assert.deepEqual(
+      kept.state.generated,
+      oldImages,
+      `${outcome} preserves finished friends`,
+    );
+    assert.deepEqual(kept.state.generatedQuality, oldQualities);
+  }
+}
 console.log(
   'Character input smoke passed: latest-upload wins, decode cancellation, consent withdrawal/late-response guards, and absolute retry deadlines; no external network.',
 );
