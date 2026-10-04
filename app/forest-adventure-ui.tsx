@@ -144,16 +144,21 @@ const moments: Record<
 export function ForestMoment({
   chapter,
   crafted = false,
+  onDismiss,
 }: {
   chapter: ForestChapter;
   crafted?: boolean;
+  onDismiss?: () => void;
 }) {
   const [visible, setVisible] = useState(true);
+  const [focused, setFocused] = useState(false);
   useEffect(() => {
+    if (!visible || focused) return;
     // A non-blocking caption, never an animation the child must wait through.
+    // A keyboard reader owns the caption until they move focus away or close it.
     const timer = setTimeout(() => setVisible(false), 6500);
     return () => clearTimeout(timer);
-  }, []);
+  }, [visible, focused]);
   if (!visible) return null;
   const moment =
     chapter === 'crossing' && crafted
@@ -164,11 +169,23 @@ export function ForestMoment({
         }
       : moments[chapter];
   return (
-    <output className="fa-moment">
+    <output
+      className="fa-moment"
+      onFocusCapture={() => setFocused(true)}
+      onBlurCapture={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false);
+      }}
+    >
       <small>{moment.kicker}</small>
       <strong>{moment.title}</strong>
       <p>{moment.line}</p>
-      <button onClick={() => setVisible(false)} aria-label="장면 소개 닫기">
+      <button
+        onClick={() => {
+          setVisible(false);
+          onDismiss?.();
+        }}
+        aria-label="장면 소개 닫기"
+      >
         <X size={16} />
       </button>
     </output>

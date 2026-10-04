@@ -389,6 +389,18 @@ export default function CompanionExperience({
     if (book || chat || settings) {
       world.current?.stop();
       if (!current.open) current.showModal();
+      // Switching an already open dialog (guardian guide → book) removes
+      // the clicked control. Restore a reading/control target only when its
+      // focus was lost; never steal focus from a still-active dialog control.
+      if (
+        document.activeElement === current ||
+        !current.contains(document.activeElement)
+      ) {
+        const target = current.querySelector<HTMLElement>(
+          book ? '.csb-screen-page' : '.cw-dialog-close',
+        );
+        (target ?? current).focus({ preventScroll: true });
+      }
     } else if (current.open) current.close();
   }, [book, chat, settings]);
   function updateAppearance(change: Partial<CreatureAppearance>) {
@@ -1865,6 +1877,11 @@ export default function CompanionExperience({
                 key={`${forest.chapter}-${forest.bridges || forest.gardenBloom}`}
                 chapter={forest.chapter}
                 crafted={forest.bridges || forest.gardenBloom}
+                onDismiss={() =>
+                  gameStage.current
+                    ?.querySelector<HTMLButtonElement>('.cw-pet-friend')
+                    ?.focus({ preventScroll: true })
+                }
               />
               <div className="cw-stage-tools">
                 <button

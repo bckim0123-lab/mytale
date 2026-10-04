@@ -440,6 +440,39 @@ for (const [state, id] of [
   assert.ok(!test.calls.includes('react:celebrate'));
 }
 
+// Execute the real native-dialog effect: content replacement must recover
+// lost focus, while normal renders leave an active control alone.
+const dialogEffect = findAll(
+  (node) => ts.isCallExpression(node) &&
+    node.expression.getText(ast) === 'useEffect' &&
+    node.arguments[0]?.getText(ast).includes('current.showModal()'),
+)[0];
+assert.ok(dialogEffect);
+for (const state of ['new', 'switched', 'focused', 'closed', 'absent']) {
+  const calls = [];
+  const inside = {};
+  const doc = { activeElement: state === 'focused' ? inside : {} };
+  const target = { focus: (options) => calls.push(['focus', options.preventScroll]) };
+  const current = {
+    open: state !== 'new',
+    contains: (element) => element === inside,
+    showModal() { this.open = true; doc.activeElement = inside; calls.push('show'); },
+    close() { this.open = false; calls.push('close'); },
+    querySelector: (selector) => { calls.push(selector); return target; },
+  };
+  evaluate(dialogEffect.arguments[0], {
+    dialog: { current: state === 'absent' ? null : current },
+    document: doc,
+    world: { current: { stop: () => calls.push('stop') } },
+    book: state === 'closed' ? null : {}, chat: false, settings: false,
+  })();
+  if (state === 'new') assert.deepEqual(calls, ['stop', 'show']);
+  if (state === 'switched') assert.deepEqual(calls, ['stop', '.csb-screen-page', ['focus', true]]);
+  if (state === 'focused') assert.deepEqual(calls, ['stop']);
+  if (state === 'closed') assert.deepEqual(calls, ['close']);
+  if (state === 'absent') assert.deepEqual(calls, []);
+}
+
 console.log(
   'Forest UI race smoke passed: actual delayed-flush handlers, navigation/dialog/unmount/reset cancellation, stale callback rejection, newer-request ownership and preserved normal play; no browser/network.',
 );
