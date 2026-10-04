@@ -153,6 +153,9 @@
   inset: 0;
   touch-action: none;
 }
+.cw-world-forest .cw-webgl {
+  touch-action: pan-y;
+}
 .cw-world-loading {
   position: absolute;
   inset: 0;

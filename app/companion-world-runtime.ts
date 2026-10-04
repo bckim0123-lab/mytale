@@ -80,33 +80,61 @@ export function forestPlushTargetYaw(
   return faceViewer ? Math.atan2(cameraOffset.x, cameraOffset.z) : previous;
 }
 
-/** Commit a moving world label at press time, before the camera can reframe it.
- * Keyboard/screen-reader clicks retain native button activation. */
+/** Capture a moving label, but commit only a tap so a vertical page swipe is
+ * never mistaken for travel. Keyboard/screen-reader clicks stay native. */
 export function bindForestHotspotButton(
   button: HTMLButtonElement,
   activate: () => void,
 ) {
+  const gesture = createWorldPointerGesture();
+  const releaseCapture = (owner: number) => {
+    if (button.hasPointerCapture(owner)) button.releasePointerCapture(owner);
+  };
   const press = (event: PointerEvent) => {
-    if (event.button !== 0 || event.isPrimary === false) return;
-    event.preventDefault();
     event.stopPropagation();
-    activate();
+    if (!gesture.begin(event)) return;
+    // Do not preventDefault: touch-action:pan-y must remain able to scroll.
+    button.setPointerCapture(event.pointerId);
+  };
+  const move = (event: PointerEvent) => {
+    event.stopPropagation();
+    gesture.move(event);
+  };
+  const release = (event: PointerEvent) => {
+    event.stopPropagation();
+    const ended = gesture.end(event);
+    if (!ended) return;
+    releaseCapture(event.pointerId);
+    if (ended.tap) {
+      event.preventDefault();
+      activate();
+    }
+  };
+  const cancel = (event: PointerEvent) => {
+    event.stopPropagation();
+    if (gesture.cancel(event.pointerId)) releaseCapture(event.pointerId);
   };
   const click = (event: MouseEvent) => {
     event.preventDefault();
     event.stopPropagation();
     if (event.detail === 0) activate();
   };
-  const release = (event: Event) => event.stopPropagation();
   button.addEventListener('pointerdown', press);
+  button.addEventListener('pointermove', move);
   button.addEventListener('pointerup', release);
-  button.addEventListener('pointercancel', release);
+  button.addEventListener('pointercancel', cancel);
+  button.addEventListener('lostpointercapture', cancel);
   button.addEventListener('click', click);
   return () => {
     button.removeEventListener('pointerdown', press);
+    button.removeEventListener('pointermove', move);
     button.removeEventListener('pointerup', release);
-    button.removeEventListener('pointercancel', release);
+    button.removeEventListener('pointercancel', cancel);
+    button.removeEventListener('lostpointercapture', cancel);
     button.removeEventListener('click', click);
+    const owner = gesture.pointerId;
+    gesture.cancel();
+    if (owner !== null) releaseCapture(owner);
   };
 }
 
@@ -438,6 +466,7 @@ export type WorldAction =
   | 'sleep';
 export type WorldOptions = {
   mode: 'home' | 'forest';
+  paused?: boolean;
   appearance: CreatureAppearance;
   forest: ForestState;
   onInteract: (id: string) => void;
@@ -468,6 +497,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
   host.appendChild(renderer.domElement);
   const scene = new T.Scene();
   const home = options.mode === 'home';
+  let paused = Boolean(options.paused);
   scene.background = new T.Color(home ? '#f4ecda' : '#c8dacf');
   scene.fog = new T.Fog(
     home ? '#f4ecda' : '#c8dacf',
@@ -1469,6 +1499,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
     cursor.visible = true;
   }
   function walkTo(id: string) {
+    if (paused) return;
     const hot = view.hotspots.find(
       (h) => h.id === id && h.available && !h.complete,
     );
@@ -1512,6 +1543,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
     return null;
   }
   function pointerDown(e: PointerEvent) {
+    if (paused) return;
     if (!pointerGesture.begin(e)) return;
     pressedTarget = home ? null : pickForestTarget(e);
     renderer.domElement.setPointerCapture(e.pointerId);
@@ -1548,7 +1580,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
     if (pointerGesture.pointerId === e.pointerId) stop();
   }
   function keyDown(e: KeyboardEvent) {
-    if (home) return;
+    if (home || paused) return;
     if (e.key === 'Escape') {
       e.preventDefault();
       stop();
@@ -1576,6 +1608,10 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
     journeyTarget = null;
     pathQueue = [];
     cursor.visible = false;
+  }
+  function setPaused(value: boolean) {
+    paused = value;
+    if (paused) stop();
   }
   function blur() {
     stop();
@@ -1636,7 +1672,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
     frame = requestAnimationFrame(animate);
     const dt = Math.min((now - last) / 1000, 0.05);
     last = now;
-    if (document.hidden) return;
+    if (paused || document.hidden) return;
     // Mobile action controls sit below the canvas. A requested journey must
     // finish even while the user scrolls to read the objective.
     if (
@@ -2204,10 +2240,12 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
     pet,
     strikeBell,
     stop,
+    setPaused,
     turn(direction: number) {
       orbit += direction * 0.5;
     },
     steer(x: number, z: number) {
+      if (paused) return;
       joystick.set(x, z);
     },
     setAppearance(appearance: CreatureAppearance) {

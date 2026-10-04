@@ -2,14 +2,7 @@
 /* eslint-disable next/no-img-element -- Shared Sites/Vercel static transparent asset; explicit intrinsic size and fetch priority avoid layout shift. */
 
 import { useState } from 'react';
-import {
-  ArrowRight,
-  Heart,
-  ImagePlus,
-  Leaf,
-  ShieldCheck,
-  Sparkles,
-} from 'lucide-react';
+import { Heart, ImagePlus, Leaf, ShieldCheck, Sparkles } from 'lucide-react';
 import './character-welcome.css';
 
 const greetings = [
@@ -54,7 +47,6 @@ export default function CharacterWelcome({
             {generating
               ? '만들고 있는 친구 보러 가기'
               : '내 그림으로 친구 만들기'}
-            <ArrowRight size={20} />
           </button>
           <button className="creation-secondary" onClick={onPlay}>
             <Leaf size={18} /> 그림 없이 3D 친구와 먼저 놀기
@@ -76,7 +68,7 @@ export default function CharacterWelcome({
           </li>
           <li>
             <span>03</span>
-            <b>우리 이야기 만들기</b>
+            <b>이야기 만들기</b>
             <small>직접 놀고, 책으로 간직해요</small>
           </li>
         </ol>
@@ -122,6 +114,46 @@ export default function CharacterWelcome({
           <span>내 그림으로 만드는 결과는 각각 달라요.</span>
         </p>
       </div>
+      <section
+        className="creation-proof"
+        aria-labelledby="creation-proof-title"
+      >
+        <div className="creation-proof-copy">
+          <span>같은 그림, 새로 만나는 친구</span>
+          <h2 id="creation-proof-title">내 그림의 매력은 그대로.</h2>
+          <p>
+            파란 몸과 배에 그린 노란 별.
+            <br />
+            내가 좋아한 모습을 간직한 채, 보송한 친구가 되었어요.
+          </p>
+        </div>
+        <div className="creation-proof-pair">
+          <figure>
+            <img
+              src="/practice-whale-drawing-v1.webp"
+              alt="삐뚤빼뚤한 크레용 선으로 그린 파란 별고래 AI 연습 그림"
+              width={1254}
+              height={1254}
+              loading="lazy"
+            />
+            <figcaption>시작은 작은 그림</figcaption>
+          </figure>
+          <figure>
+            <img
+              src="/practice-whale-result-v1.webp"
+              alt="같은 파란 몸과 노란 별을 간직한 실제 생성 결과, 보송한 고래 친구"
+              width={1024}
+              height={1024}
+              loading="lazy"
+            />
+            <figcaption>실제로 태어난 보송 친구</figcaption>
+          </figure>
+        </div>
+        <p className="creation-proof-note">
+          AI 연습 그림을 이 서비스에서 변환한 실제 예시예요. 그림과 선택에 따라
+          결과는 달라져요.
+        </p>
+      </section>
     </section>
   );
 }

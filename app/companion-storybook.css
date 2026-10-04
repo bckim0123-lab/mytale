@@ -41,10 +41,11 @@
   top: 0;
   z-index: 10;
   background: #fbf7ee;
-  display: flex;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
   align-items: center;
   justify-content: space-between;
-  padding: 18px 58px 18px 25px;
+  padding: 14px 20px;
   gap: 14px;
   border-bottom: 1px solid #e9decb;
 }
@@ -52,7 +53,7 @@
   display: inline-flex;
   align-items: center;
   gap: 9px;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 800;
   letter-spacing: -0.02em;
 }
@@ -68,6 +69,7 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+  justify-content: flex-end;
 }
 .csb-toolbar button {
   display: inline-flex;
@@ -489,16 +491,31 @@
     border-radius: 20px;
   }
   .csb-toolbar {
-    padding: 17px 48px 14px 14px;
-    gap: 6px;
-    flex-wrap: wrap;
+    padding: 10px 12px 12px;
+    gap: 8px;
+    grid-template-columns: minmax(0, 1fr) 44px;
   }
   .csb-toolbar > span {
-    font-size: 11px;
+    font-size: 14px;
+    gap: 6px;
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .csb-toolbar .csb-close {
+    grid-column: 2;
+    grid-row: 1;
+    padding: 0;
+  }
+  .csb-toolbar > .csb-tools {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-column: 1 / -1;
+    grid-row: 2;
     gap: 6px;
   }
-  .csb-toolbar > div {
-    gap: 5px;
+  .csb-tools > button {
+    flex-direction: column;
+    min-width: 0;
   }
   .csb-toolbar button {
     padding: 7px 8px;
@@ -525,7 +542,7 @@
     right: 24px;
   }
   .csb-illustration-title > span {
-    font-size: 9px;
+    font-size: 12px;
     margin-bottom: 4px;
   }
   .csb-illustration-title > strong {

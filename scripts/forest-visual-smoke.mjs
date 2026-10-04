@@ -131,32 +131,57 @@ try {
     'normal touch jitter remains a tap after prior drags',
   );
   const button = new EventTarget();
+  const captured = new Set();
+  button.setPointerCapture = (id) => captured.add(id);
+  button.hasPointerCapture = (id) => captured.has(id);
+  button.releasePointerCapture = (id) => captured.delete(id);
+  const pointerEvent = (type, values = {}) => {
+    const event = new Event(type, { cancelable: true });
+    for (const [key, value] of Object.entries({ ...primary, ...values }))
+      Object.defineProperty(event, key, { value });
+    return event;
+  };
   let labelActivations = 0;
   const unbind = bindForestHotspotButton(button, () => labelActivations++);
-  const secondaryPress = new Event('pointerdown', { cancelable: true });
-  Object.defineProperties(secondaryPress, {
-    button: { value: 0 },
-    isPrimary: { value: false },
-  });
-  button.dispatchEvent(secondaryPress);
+  button.dispatchEvent(pointerEvent('pointerdown', second));
   assert.equal(
     labelActivations,
     0,
     'second finger cannot redirect the hero through a projected label',
   );
-  const pointerPress = new Event('pointerdown', { cancelable: true });
-  Object.defineProperty(pointerPress, 'button', { value: 0 });
+  const pointerPress = pointerEvent('pointerdown');
   button.dispatchEvent(pointerPress);
   assert.equal(
     labelActivations,
-    1,
-    'moving label commits immediately at pointerdown',
+    0,
+    'pressing a label cannot navigate before tap versus scroll is known',
   );
   assert.equal(
     pointerPress.defaultPrevented,
-    true,
-    'press prevents focus/ground gesture',
+    false,
+    'press preserves browser vertical scrolling',
   );
+  assert.equal(
+    captured.has(primary.pointerId),
+    true,
+    'camera movement cannot steal the pressed label',
+  );
+  button.dispatchEvent(pointerEvent('pointerdown', second));
+  button.dispatchEvent(pointerEvent('pointercancel', second));
+  assert.equal(
+    captured.has(primary.pointerId),
+    true,
+    'another finger cannot cancel the owner',
+  );
+  button.dispatchEvent(
+    pointerEvent('pointerup', { clientX: primary.clientX + 2 }),
+  );
+  assert.equal(
+    labelActivations,
+    1,
+    'small touch jitter commits the captured label once',
+  );
+  assert.equal(captured.size, 0, 'tap releases pointer capture');
   const pointerClick = new Event('click', { cancelable: true });
   Object.defineProperty(pointerClick, 'detail', { value: 1 });
   button.dispatchEvent(pointerClick);
@@ -165,6 +190,36 @@ try {
     1,
     'pointer click cannot trigger interaction twice',
   );
+  button.dispatchEvent(pointerEvent('pointerdown'));
+  button.dispatchEvent(
+    pointerEvent('pointermove', { clientY: primary.clientY - 40 }),
+  );
+  button.dispatchEvent(pointerEvent('pointerup'));
+  assert.equal(
+    labelActivations,
+    1,
+    'a swipe returning to its start is still not a tap',
+  );
+  button.dispatchEvent(pointerEvent('pointerdown'));
+  button.dispatchEvent(
+    pointerEvent('pointerup', { clientY: primary.clientY + 30 }),
+  );
+  assert.equal(
+    labelActivations,
+    1,
+    'coalesced vertical swipe is rejected at release',
+  );
+  for (const cancellation of ['pointercancel', 'lostpointercapture']) {
+    button.dispatchEvent(pointerEvent('pointerdown'));
+    button.dispatchEvent(pointerEvent(cancellation));
+    button.dispatchEvent(pointerEvent('pointerup'));
+    assert.equal(
+      labelActivations,
+      1,
+      `${cancellation} prevents delayed activation`,
+    );
+    assert.equal(captured.size, 0);
+  }
   const keyboardClick = new Event('click', { cancelable: true });
   Object.defineProperty(keyboardClick, 'detail', { value: 0 });
   button.dispatchEvent(keyboardClick);
@@ -173,7 +228,14 @@ try {
     2,
     'keyboard/screen reader native activation preserved',
   );
+  button.dispatchEvent(pointerEvent('pointerdown'));
   unbind();
+  assert.equal(
+    captured.size,
+    0,
+    'disposing a pressed label releases its pointer',
+  );
+  button.dispatchEvent(pointerEvent('pointerup'));
   button.dispatchEvent(keyboardClick);
   assert.equal(labelActivations, 2, 'all moving label handlers disposed');
   assert.equal(

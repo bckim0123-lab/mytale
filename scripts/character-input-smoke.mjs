@@ -145,6 +145,142 @@ function createFixture() {
 }
 const file = (name) => ({ name, type: 'image/png', size: 1000 });
 
+function leaveUpload(fixture) {
+  let callback;
+  const visit = (node) => {
+    if (
+      ts.isCallExpression(node) &&
+      node.expression.getText(ast) === 'useEffect' &&
+      node.arguments[0]
+        ?.getText(ast)
+        .includes("step !== 'upload' && characterInput.current.reading")
+    )
+      callback = node.arguments[0];
+    ts.forEachChild(node, visit);
+  };
+  visit(ast);
+  assert.ok(
+    callback,
+    'Leaving upload has an actual preparation-cancel effect.',
+  );
+  const bindings = {
+    ...fixture.bindings,
+    step: 'welcome',
+    cameraStream: { current: null },
+    cameraRequest: { current: 1 },
+    queueMicrotask: (fn) => fn(),
+  };
+  const js = ts.transpileModule(`const effect = ${callback.getText(ast)};`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  // oxlint-disable-next-line typescript/no-implied-eval -- Execute this repository's actual effect with offline browser doubles.
+  new Function(...Object.keys(bindings), `${js};effect();`)(
+    ...Object.values(bindings),
+  );
+}
+
+for (const phase of ['fetch', 'blob'])
+  for (const action of ['cancel', 'upload', 'withdraw', 'navigate', 'camera']) {
+    const sample = createFixture();
+    let release;
+    const pending = new Promise((resolve) => {
+      release = resolve;
+    });
+    const body = new Blob(['synthetic drawing'], { type: 'image/webp' });
+    const response = {
+      ok: true,
+      blob: () => (phase === 'blob' ? pending : Promise.resolve(body)),
+    };
+    const start = loadArrow('loadPracticeDrawing', {
+      ...sample.bindings,
+      generating: false,
+      regenerating: false,
+      File,
+      closeCamera: () => {},
+      fetch: (url) => {
+        assert.equal(
+          url,
+          '/practice-whale-drawing-v1.webp',
+          'Practice loading never calls AI generation.',
+        );
+        return phase === 'fetch' ? pending : Promise.resolve(response);
+      },
+    });
+    const work = start();
+    await Promise.resolve();
+    const transport = sample.bindings.characterInput.current.practiceRequest;
+    if (action === 'cancel') sample.bindings.cancelImagePreparation();
+    if (action === 'upload') sample.bindings.load(file('personal.png'));
+    if (action === 'withdraw') sample.bindings.updatePhotoConsent(false);
+    if (action === 'navigate') leaveUpload(sample);
+    if (action === 'camera')
+      await loadArrow('openCamera', {
+        ...sample.bindings,
+        facingMode: 'environment',
+        navigator: {},
+        cameraInput: { current: { click() {} } },
+      })();
+    const latestState = structuredClone(sample.state);
+    release(phase === 'fetch' ? response : body);
+    await work;
+    assert.equal(
+      transport.signal.aborted,
+      true,
+      `${action} aborts practice preparation during ${phase}`,
+    );
+    assert.deepEqual(
+      sample.state,
+      latestState,
+      'Late practice work cannot reset newer state or errors.',
+    );
+    assert.ok(
+      sample.readers.every(
+        (reader) => reader.file.name !== 'ai-practice-whale.webp',
+      ),
+    );
+  }
+{
+  const sample = createFixture();
+  await loadArrow('loadPracticeDrawing', {
+    ...sample.bindings,
+    generating: false,
+    regenerating: false,
+    File,
+    closeCamera: () => {},
+    fetch: async () => ({ ok: true, blob: async () => new Blob(['practice']) }),
+  })();
+  assert.equal(
+    sample.state.preparingImage,
+    true,
+    'Fetch completion must not hide the active image decode.',
+  );
+  sample.readers[0].complete();
+  sample.decoders[0].onload();
+  assert.equal(sample.state.practiceDrawing, true);
+  sample.bindings.load(file('personal.png'));
+  sample.readers[1].complete();
+  sample.decoders[1].onload();
+  assert.equal(
+    sample.state.practiceDrawing,
+    false,
+    'Only a successfully accepted personal drawing replaces the sample label.',
+  );
+}
+{
+  const sample = createFixture();
+  sample.bindings.load(file('ai-practice-whale.webp'), true);
+  sample.readers[0].complete();
+  const staleDecode = sample.decoders[0].onload;
+  leaveUpload(sample);
+  staleDecode();
+  assert.equal(sample.state.image, 'previous-drawing');
+  assert.notEqual(
+    sample.state.practiceDrawing,
+    true,
+    'Navigation also invalidates an already-decoding practice image.',
+  );
+}
+
 // Completion order is deliberately reversed; canceled callbacks are invoked anyway
 // to model a browser callback that was already queued before cancellation.
 const uploads = createFixture();

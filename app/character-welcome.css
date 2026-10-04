@@ -122,10 +122,10 @@
   letter-spacing: 0.12em;
 }
 .creation-journey b {
-  font-size: 13px;
+  font-size: 14px;
 }
 .creation-journey small {
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.5;
   color: #7c8471;
   word-break: keep-all;
@@ -206,7 +206,7 @@
   gap: 5px;
   position: relative;
   z-index: 2;
-  font-size: 11px;
+  font-size: 12px;
   color: #728468;
   margin-top: 10px;
 }
@@ -220,7 +220,7 @@
   margin: 15px 0 0;
 }
 .creation-sample-note span {
-  font-size: 11px;
+  font-size: 12px;
   color: #85907b;
   font-weight: 400;
 }
@@ -293,20 +293,20 @@
     right: max(0px, calc(50% - 237px));
     max-width: 155px;
     padding: 10px 13px;
-    font-size: 11px;
+    font-size: 14px;
   }
   .creation-touch {
     position: absolute;
     bottom: 54px;
     right: 3%;
-    font-size: 10px;
+    font-size: 12px;
   }
   .creation-sample-note {
     margin-top: 8px;
-    font-size: 10px;
+    font-size: 12px;
   }
   .creation-sample-note span {
-    font-size: 9px;
+    font-size: 12px;
   }
   .creation-spark-one {
     left: 16%;
@@ -330,7 +330,7 @@
     margin: 13px 0 15px;
   }
   .creation-copy > p {
-    font-size: 14px;
+    font-size: 16px;
     line-height: 1.75;
   }
   .creation-eyebrow {
@@ -347,7 +347,7 @@
   }
   .creation-copy .creation-care {
     justify-content: center;
-    font-size: 11px;
+    font-size: 12px;
     margin-top: 17px;
   }
   .creation-journey {
@@ -373,10 +373,10 @@
     width: 84%;
   }
   .creation-journey b {
-    font-size: 12px;
+    font-size: 14px;
   }
   .creation-journey small {
-    font-size: 10px;
+    font-size: 12px;
   }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -386,6 +386,233 @@
   }
   .creation-actions button {
     transition: none;
+  }
+}
+.creation-proof {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(230px, 0.8fr) minmax(0, 1.2fr);
+  align-items: center;
+  gap: 20px 36px;
+  padding: 36px 0 0;
+  border-top: 1px solid #dce5d7;
+}
+.creation-proof-copy > span {
+  color: #6b7962;
+  font-size: 14px;
+}
+.creation-proof-copy h2 {
+  font-size: clamp(24px, 2.8vw, 34px);
+  line-height: 1.4;
+  letter-spacing: -0.04em;
+  margin: 12px 0 16px;
+  font-weight: 750;
+}
+.creation-proof-copy p {
+  font-size: 16px;
+  color: #617165;
+  line-height: 1.8;
+  word-break: keep-all;
+}
+.creation-proof-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.creation-proof-pair figure {
+  margin: 0;
+  min-width: 0;
+  text-align: center;
+}
+.creation-proof-pair img {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1;
+  object-fit: contain;
+}
+.creation-proof-pair figure:first-child img {
+  border-radius: 18px;
+}
+.creation-proof-pair figcaption {
+  margin-top: 12px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: #47694f;
+}
+.creation-proof-note {
+  grid-column: 1 / -1;
+  margin: 0;
+  text-align: center;
+  font-size: 12px;
+  color: #6b7962;
+  line-height: 1.8;
+}
+.practice-drawing-invitation {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  margin: 24px auto;
+  max-width: 480px;
+}
+.practice-drawing-invitation > span {
+  font-size: 16px;
+  color: #637262;
+}
+.practice-drawing-invitation button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 12px 18px;
+  border-radius: 16px;
+  border: 1px solid #b9d1c0;
+  background: #edf5e9;
+  color: #38664e;
+  font: inherit;
+  font-size: 16px;
+  font-weight: 750;
+  cursor: pointer;
+}
+.practice-drawing-invitation button:hover {
+  background: #e0eedb;
+}
+.practice-drawing-invitation button:focus-visible {
+  outline: 3px solid #a67328;
+  outline-offset: 4px;
+}
+.practice-drawing-invitation button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+.practice-drawing-invitation small {
+  font-size: 12px;
+  line-height: 1.7;
+  color: #748273;
+}
+.character-direction .direction-heading p {
+  font-size: 14px;
+  line-height: 1.7;
+}
+.character-direction .profile-context > span {
+  font-size: 12px;
+}
+.character-direction .profile-context > button {
+  min-height: 44px;
+  font-size: 14px;
+}
+.character-direction .style-preview-grid {
+  margin-bottom: 0;
+}
+.character-direction .style-preview-grid > legend,
+.character-direction .style-preview-grid > button b {
+  font-size: 14px;
+}
+.character-direction .style-preview-grid > button small {
+  font-size: 12px;
+  line-height: 1.6;
+}
+.character-direction .style-preview-grid > button > em {
+  font-size: 12px;
+}
+.character-direction .style-preview-grid > button > img {
+  aspect-ratio: 1;
+  object-fit: contain;
+}
+.style-example-note {
+  font-size: 12px;
+  line-height: 1.7;
+  color: #7a715e;
+  margin: 12px 0 18px;
+}
+.style-swipe-hint {
+  display: none;
+}
+@media (max-width: 840px) {
+  .style-swipe-hint {
+    display: block;
+    color: #55705b;
+    font-size: 12px;
+    line-height: 1.6;
+    margin: 8px 0 0;
+  }
+}
+.character-taste-details {
+  border-top: 1px solid #dce7d6;
+  padding-top: 6px;
+}
+.character-taste-details > summary {
+  min-height: 56px;
+  padding: 12px 2px;
+  cursor: pointer;
+  color: #385f4c;
+  font-size: 16px;
+  font-weight: 750;
+}
+.character-taste-details > summary > span:first-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.character-taste-details > summary small {
+  font-size: 12px;
+  font-weight: 400;
+  color: #637262;
+}
+.character-taste-details > summary:focus-visible {
+  outline: 3px solid #a67328;
+  outline-offset: 3px;
+  border-radius: 8px;
+}
+.taste-current-summary {
+  display: block;
+  margin: 8px 0 0 20px;
+  color: #637262;
+  font-size: 12px;
+  line-height: 1.7;
+  font-weight: 400;
+  word-break: keep-all;
+}
+.taste-help {
+  font-size: 14px;
+  color: #637262;
+  line-height: 1.7;
+  margin: 0 0 18px;
+}
+.character-taste-details .direction-fields label,
+.character-taste-details .taste-pickers legend,
+.character-taste-details .color-picker legend {
+  font-size: 14px;
+}
+.character-taste-details .direction-fields input,
+.character-taste-details .direction-fields select {
+  font-size: 16px;
+  min-height: 48px;
+}
+.character-taste-details .taste-pickers button,
+.character-taste-details .color-picker button {
+  font-size: 14px;
+  min-height: 44px;
+}
+.character-taste-details .taste-pickers fieldset > div,
+.character-taste-details .color-picker > div {
+  flex-wrap: wrap;
+  overflow: visible;
+}
+@media (max-width: 900px) {
+  .creation-proof {
+    grid-template-columns: 1fr;
+    gap: 16px;
+    margin-top: 24px;
+  }
+  .creation-proof-copy {
+    text-align: center;
+  }
+  .creation-proof-pair {
+    max-width: 560px;
+    width: 100%;
+    margin: 0 auto;
   }
 }
 .character-first-actions {

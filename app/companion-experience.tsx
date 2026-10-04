@@ -421,7 +421,7 @@ export default function CompanionExperience({
             index === 0
               ? paragraph.replace(
                   '작은 친구 둘이',
-                  `나는 ${old.name.trim() || '몽글'}의 손을 잡고`,
+                  `나는 ${old.name.trim() || '몽글'} 곁에서 나란히`,
                 )
               : paragraph,
           ),
@@ -1110,6 +1110,7 @@ export default function CompanionExperience({
                 <CompanionWorld
                   ref={world}
                   mode="home"
+                  paused={Boolean(book || chat || settings || toybox)}
                   appearance={liveAppearance}
                   forest={forest}
                   onInteract={() => {}}
@@ -1634,6 +1635,7 @@ export default function CompanionExperience({
                 <CompanionWorld
                   ref={world}
                   mode="forest"
+                  paused={Boolean(book || chat || settings || toybox)}
                   appearance={liveAppearance}
                   forest={forest}
                   onInteract={handleInteraction}

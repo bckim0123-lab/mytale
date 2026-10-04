@@ -29,6 +29,7 @@ export type CompanionWorldHandle = {
 };
 type Props = {
   mode: 'home' | 'forest';
+  paused?: boolean;
   appearance: CreatureAppearance;
   forest: ForestState;
   onInteract: (id: string) => void;
@@ -163,6 +164,7 @@ export const CompanionWorld = forwardRef<CompanionWorldHandle, Props>(
           try {
             instance = mountCompanionWorld(container, {
               mode: latest.current.mode,
+              paused: latest.current.paused,
               appearance: latest.current.appearance,
               forest: latest.current.forest,
               onInteract: (id) => latest.current.onInteract(id),
@@ -198,6 +200,17 @@ export const CompanionWorld = forwardRef<CompanionWorldHandle, Props>(
     useEffect(() => {
       withWorld((world) => world.setForest(props.forest));
     }, [props.forest, withWorld]);
+    useEffect(() => {
+      let canceled = false;
+      if (props.paused)
+        queueMicrotask(() => {
+          if (!canceled) stop();
+        });
+      withWorld((world) => world.setPaused(Boolean(props.paused)));
+      return () => {
+        canceled = true;
+      };
+    }, [props.paused, stop, withWorld]);
 
     useEffect(() => {
       const visibilityChanged = () => {

@@ -708,12 +708,14 @@ export default function Home() {
   const [age, setAge] = useState<(typeof ageChoices)[number]>('7–9세');
   const [photoConsent, setPhotoConsent] = useState(false);
   const [preparingImage, setPreparingImage] = useState(false);
+  const [practiceDrawing, setPracticeDrawing] = useState(false);
   const characterInput = useRef<{
     consent: boolean;
     uploadEpoch: number;
     reading: boolean;
     reader: FileReader | null;
     decoder: HTMLImageElement | null;
+    practiceRequest?: AbortController | null;
     retryUntil: number;
   }>({
     consent: false,
@@ -860,6 +862,8 @@ export default function Home() {
   const cancelImagePreparation = (updateUi = true) => {
     const input = characterInput.current;
     input.uploadEpoch += 1;
+    input.practiceRequest?.abort();
+    input.practiceRequest = null;
     input.reading = false;
     if (input.reader) {
       input.reader.onload = null;
@@ -966,6 +970,12 @@ export default function Home() {
     }
   }, [cameraOpen, facingMode]);
   useEffect(() => {
+    if (step !== 'upload' && characterInput.current.reading) {
+      cancelImagePreparation(false);
+      queueMicrotask(() => {
+        if (!characterInput.current.reading) setPreparingImage(false);
+      });
+    }
     if (step !== 'upload' && cameraStream.current) {
       cameraRequest.current += 1;
       cameraStream.current.getTracks().forEach((track) => track.stop());
@@ -1039,7 +1049,7 @@ export default function Home() {
     },
     [],
   );
-  const load = (file?: File) => {
+  const load = (file?: File, isPractice = false) => {
     if (!file) return;
     cancelImagePreparation();
     const uploadEpoch = characterInput.current.uploadEpoch;
@@ -1124,6 +1134,7 @@ export default function Home() {
           finishPreparation();
           // Re-encoding keeps uploads light and strips camera metadata before transmission.
           setImage(canvas.toDataURL('image/jpeg', 0.88));
+          setPracticeDrawing(isPractice);
           setLocalPreview(instantPreview);
           setOriginalPaperPreview(paperPreview);
           setUseOriginalPreview(false);
@@ -1185,6 +1196,47 @@ export default function Home() {
       setFileError('그림 파일을 읽지 못했어요. 다른 파일을 골라 주세요.');
     }
   };
+  const loadPracticeDrawing = async () => {
+    if (!characterInput.current.consent || generating || regenerating) return;
+    closeCamera();
+    cancelImagePreparation();
+    const epoch = characterInput.current.uploadEpoch;
+    const controller = new AbortController();
+    characterInput.current.practiceRequest = controller;
+    characterInput.current.reading = true;
+    setPreparingImage(true);
+    setUploadError('');
+    const isCurrent = () =>
+      characterInput.current.uploadEpoch === epoch &&
+      !controller.signal.aborted &&
+      characterInput.current.consent;
+    try {
+      const response = await fetch('/practice-whale-drawing-v1.webp', {
+        signal: AbortSignal.any([
+          controller.signal,
+          AbortSignal.timeout(15_000),
+        ]),
+      });
+      if (!response.ok) throw new Error('practice drawing unavailable');
+      const blob = await response.blob();
+      if (!isCurrent()) return;
+      load(
+        new File([blob], 'ai-practice-whale.webp', { type: 'image/webp' }),
+        true,
+      );
+    } catch {
+      if (isCurrent())
+        setUploadError(
+          '연습 그림을 불러오지 못했어요. 다시 누르거나 준비한 그림을 골라 주세요.',
+        );
+    } finally {
+      if (characterInput.current.uploadEpoch === epoch) {
+        characterInput.current.practiceRequest = null;
+        characterInput.current.reading = false;
+        setPreparingImage(false);
+      }
+    }
+  };
   const closeCamera = () => {
     cameraRequest.current += 1;
     cameraStream.current?.getTracks().forEach((track) => track.stop());
@@ -1193,6 +1245,7 @@ export default function Home() {
     setCameraOpen(false);
   };
   const openCamera = async (mode: 'environment' | 'user' = facingMode) => {
+    cancelImagePreparation();
     setCameraError('');
     if (!navigator.mediaDevices?.getUserMedia) {
       cameraInput.current?.click();
@@ -1231,6 +1284,7 @@ export default function Home() {
   };
   const captureCamera = () => {
     if (!video.current?.videoWidth || !video.current.videoHeight) return;
+    cancelImagePreparation();
     const requestId = ++cameraRequest.current;
     const uploadEpoch = characterInput.current.uploadEpoch;
     const canvas = document.createElement('canvas');
@@ -2383,6 +2437,7 @@ export default function Home() {
     closeCamera();
     setChatConsent(false);
     setImage(null);
+    setPracticeDrawing(false);
     setLocalPreview(null);
     setOriginalPaperPreview(null);
     setUseOriginalPreview(false);
@@ -2856,7 +2911,14 @@ export default function Home() {
               }}
             >
               {image ? (
-                <img src={image} alt="업로드한 아이의 그림" />
+                <img
+                  src={image}
+                  alt={
+                    practiceDrawing
+                      ? 'AI가 만든 별고래 연습 그림'
+                      : '업로드한 원본 그림'
+                  }
+                />
               ) : (
                 <>
                   <span>
@@ -2877,6 +2939,34 @@ export default function Home() {
               <Camera size={19} /> 카메라 열기
             </Button>
           </div>
+          {!image && !cameraOpen && (
+            <div className="practice-drawing-invitation">
+              <span>지금 그림이 없어도 괜찮아요.</span>
+              <button
+                type="button"
+                onClick={() => void loadPracticeDrawing()}
+                disabled={preparingImage}
+              >
+                <Sparkles size={18} />{' '}
+                {preparingImage
+                  ? '그림을 불러오는 중…'
+                  : '별고래 연습 그림으로 해보기'}
+              </button>
+              <small>
+                AI로 만든 연습용 그림이에요. 불러오기만으로 AI 생성 요청이
+                시작되지는 않아요.
+              </small>
+            </div>
+          )}
+          {preparingImage && (
+            <button
+              type="button"
+              className="character-change-source"
+              onClick={() => cancelImagePreparation()}
+            >
+              불러오기 취소
+            </button>
+          )}
           {cameraError && (
             <div className="camera-error" role="alert">
               {cameraError}
@@ -2899,7 +2989,10 @@ export default function Home() {
           {image && (
             <>
               <strong className="quality">
-                <Check /> 그림을 불러왔어요. 잘리지 않았는지 확인해 주세요.
+                <Check />{' '}
+                {practiceDrawing
+                  ? 'AI 연습 그림을 불러왔어요. 원하는 모습과 취향을 골라 보세요.'
+                  : '그림을 불러왔어요. 잘리지 않았는지 확인해 주세요.'}
               </strong>
               <section className="character-direction">
                 <div className="direction-heading">
@@ -2925,7 +3018,10 @@ export default function Home() {
                     <Settings /> 프로필 수정
                   </button>
                 </div>
-                <fieldset className="style-preview-grid">
+                <fieldset
+                  className="style-preview-grid"
+                  aria-describedby="style-example-note"
+                >
                   <legend>먼저 만들 스타일 하나</legend>
                   {characterGenerationOrder.map((index) => {
                     const style = characterStyles[index];
@@ -2948,84 +3044,112 @@ export default function Home() {
                         <span>
                           <b>{style.name}</b>
                           <small>{style.detail}</small>
-                          <i>스타일 예시 · 내 그림의 결과가 아니에요</i>
                         </span>
                       </button>
                     );
                   })}
                 </fieldset>
-                <div className="direction-fields">
-                  <label>
-                    <span>꼭 살리고 싶은 부분</span>
-                    <select
-                      value={preserveFocus}
-                      onChange={(event) => setPreserveFocus(event.target.value)}
-                    >
-                      {focusChoices.map((choice) => (
-                        <option key={choice}>{choice}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    <span>내가 바라는 친구</span>
-                    <input
-                      maxLength={120}
-                      value={characterWish}
-                      onChange={(event) => setCharacterWish(event.target.value)}
-                      placeholder="예: 별 모양 귀를 가진 포근한 친구"
-                    />
-                  </label>
-                </div>
-                <div className="taste-pickers">
-                  <fieldset>
-                    <legend>친구의 분위기</legend>
-                    <div>
-                      {moodChoices.map((choice) => (
-                        <button
-                          type="button"
-                          key={choice.name}
-                          aria-pressed={characterMood === choice.name}
-                          onClick={() => setCharacterMood(choice.name)}
-                        >
-                          <i>{choice.icon}</i> {choice.name}
-                        </button>
-                      ))}
-                    </div>
-                  </fieldset>
-                  <fieldset>
-                    <legend>좋아하는 세계</legend>
-                    <div>
-                      {worldChoices.map((choice) => (
-                        <button
-                          type="button"
-                          key={choice.name}
-                          aria-pressed={favoriteWorld === choice.name}
-                          onClick={() => setFavoriteWorld(choice.name)}
-                        >
-                          <i>{choice.icon}</i> {choice.name}
-                        </button>
-                      ))}
-                    </div>
-                  </fieldset>
-                </div>
-                <fieldset className="color-picker">
-                  <legend>
-                    <Palette /> 좋아하는 색
-                  </legend>
-                  <div>
-                    {colorChoices.map((choice) => (
-                      <button
-                        type="button"
-                        key={choice.name}
-                        aria-pressed={favoriteColor === choice.value}
-                        onClick={() => setFavoriteColor(choice.value)}
+                <p className="style-swipe-hint">
+                  옆으로 넘겨 세 가지 모습을 살펴보세요.
+                </p>
+                <p className="style-example-note" id="style-example-note">
+                  스타일 예시 · 내 그림의 결과가 아니에요. 내 그림의 특징을 살려
+                  새로 만들어요.
+                </p>
+                <details className="character-taste-details">
+                  <summary>
+                    <span>
+                      <Heart size={18} /> 내 취향 더 담기 <small>선택</small>
+                    </span>
+                    <span className="taste-current-summary">
+                      {characterMood} · {favoriteWorld} ·{' '}
+                      {
+                        colorChoices.find(
+                          (choice) => choice.value === favoriteColor,
+                        )?.name
+                      }
+                    </span>
+                  </summary>
+                  <p className="taste-help">
+                    그대로 시작해도 좋아요. 바꾸고 싶은 것만 골라 주세요.
+                  </p>
+                  <div className="direction-fields">
+                    <label>
+                      <span>꼭 살리고 싶은 부분</span>
+                      <select
+                        value={preserveFocus}
+                        onChange={(event) =>
+                          setPreserveFocus(event.target.value)
+                        }
                       >
-                        <i style={{ backgroundColor: choice.color }} />
-                        {choice.name}
-                      </button>
-                    ))}
+                        {focusChoices.map((choice) => (
+                          <option key={choice}>{choice}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      <span>내가 바라는 친구</span>
+                      <input
+                        maxLength={120}
+                        value={characterWish}
+                        onChange={(event) =>
+                          setCharacterWish(event.target.value)
+                        }
+                        placeholder="예: 별 모양 귀를 가진 포근한 친구"
+                      />
+                    </label>
                   </div>
-                </fieldset>
+                  <div className="taste-pickers">
+                    <fieldset>
+                      <legend>친구의 분위기</legend>
+                      <div>
+                        {moodChoices.map((choice) => (
+                          <button
+                            type="button"
+                            key={choice.name}
+                            aria-pressed={characterMood === choice.name}
+                            onClick={() => setCharacterMood(choice.name)}
+                          >
+                            <i>{choice.icon}</i> {choice.name}
+                          </button>
+                        ))}
+                      </div>
+                    </fieldset>
+                    <fieldset>
+                      <legend>좋아하는 세계</legend>
+                      <div>
+                        {worldChoices.map((choice) => (
+                          <button
+                            type="button"
+                            key={choice.name}
+                            aria-pressed={favoriteWorld === choice.name}
+                            onClick={() => setFavoriteWorld(choice.name)}
+                          >
+                            <i>{choice.icon}</i> {choice.name}
+                          </button>
+                        ))}
+                      </div>
+                    </fieldset>
+                  </div>
+                  <fieldset className="color-picker">
+                    <legend>
+                      <Palette /> 좋아하는 색
+                    </legend>
+                    <div>
+                      {colorChoices.map((choice) => (
+                        <button
+                          type="button"
+                          key={choice.name}
+                          aria-pressed={favoriteColor === choice.value}
+                          onClick={() => setFavoriteColor(choice.value)}
+                        >
+                          <i style={{ backgroundColor: choice.color }} />
+                          {choice.name}
+                        </button>
+                      ))}
+                    </div>
+                  </fieldset>
+                </details>
               </section>
             </>
           )}
@@ -3149,7 +3273,9 @@ export default function Home() {
           )}
           <div className="transform-proof">
             <article className="source-drawing">
-              <small>아이의 원본 그림</small>
+              <small>
+                {practiceDrawing ? 'AI 연습 그림' : '아이의 원본 그림'}
+              </small>
               {image && <img src={image} alt="변환 전 원본 그림" />}
             </article>
             <span>

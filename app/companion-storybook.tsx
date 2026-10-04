@@ -660,14 +660,17 @@ function CompanionStorybookReader({
         <span>
           <BookOpen size={17} /> 우리의 동화책
         </span>
-        <div>
+        <div className="csb-tools">
           <button
             type="button"
             disabled={exporting || (!portrait.src && !portrait.unavailable)}
             onClick={() => void keepBook()}
+            aria-label={
+              exporting ? '동화책 파일을 담는 중' : '동화책 파일 저장'
+            }
           >
             <Download size={17} />
-            {exporting ? '책을 담는 중' : '동화책 파일 저장'}
+            <span>{exporting ? '담는 중…' : '파일 저장'}</span>
           </button>
           <button
             type="button"
@@ -681,33 +684,35 @@ function CompanionStorybookReader({
             }
           >
             {speaking ? <Square size={16} /> : <Volume2 size={18} />}
-            {speaking ? '그만 읽기' : '읽어 주기'}
+            <span>{speaking ? '그만 읽기' : '읽어 주기'}</span>
           </button>
           <button
             type="button"
             disabled={!portrait.src && !portrait.unavailable}
+            aria-label="책 전체 인쇄"
             onClick={() => {
               stopSpeech();
               window.print();
             }}
           >
-            <Printer size={17} />책 전체 인쇄
+            <Printer size={17} />
+            <span>전체 인쇄</span>
           </button>
-          {onClose && (
-            <button
-              type="button"
-              className="csb-close"
-              onClick={() => {
-                stopSpeech();
-                cancelBookExport();
-                onClose();
-              }}
-              aria-label="동화책 닫기"
-            >
-              <X size={20} />
-            </button>
-          )}
         </div>
+        {onClose && (
+          <button
+            type="button"
+            className="csb-close"
+            onClick={() => {
+              stopSpeech();
+              cancelBookExport();
+              onClose();
+            }}
+            aria-label="동화책 닫기"
+          >
+            <X size={20} />
+          </button>
+        )}
       </header>
       {/* oxlint-disable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex -- This labelled reading region intentionally accepts focus so keyboard readers can turn pages without returning to the controls. */}
       <section
