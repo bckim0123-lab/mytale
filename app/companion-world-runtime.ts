@@ -1,6 +1,7 @@
 import * as T from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { createCreature } from './creature-rig';
+import { moonTreeExpression } from './moon-tree-expression';
 import {
   forestOwlSlot,
   createForestVisuals,
@@ -903,6 +904,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
   }
   // The moon tree is a recognizable destination behind the playable clearing.
   const moonTree = new T.Group();
+  moonTree.name = 'MoonTree';
   moonTree.position.set(0, 0, -8.35);
   moonTree.visible = !home;
   scene.add(moonTree);
@@ -917,25 +919,82 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
     moonTree,
     [0, 1.4, 0],
   );
+  const moonBranches: T.Group[] = [];
   [-1, 1].forEach((side) => {
+    const pivot = new T.Group();
+    pivot.name = side < 0 ? 'MoonBranchLeft' : 'MoonBranchRight';
+    pivot.position.set(side * 0.05, 1.48, 0);
+    moonTree.add(pivot);
+    moonBranches.push(pivot);
     const branch = mesh(
       cylinder,
       moonBark,
-      moonTree,
-      [side * 0.55, 2.25, 0],
+      pivot,
+      [side * 0.5, 0.77, 0],
       [0.16, 1.8, 0.16],
     );
     branch.rotation.z = -side * 0.63;
     ball(moonTree, leaf, [side * 0.47, 0.05, 0.04], [0.85, 0.11, 0.58]);
   });
+  const moonCanopy: T.Mesh[] = [];
   [
     [0, 4.05, 0, 1.95, 1.42, 1.3],
     [-1.45, 3.35, 0, 1.45, 1.2, 1.14],
     [1.5, 3.4, -0.15, 1.4, 1.27, 1.2],
     [-0.58, 4.73, -0.22, 1.25, 0.83, 0.93],
   ].forEach((p, index) => {
-    ball(moonTree, moonLeaves[index % 3], p.slice(0, 3), p.slice(3));
+    const crown = ball(
+      moonTree,
+      moonLeaves[index % 3],
+      p.slice(0, 3),
+      p.slice(3),
+    );
+    moonCanopy.push(crown);
   });
+  // Shared sphere/material assets keep the face lightweight. It belongs to the
+  // moon tree's canopy, never to the child's generated character.
+  const moonFace = new T.Group();
+  moonFace.name = 'MoonTreeFace';
+  moonFace.position.set(0, -0.6, -0.1);
+  moonTree.add(moonFace);
+  const moonEyes: T.Group[] = [];
+  for (const side of [-1, 1]) {
+    const eye = new T.Group();
+    eye.name = side < 0 ? 'MoonEyeLeft' : 'MoonEyeRight';
+    eye.position.set(side * 0.4, 4.03, 1.26);
+    ball(eye, dark, [0, 0, 0], [0.105, 0.155, 0.065]);
+    ball(eye, cream, [-0.025, 0.045, 0.052], [0.027, 0.032, 0.019]);
+    moonEyes.push(eye);
+    moonFace.add(eye);
+    ball(moonFace, pink, [side * 0.66, 3.78, 1.2], [0.13, 0.055, 0.025]);
+  }
+  const moonSmile = mesh(
+    geo(new T.TorusGeometry(0.095, 0.019, 6, 14, Math.PI)),
+    dark,
+    moonFace,
+    [0, 3.85, 1.3],
+  );
+  moonSmile.rotation.z = Math.PI;
+  function poseMoonTree() {
+    // Once the final static pose was shown, changing the device preference
+    // back must not rewind the tree into the middle of its wake-up.
+    if (forest.ending && reduced.matches) moonWakeStartedAt = null;
+    const pose = moonTreeExpression(
+      forest.ending,
+      moonWakeStartedAt === null ? null : elapsed - moonWakeStartedAt,
+      reduced.matches,
+    );
+    moonEyes.forEach((eye) => {
+      eye.scale.y = 0.12 + pose.eyeOpen * 0.88;
+    });
+    moonBranches.forEach((branch, index) => {
+      const side = index === 0 ? -1 : 1;
+      branch.rotation.z = -side * pose.stretch + pose.wave;
+    });
+    // Side crowns follow the little stretch without moving the face or moon.
+    moonCanopy[1].position.x = -1.45 - pose.stretch * 1.15;
+    moonCanopy[2].position.x = 1.5 + pose.stretch * 1.15;
+  }
   for (let index = 0; index < 7; index++) {
     const angle = index * 2.3;
     ball(
@@ -949,10 +1008,10 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
     geo(new T.TorusGeometry(0.43, 0.115, 12, 36, Math.PI * 1.6)),
     moonGold,
     moonTree,
-    [0, 3.1, 1.24],
+    [0, 2.6, 1.24],
   );
   moon.rotation.z = -0.94;
-  mesh(cylinder, moonGold, moonTree, [0, 3.82, 1.24], [0.016, 0.66, 0.016]);
+  mesh(cylinder, moonGold, moonTree, [0, 3.32, 1.24], [0.016, 0.66, 0.016]);
   const treeLanterns: T.Group[] = [];
   [-1.6, -0.85, 0.86, 1.63].forEach((x, index) => {
     const lantern = new T.Group();
@@ -1526,6 +1585,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
   const bellStrikes = new Map<string, number>();
   const sproutStarts = new Map<string, number>();
   let endingStartedAt = options.forest.ending ? 0 : (null as number | null);
+  let moonWakeStartedAt: number | null = null;
   let yaw = 0;
   let targetYaw = 0;
   let orbit = 0.42;
@@ -2301,6 +2361,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
     const peacefulTime = reduced.matches ? 0 : elapsed;
     const homeEnding = !home && forest.ending === 'home';
     const skyEnding = !home && forest.ending === 'sky';
+    poseMoonTree();
     homeLights.visible = homeEnding;
     houseWindows.emissiveIntensity = reduced.matches
       ? homeEnding
@@ -2529,8 +2590,10 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
       const newDiscoveries = (next.discoveries ?? []).filter(
         (id) => !(forest.discoveries ?? []).includes(id),
       );
-      if (next.ending !== forest.ending)
+      if (next.ending !== forest.ending) {
         endingStartedAt = next.ending ? elapsed : null;
+        moonWakeStartedAt = next.ending ? elapsed : null;
+      }
       if (built) {
         bridgeStartedAt = elapsed;
         bridgePlanks.forEach((plank) => {

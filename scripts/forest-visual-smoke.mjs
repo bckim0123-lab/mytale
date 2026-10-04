@@ -27,6 +27,9 @@ try {
   const { initialForestState, transitionForest } = await server.ssrLoadModule(
     '/app/forest-story.ts',
   );
+  const { createCreature, DEFAULT_APPEARANCE } = await server.ssrLoadModule(
+    '/app/creature-rig.ts',
+  );
   const {
     isForestWalkablePoint,
     getCompanionNavigationPath,
@@ -731,6 +734,422 @@ try {
       'safe optional discoveries remain selectable',
     );
   }
+  // The actual six reused design meshes form a one-shot sky keepsake. No new
+  // draw resources, different shared colours, or endlessly recycled launches.
+  function festivalState(design = 'star') {
+    return {
+      ...initialForestState(),
+      route: design === 'heart' ? 'garden' : 'river',
+      chapter: 'festival',
+      craftDesign: design,
+      bridges: design === 'star',
+      gardenBloom: design === 'heart',
+      owlChoice: 'invite',
+      lanterns: ['lantern-berry', 'lantern-moon', 'lantern-star'],
+    };
+  }
+  function badges(scene, design) {
+    return Array.from({ length: 6 }, (_, index) => {
+      const badge = scene.root.getObjectByName(
+        `Festival${design === 'heart' ? 'Heart' : 'Star'}${index}`,
+      );
+      assert.ok(badge?.isMesh);
+      return badge;
+    });
+  }
+  function frameFor(scene, dt, time, player, reducedMotion = false) {
+    scene.update({
+      dt,
+      time,
+      player,
+      moving: false,
+      reducedMotion,
+      walkable: () => true,
+      path: () => [],
+    });
+  }
+  function inventory(scene) {
+    const nodes = [],
+      resources = new Set();
+    scene.root.traverse((node) => {
+      nodes.push(node.uuid);
+      if (!node.isMesh) return;
+      resources.add(node.geometry);
+      for (const material of Array.isArray(node.material)
+        ? node.material
+        : [node.material]) {
+        resources.add(material);
+        for (const value of Object.values(material))
+          if (value?.isTexture) resources.add(value);
+      }
+    });
+    return { nodes, resources };
+  }
+  function disposeChecked(scene) {
+    const current = inventory(scene);
+    const counts = new Map();
+    for (const resource of current.resources)
+      resource.addEventListener('dispose', () =>
+        counts.set(resource, (counts.get(resource) ?? 0) + 1),
+      );
+    scene.dispose();
+    scene.dispose();
+    frameFor(scene, 1 / 60, 9999, { x: 0, z: 0 });
+    assert.equal(scene.root.children.length, 0);
+    assert.equal(
+      counts.size,
+      current.resources.size,
+      'All ending resources, including hidden design, are disposed',
+    );
+    assert.ok(
+      [...counts.values()].every((count) => count === 1),
+      'Ending shares are disposed exactly once',
+    );
+  }
+  const positionSnapshot = (objects) =>
+    objects.map((object) => object.position.toArray());
+  const endingPoseCases = [];
+  let skyChecks = 0;
+  for (const design of ['star', 'heart'])
+    for (const fps of [30, 60]) {
+      const beforeEnding = festivalState(design);
+      const completeSky = transitionForest(beforeEnding, {
+        type: 'choose-ending',
+        choice: 'sky',
+      });
+      const completeHome = transitionForest(beforeEnding, {
+        type: 'choose-ending',
+        choice: 'home',
+      });
+      assert.equal(completeSky.chapter, 'complete');
+      const sky = createForestVisuals(beforeEnding);
+      const home = createForestVisuals(beforeEnding);
+      const selected = badges(sky, design);
+      const resting = positionSnapshot(selected);
+      const budget = inventory(sky);
+      const identities = selected.map((badge) => [
+        badge.uuid,
+        badge.geometry.uuid,
+        badge.material.uuid,
+      ]);
+      const sharedMaterials = [
+        ...new Set(selected.map((badge) => badge.material)),
+      ];
+      const colours = sharedMaterials.map((material) => [
+        material.color.getHex(),
+        material.emissive.getHex(),
+        material.emissiveIntensity,
+        material.roughness,
+        material.opacity,
+      ]);
+      const chooser = { x: 3.5, z: -3.3 };
+      sky.sync(completeSky, 90, chooser);
+      home.sync(completeHome, 90, chooser);
+      assert.deepEqual(
+        positionSnapshot(selected),
+        resting,
+        'Sky starts at the existing decorations without teleporting',
+      );
+      const previous = selected.map((badge) => badge.position.y);
+      for (let index = 1; index <= fps * 4; index++) {
+        const clock = 90 + index / fps;
+        frameFor(sky, 1 / fps, clock, chooser);
+        frameFor(home, 1 / fps, clock, chooser);
+        for (const [i, badge] of selected.entries()) {
+          assert.ok(
+            badge.position.y >= previous[i] - 1e-12,
+            'Lift never wraps down or sinks',
+          );
+          assert.ok(
+            badge.position.y - previous[i] <= 0.024,
+            'Bounded, gentle rise at real frame rates',
+          );
+          assert.ok(
+            badge.position.y <= 3.06,
+            'Symbols do not escape above the camera',
+          );
+          previous[i] = badge.position.y;
+        }
+      }
+      const settled = positionSnapshot(selected);
+      assert.deepEqual(
+        positionSnapshot(badges(home, design)),
+        resting,
+        'Home ending keeps its original festival decorations',
+      );
+      for (const [i, badge] of selected.entries()) {
+        assert.ok(
+          badge.position.y > resting[i][1] + 0.3,
+          'The selected pattern rises only for sky',
+        );
+        assert.ok(Math.abs(badge.position.x - chooser.x) <= 1.66);
+        assert.ok(
+          badge.position.z < chooser.z - 1,
+          'Settled symbols stay behind the hero',
+        );
+      }
+      for (const clock of [0, 1000, -1000, 1]) {
+        sky.sync({ ...completeSky, moves: completeSky.moves + 1 }, clock, {
+          x: -3.5,
+          z: -6.5,
+        });
+        frameFor(sky, 0.05, clock, { x: -3.5, z: -6.5 });
+        assert.deepEqual(
+          positionSnapshot(selected),
+          settled,
+          'Repeated sync/tree inspection/clock reset never relaunches or reanchors the reward',
+        );
+      }
+      frameFor(sky, 1 / fps, 94, chooser, true);
+      const reduced = selected.map((badge) => [
+        badge.position.toArray(),
+        badge.rotation.toArray(),
+        badge.scale.toArray(),
+      ]);
+      frameFor(sky, 1 / fps, 194, chooser, true);
+      assert.deepEqual(
+        selected.map((badge) => [
+          badge.position.toArray(),
+          badge.rotation.toArray(),
+          badge.scale.toArray(),
+        ]),
+        reduced,
+        'Reduced motion has a completely still readable pose',
+      );
+      frameFor(sky, 1 / fps, 195, chooser, false);
+      assert.deepEqual(
+        positionSnapshot(selected),
+        settled,
+        'Leaving reduced motion never replays the rise',
+      );
+      assert.deepEqual(
+        inventory(sky).nodes,
+        budget.nodes,
+        'Sky never adds or replaces scene objects',
+      );
+      assert.deepEqual(
+        [...inventory(sky).resources],
+        [...budget.resources],
+        'Geometry, materials and textures remain identical',
+      );
+      assert.deepEqual(
+        selected.map((badge) => [
+          badge.uuid,
+          badge.geometry.uuid,
+          badge.material.uuid,
+        ]),
+        identities,
+      );
+      assert.deepEqual(
+        sharedMaterials.map((material) => [
+          material.color.getHex(),
+          material.emissive.getHex(),
+          material.emissiveIntensity,
+          material.roughness,
+          material.opacity,
+        ]),
+        colours,
+        'Shared flower/bridge colours and emission are untouched',
+      );
+      sky.sync(initialForestState(), 200, { x: 0, z: 3.3 });
+      assert.equal(
+        sky.root.getObjectByName('StarCraftDecorations').visible,
+        false,
+      );
+      assert.equal(
+        sky.root.getObjectByName('HeartCraftDecorations').visible,
+        false,
+      );
+      assert.deepEqual(
+        positionSnapshot(selected),
+        resting,
+        'A new adventure restores the original positions',
+      );
+      sky.sync(beforeEnding, 201, chooser);
+      sky.sync(completeSky, 202, chooser);
+      frameFor(sky, 1 / fps, 202 + 1 / fps, chooser);
+      assert.ok(
+        selected[0].position.y > resting[0][1] &&
+          selected[0].position.y < settled[0][1],
+        'A genuinely new adventure may launch once again',
+      );
+      skyChecks++;
+      endingPoseCases.push({ design, beforeEnding, completeSky });
+      disposeChecked(sky);
+      disposeChecked(home);
+    }
+  for (const { design, beforeEnding, completeSky } of endingPoseCases.slice(
+    0,
+    1,
+  )) {
+    for (const badDt of [0, -1, Number.NaN, Infinity, -Infinity]) {
+      const sky = createForestVisuals(beforeEnding);
+      sky.sync(completeSky, 0, { x: 0, z: -4.5 });
+      const selected = badges(sky, design);
+      const resting = positionSnapshot(selected);
+      frameFor(sky, badDt, 1000, { x: 0, z: -4.5 });
+      assert.deepEqual(
+        positionSnapshot(selected),
+        resting,
+        'Invalid/zero dt cannot advance the rise or poison positions',
+      );
+      assert.ok(
+        selected.every((badge) =>
+          badge.position.toArray().every(Number.isFinite),
+        ),
+      );
+      disposeChecked(sky);
+    }
+    const clamped = createForestVisuals(beforeEnding);
+    const normal = createForestVisuals(beforeEnding);
+    for (const item of [clamped, normal])
+      item.sync(completeSky, 0, { x: 0, z: -4.5 });
+    frameFor(clamped, 1000, 1, { x: 0, z: -4.5 });
+    frameFor(normal, 0.05, 1, { x: 0, z: -4.5 });
+    assert.deepEqual(
+      positionSnapshot(badges(clamped, design)),
+      positionSnapshot(badges(normal, design)),
+      'Background catch-up dt is clamped',
+    );
+    disposeChecked(clamped);
+    disposeChecked(normal);
+  }
+  // Restore skips the animation and uses the runtime's actual (0, 3.3) spawn.
+  for (const design of ['star', 'heart']) {
+    const beforeEnding = festivalState(design);
+    const completeSky = transitionForest(beforeEnding, {
+      type: 'choose-ending',
+      choice: 'sky',
+    });
+    const restored = createForestVisuals(completeSky);
+    const reduced = createForestVisuals(beforeEnding);
+    reduced.sync(completeSky, 0, { x: 0, z: 3.3 });
+    frameFor(reduced, 0, 0, { x: 0, z: 3.3 }, true);
+    assert.deepEqual(
+      positionSnapshot(badges(restored, design)),
+      positionSnapshot(badges(reduced, design)),
+      'Restore and reduced-motion both start settled, never replay',
+    );
+    for (const item of [restored, reduced]) disposeChecked(item);
+  }
+
+  // Project actual symbol geometry through the runtime's actual framing, not
+  // a widened test camera. Choice at any lamp/tree and restored spawn is safe.
+  const portrait = createCreature(DEFAULT_APPEARANCE);
+  function projectedBox(object, camera) {
+    object.updateWorldMatrix(true, true);
+    const box = new Box3().setFromObject(object);
+    const corners = [];
+    const depth = [];
+    for (const x of [box.min.x, box.max.x])
+      for (const y of [box.min.y, box.max.y])
+        for (const z of [box.min.z, box.max.z]) {
+          const world = new Vector3(x, y, z);
+          depth.push(-world.clone().applyMatrix4(camera.matrixWorldInverse).z);
+          corners.push(world.project(camera));
+        }
+    return {
+      left: Math.min(...corners.map((p) => p.x)),
+      right: Math.max(...corners.map((p) => p.x)),
+      bottom: Math.min(...corners.map((p) => p.y)),
+      top: Math.max(...corners.map((p) => p.y)),
+      nearDepth: Math.min(...depth),
+      farDepth: Math.max(...depth),
+    };
+  }
+  for (const design of ['star', 'heart'])
+    for (const player of [
+      { x: -3.5, z: -3.3 },
+      { x: 3.5, z: -3.3 },
+      { x: 0, z: -6.5 },
+      { x: 0, z: -4.5 },
+      { x: 0, z: 3.3 },
+      { x: 8, z: 4.8 },
+      { x: -8, z: -8 },
+    ]) {
+      const state = festivalState(design);
+      const complete = transitionForest(state, {
+        type: 'choose-ending',
+        choice: 'sky',
+      });
+      const sky = createForestVisuals(state);
+      sky.sync(complete, 0, player);
+      portrait.root.position.set(player.x, 0, player.z);
+      let previousFrame = 0;
+      const originalOverlap = new Map();
+      for (const sample of [0, 40, 80, 120, 160, 204, 240]) {
+        for (let index = previousFrame; index < sample; index++)
+          frameFor(sky, 1 / 60, index / 60, player);
+        previousFrame = sample;
+        for (const [width, height] of [
+          [320, 410],
+          [390, 490],
+          [768, 600],
+          [1280, 720],
+        ]) {
+          const framing = forestCameraFrame(
+            player,
+            complete,
+            width,
+            sky.cameraFocus(sample / 60),
+          );
+          const camera = new PerspectiveCamera(38, width / height, 0.1, 100);
+          camera.position.set(
+            framing.x,
+            framing.height,
+            framing.z + framing.distance,
+          );
+          camera.lookAt(framing.x, framing.y, framing.z);
+          camera.updateMatrixWorld();
+          const face = projectedBox(
+            portrait.root.getObjectByName('CloudHead'),
+            camera,
+          );
+          for (const badge of badges(sky, design)) {
+            const box = projectedBox(badge, camera);
+            if (sample >= 204)
+              assert.ok(
+                box.left > -0.95 &&
+                  box.right < 0.95 &&
+                  box.bottom > -0.95 &&
+                  box.top < 0.95,
+                `Readable sky design remains inside ${width}px camera at ${JSON.stringify(player)}`,
+              );
+            const clearOfFace =
+              box.bottom > face.top ||
+              box.top < face.bottom ||
+              box.right < face.left ||
+              box.left > face.right;
+            const overlap =
+              Math.max(
+                0,
+                Math.min(box.right, face.right) - Math.max(box.left, face.left),
+              ) *
+              Math.max(
+                0,
+                Math.min(box.top, face.top) - Math.max(box.bottom, face.bottom),
+              );
+            const key = `${width}:${height}:${badge.name}`;
+            if (sample === 0) originalOverlap.set(key, overlap);
+            assert.ok(
+              clearOfFace ||
+                box.nearDepth > face.farDepth ||
+                overlap <= originalOverlap.get(key) + 1e-10,
+              `Rise never adds face overlap beyond the unchanged original decorations (${sample}, ${JSON.stringify(player)}, ${badge.name})`,
+            );
+            if (sample >= 204)
+              assert.ok(
+                clearOfFace,
+                'Final readable arch also clears the projected face',
+              );
+            skyChecks++;
+          }
+        }
+      }
+      disposeChecked(sky);
+    }
+  portrait.dispose();
+
   const camera = new PerspectiveCamera(40, 390 / 490, 0.1, 100);
   camera.position.set(0, 2, 8);
   camera.lookAt(0, 1, 0);
@@ -798,7 +1217,7 @@ try {
     'shared resources disposed once',
   );
   console.log(
-    'Forest visual smoke passed: pointer ownership/slow-drag safety, route NPCs, mesh budget, batched detail, both-bank navigation, design marks, event/reset lifecycle, camera/puppet framing and resource disposal.',
+    `Forest visual smoke passed: pointer ownership/slow-drag safety, route NPCs, unchanged mesh budget, ${skyChecks} sky keepsake lifecycle/framing checks, both-bank navigation, camera/puppet framing and resource disposal.`,
   );
 } finally {
   await server.close();

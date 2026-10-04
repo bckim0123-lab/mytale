@@ -9,6 +9,32 @@
   border-radius: 12px;
   grid-column: 1/-1;
 }
+
+/* A finished forest is an illustration to enjoy. On narrow screens, keep its
+   title above the scene so the final tree and floating marks stay uncovered. */
+@media (max-width: 999px) {
+  .cw-forest-immersive.cw-chapter-complete .cw-game-stage {
+    height: auto;
+    min-height: 0;
+    max-height: none;
+  }
+  .cw-forest-immersive.cw-chapter-complete .cw-game-hud {
+    position: relative;
+    inset: auto;
+    padding: 18px 20px 16px;
+    background: #f5f5e7;
+  }
+  .cw-forest-immersive.cw-chapter-complete .cw-game-stage .cw-world {
+    position: relative;
+    inset: auto;
+    height: clamp(420px, 62svh, 650px);
+  }
+}
+@media (max-width: 760px) {
+  .cw-forest-immersive.cw-chapter-complete .cw-game-stage .cw-world {
+    height: clamp(410px, 58svh, 540px);
+  }
+}
 .cw-progress progress {
   appearance: none;
   width: 100%;

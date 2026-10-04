@@ -278,6 +278,7 @@ try {
     chosenImage: 'local-preview',
     persona,
     setCompanionArtwork: (value) => saves.push(value),
+    setArrivalDismissed: () => {},
     setStep: (value) => steps.push(value),
   };
   loadArrow('keepCharacterAndPlay', keepBindings)();

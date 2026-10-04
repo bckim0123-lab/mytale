@@ -120,6 +120,12 @@ function BridgeBoard({
           <path d="M0-35v35h-22z" fill="#fbefcc" />
           <path d="M3-24v24h15z" fill="#e9cd99" />
         </g>
+        {state.design && (
+          <>
+            <CraftMarker design={state.design} x={48} y={62} />
+            <CraftMarker design={state.design} x={512} y={62} />
+          </>
+        )}
         {view.solved && (
           <g className="ftb-success-sparkles">
             <Sparkle x={177} y={105} />
@@ -347,8 +353,16 @@ function GardenBoard({
                 key={index}
                 aria-hidden="true"
               >
-                <span>{index === 0 ? '🌿' : '🪨'}</span>
-                <i>✧</i>
+                {index === 0 && state.design ? (
+                  <svg className="ftb-garden-mark" viewBox="0 0 80 100">
+                    <CraftMarker design={state.design} />
+                  </svg>
+                ) : (
+                  <>
+                    <span>{index === 0 ? '🌿' : '🪨'}</span>
+                    <i>✧</i>
+                  </>
+                )}
               </div>
             );
           const flowing = view.connected.includes(index);
@@ -438,9 +452,9 @@ function GardenBoard({
   );
 }
 
-function DesignIcon({ design }: { design: ForestToyDesign }) {
+function DesignShape({ design }: { design: ForestToyDesign }) {
   return (
-    <svg viewBox="0 0 70 70" aria-hidden="true">
+    <>
       {design === 'star' ? (
         <>
           <path
@@ -474,7 +488,53 @@ function DesignIcon({ design }: { design: ForestToyDesign }) {
           />
         </>
       )}
+    </>
+  );
+}
+
+function DesignIcon({ design }: { design: ForestToyDesign }) {
+  return (
+    <svg viewBox="0 0 70 70" aria-hidden="true">
+      <DesignShape design={design} />
     </svg>
+  );
+}
+
+function CraftMarker({
+  design,
+  x = 0,
+  y = 0,
+}: {
+  design: ForestToyDesign;
+  x?: number;
+  y?: number;
+}) {
+  return (
+    <g
+      className="ftb-craft-preview"
+      data-craft-design={design}
+      transform={`translate(${x} ${y})`}
+    >
+      <path
+        d="M35 57h10v40H35z"
+        fill="#bb8a58"
+        stroke="#956b44"
+        strokeWidth="2"
+      />
+      <rect
+        x="2"
+        y="3"
+        width="76"
+        height="69"
+        rx="12"
+        fill="#fff4d5"
+        stroke="#a97c4d"
+        strokeWidth="3"
+      />
+      <g transform="translate(5 2)">
+        <DesignShape design={design} />
+      </g>
+    </g>
   );
 }
 

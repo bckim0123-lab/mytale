@@ -379,6 +379,7 @@ export function createForestVisuals(initial: ForestState) {
         [Math.cos(a) * 2.0, 2.1 + (i % 2) * 0.35, -7.55 + Math.sin(a) * 0.25],
         [0.15, 0.15, 0.15],
       );
+      badge.name = `Festival${design === 'star' ? 'Star' : 'Heart'}${i}`;
       badge.userData.phase = i;
       festivalSymbols.push(badge);
     }
@@ -440,6 +441,46 @@ export function createForestVisuals(initial: ForestState) {
   rabbit.root.userData.species = 'rabbit';
   let state = initial;
   let route = initial.route;
+  // A restored ending is already a keepsake, not a reason to launch it again.
+  // The runtime restores the hero at (0, 3.3); new endings instead anchor once
+  // near the actual chooser. Later syncs/clock changes never restart the rise.
+  let skyProgress =
+    initial.chapter === 'complete' && initial.ending === 'sky' ? 1 : 0;
+  let skyAnchorX = 0;
+  let skyAnchorZ = 3.3;
+  const skyOffsets = [1.65, 1, -1, -1.65, -0.42, 0.42];
+  const skyHeights = [2.82, 2.97, 2.97, 2.82, 3.05, 3.05];
+  function poseFestivalSymbols(time: number, reducedMotion: boolean) {
+    const sky = state.chapter === 'complete' && state.ending === 'sky';
+    const rise = sky ? skyProgress * skyProgress * (3 - 2 * skyProgress) : 0;
+    const clock = Number.isFinite(time) ? time : 0;
+    for (const symbol of festivalSymbols) {
+      const index = Number(symbol.userData.phase);
+      const angle = (Math.PI * 2 * index) / 6;
+      // Both hidden/visible craft groups retain the same six original meshes.
+      // The final arch is behind the hero, not a new layer over their face.
+      symbol.position.set(
+        T.MathUtils.lerp(
+          Math.cos(angle) * 2,
+          skyAnchorX + skyOffsets[index],
+          rise,
+        ),
+        T.MathUtils.lerp(2.1 + (index % 2) * 0.35, skyHeights[index], rise),
+        T.MathUtils.lerp(
+          -7.55 + Math.sin(angle) * 0.25,
+          skyAnchorZ - 1.6,
+          rise,
+        ),
+      );
+      symbol.rotation.z = reducedMotion
+        ? 0
+        : Math.sin(clock * 1.2 + index) * (sky ? 0.08 : 0.1);
+      // A soft size glint uses the existing lit pink/gold surfaces. Their
+      // shared materials also colour flowers/bridges and must stay untouched.
+      const glint = reducedMotion ? 0 : Math.sin(clock * 1.7 + index) * 0.025;
+      symbol.scale.setScalar(0.15 * (1 + rise * (0.1 + glint)));
+    }
+  }
   let npcAction: CreatureAction = 'wave',
     npcActionUntil = 2,
     actionId = 1;
@@ -476,6 +517,23 @@ export function createForestVisuals(initial: ForestState) {
     actionId++;
   }
   function sync(next: ForestState, time: number, player: Point) {
+    if (next.chapter !== 'complete' || next.ending !== 'sky') {
+      skyProgress = 0;
+      skyAnchorX = 0;
+      skyAnchorZ = 3.3;
+    } else if (state.chapter !== 'complete' || state.ending !== 'sky') {
+      skyProgress = 0;
+      skyAnchorX = T.MathUtils.clamp(
+        Number.isFinite(player.x) ? player.x : 0,
+        -6.25,
+        6.25,
+      );
+      skyAnchorZ = T.MathUtils.clamp(
+        Number.isFinite(player.z) ? player.z : 3.3,
+        -8,
+        4.8,
+      );
+    }
     const changedRoute = next.route !== route;
     if (changedRoute && next.route === 'undecided') {
       eventAt = -100;
@@ -519,6 +577,7 @@ export function createForestVisuals(initial: ForestState) {
     for (const symbol of festivalSymbols)
       symbol.visible =
         next.chapter === 'festival' || next.chapter === 'complete';
+    poseFestivalSymbols(time, false);
     otter.root.visible = next.route === 'river';
     rabbit.root.visible = next.route === 'garden';
   }
@@ -531,7 +590,11 @@ export function createForestVisuals(initial: ForestState) {
   function update(frame: Frame) {
     if (disposed) return;
     const { player, time, reducedMotion } = frame;
-    const dt = T.MathUtils.clamp(frame.dt, 0, 0.05);
+    const dt = Number.isFinite(frame.dt)
+      ? T.MathUtils.clamp(frame.dt, 0, 0.05)
+      : 0;
+    if (state.chapter === 'complete' && state.ending === 'sky')
+      skyProgress = reducedMotion ? 1 : Math.min(1, skyProgress + dt / 3.4);
     const rig = activeRig();
     if (state.route !== 'undecided') {
       const targetSafe =
@@ -627,12 +690,7 @@ export function createForestVisuals(initial: ForestState) {
         ? 0.1
         : Math.sin(Math.min(1, age / 2.8) * Math.PI) * 0.32;
     }
-    for (const symbol of festivalSymbols)
-      if (symbol.visible) {
-        symbol.rotation.z = reducedMotion
-          ? 0
-          : Math.sin(time * 1.2 + Number(symbol.userData.phase)) * 0.1;
-      }
+    poseFestivalSymbols(time, reducedMotion);
   }
   return {
     root,

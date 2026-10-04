@@ -2,6 +2,7 @@
 /* eslint-disable next/no-img-element */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import './character-result-recovery.css';
 import CharacterWelcome from './character-welcome';
 import { characterRecoveryMode } from './character-recovery';
 import { withCharacterDeadline } from './character-request-deadline';
@@ -685,7 +686,7 @@ export default function Home() {
   const [generationFailureDismissed, setGenerationFailureDismissed] =
     useState(false);
   const [generationReturnStep, setGenerationReturnStep] = useState<
-    'chat' | 'adventure' | 'book' | null
+    'chat' | 'adventure' | 'book' | 'companion' | null
   >(null);
   const [uploadError, setUploadError] = useState('');
   const [favoriteColor, setFavoriteColor] = useState(colorChoices[0].value);
@@ -714,6 +715,12 @@ export default function Home() {
   const [age, setAge] = useState<(typeof ageChoices)[number]>('7–9세');
   const [photoConsent, setPhotoConsent] = useState(false);
   const [preparingImage, setPreparingImage] = useState(false);
+  const [drawingReplacementOpen, setDrawingReplacementOpen] = useState(false);
+  const drawingReplacement = useRef<{
+    epoch: number;
+    apply: () => void;
+  } | null>(null);
+  const drawingReplacementDialog = useRef<HTMLDialogElement>(null);
   const [practiceDrawing, setPracticeDrawing] = useState(false);
   const characterInput = useRef<{
     consent: boolean;
@@ -876,6 +883,7 @@ export default function Home() {
   const cancelImagePreparation = (updateUi = true) => {
     const input = characterInput.current;
     input.uploadEpoch += 1;
+    drawingReplacement.current = null;
     input.practiceRequest?.abort();
     input.practiceRequest = null;
     input.reading = false;
@@ -891,8 +899,51 @@ export default function Home() {
       input.decoder.src = '';
       input.decoder = null;
     }
-    if (updateUi) setPreparingImage(false);
+    if (updateUi) {
+      setPreparingImage(false);
+      setDrawingReplacementOpen(false);
+    }
   };
+  const offerDrawingReplacement = (epoch: number, apply: () => void) => {
+    if (
+      epoch !== characterInput.current.uploadEpoch ||
+      !characterInput.current.consent
+    )
+      return;
+    if (!generated.some(Boolean)) {
+      apply();
+      return;
+    }
+    drawingReplacement.current = { epoch, apply };
+    setDrawingReplacementOpen(true);
+  };
+  const confirmDrawingReplacement = () => {
+    const pending = drawingReplacement.current;
+    drawingReplacement.current = null;
+    setDrawingReplacementOpen(false);
+    if (
+      !pending ||
+      pending.epoch !== characterInput.current.uploadEpoch ||
+      !characterInput.current.consent
+    )
+      return;
+    pending.apply();
+  };
+  useEffect(() => {
+    if (!drawingReplacementOpen) return;
+    const dialog = drawingReplacementDialog.current;
+    if (!dialog) return;
+    const previous = document.activeElement;
+    if (!dialog.open) dialog.showModal();
+    dialog
+      .querySelector<HTMLButtonElement>('[data-replacement-cancel]')
+      ?.focus();
+    return () => {
+      if (dialog.open) dialog.close();
+      if (previous instanceof HTMLElement && previous.isConnected)
+        previous.focus({ preventScroll: true });
+    };
+  }, [drawingReplacementOpen]);
   const updatePhotoConsent = (agreed: boolean) => {
     characterInput.current.consent = agreed;
     setPhotoConsent(agreed);
@@ -1002,10 +1053,16 @@ export default function Home() {
     }
   }, [cameraOpen, facingMode]);
   useEffect(() => {
-    if (step !== 'upload' && characterInput.current.reading) {
+    if (
+      step !== 'upload' &&
+      (characterInput.current.reading || drawingReplacement.current)
+    ) {
       cancelImagePreparation(false);
       queueMicrotask(() => {
-        if (!characterInput.current.reading) setPreparingImage(false);
+        if (!characterInput.current.reading) {
+          setPreparingImage(false);
+          setDrawingReplacementOpen(false);
+        }
       });
     }
     if (step !== 'upload' && cameraStream.current) {
@@ -1172,53 +1229,59 @@ export default function Home() {
             paperPreview = null;
           }
           if (!isLatestUpload()) return;
+          // Finish validation/re-encoding before asking to replace any approved
+          // result. A broken or unsupported file never opens the confirmation.
+          const preparedImage = canvas.toDataURL('image/jpeg', 0.88);
           finishPreparation();
-          // Re-encoding keeps uploads light and strips camera metadata before transmission.
-          setImage(canvas.toDataURL('image/jpeg', 0.88));
-          setPracticeDrawing(isPractice);
-          setLocalPreview(instantPreview);
-          setOriginalPaperPreview(paperPreview);
-          setUseOriginalPreview(false);
-          setPlayImage(null);
-          setPlayImageSource(null);
-          setArrivalDismissed(false);
-          setGenerated([]);
-          setGeneratedQuality([]);
-          setGenerationStatuses([]);
-          setGenerationNote('');
-          setGenerationFailed(false);
-          setGenerationRetryable(false);
-          setGenerationRetryRemainingSeconds(
-            getCharacterRetryRemainingSeconds(),
-          );
-          setGenerationFailureDismissed(false);
-          setGenerationReturnStep(null);
-          setPick(preferredStyle);
-          setScene(0);
-          setTheme(0);
-          setPage(0);
-          setAdventureTrail([]);
-          setChoiceResult(null);
-          setAdventurePhase('entering');
-          setStorybook(null);
-          setStorybookImage(null);
-          setStorybookTheme(0);
-          setBookDirection('next');
-          setReadingAloud(false);
-          setAdventureSpeaking(false);
-          setSavedStorybooks([]);
-          setPersona(defaultPersona);
-          setMessages([
-            {
-              role: 'assistant',
-              content:
-                '안녕! 나는 네 그림에서 태어날 AI 이야기 친구야. 오늘 어떤 상상을 함께 만들어 볼까?',
-            },
-          ]);
-          setChatInput('');
-          setChatError('');
-          setChatConsent(false);
-          setUploadError('');
+          offerDrawingReplacement(uploadEpoch, () => {
+            if (!isLatestUpload() || !characterInput.current.consent) return;
+            // Re-encoding keeps uploads light and strips camera metadata before transmission.
+            setImage(preparedImage);
+            setPracticeDrawing(isPractice);
+            setLocalPreview(instantPreview);
+            setOriginalPaperPreview(paperPreview);
+            setUseOriginalPreview(false);
+            setPlayImage(null);
+            setPlayImageSource(null);
+            setArrivalDismissed(false);
+            setGenerated([]);
+            setGeneratedQuality([]);
+            setGenerationStatuses([]);
+            setGenerationNote('');
+            setGenerationFailed(false);
+            setGenerationRetryable(false);
+            setGenerationRetryRemainingSeconds(
+              getCharacterRetryRemainingSeconds(),
+            );
+            setGenerationFailureDismissed(false);
+            setGenerationReturnStep(null);
+            setPick(preferredStyle);
+            setScene(0);
+            setTheme(0);
+            setPage(0);
+            setAdventureTrail([]);
+            setChoiceResult(null);
+            setAdventurePhase('entering');
+            setStorybook(null);
+            setStorybookImage(null);
+            setStorybookTheme(0);
+            setBookDirection('next');
+            setReadingAloud(false);
+            setAdventureSpeaking(false);
+            setSavedStorybooks([]);
+            setPersona(defaultPersona);
+            setMessages([
+              {
+                role: 'assistant',
+                content:
+                  '안녕! 나는 네 그림에서 태어날 AI 이야기 친구야. 오늘 어떤 상상을 함께 만들어 볼까?',
+              },
+            ]);
+            setChatInput('');
+            setChatError('');
+            setChatConsent(false);
+            setUploadError('');
+          });
         } catch {
           setFileError(
             '그림을 준비하지 못했어요. JPG, PNG, WEBP로 다시 저장해 주세요.',
@@ -1767,6 +1830,7 @@ export default function Home() {
   const keepCharacterAndPlay = () => {
     if (!selectedHasAiCharacter || !chosenImage) return;
     setCompanionArtwork({ png: chosenImage, name: persona.name, persona });
+    setArrivalDismissed(true);
     setStep('companion');
   };
   const stopCharacterGeneration = () => {
@@ -1793,9 +1857,21 @@ export default function Home() {
     );
   };
   const openGenerationView = () => {
-    if (step === 'chat' || step === 'adventure' || step === 'book')
+    if (
+      step === 'chat' ||
+      step === 'adventure' ||
+      step === 'book' ||
+      step === 'companion'
+    )
       setGenerationReturnStep(step);
     setStep('character');
+  };
+  const openCompletedCharacter = () => {
+    const ready = generated[pick] ? pick : generated.findIndex(Boolean);
+    if (ready < 0) return;
+    setPick(ready);
+    setArrivalDismissed(true);
+    openGenerationView();
   };
   const returnToPreviousPlay = () => {
     if (!generationReturnStep) return;
@@ -2558,28 +2634,126 @@ export default function Home() {
 
   if (step === 'companion')
     return (
-      <CompanionExperience
-        onBack={() =>
-          setStep(generated.some(Boolean) ? 'character' : 'welcome')
-        }
-        recoveryImage={selectedHasAiCharacter ? chosenImage : null}
-        onExit={() => setStep('welcome')}
-        onDrawing={() =>
-          generationBusy
-            ? openGenerationView()
-            : setStep(guardianVerified && photoConsent ? 'upload' : 'guardian')
-        }
-        sourceImage={image}
-        age={age}
-        incomingArtwork={companionArtwork}
-        onArtworkAccepted={acknowledgeCompanionArtwork}
-      />
+      <>
+        {(generationBusy ||
+          (generationFailed && !generationFailureDismissed) ||
+          (generated.some(Boolean) && !arrivalDismissed)) && (
+          <aside
+            className="companion-generation-notice"
+            aria-label="그림친구 만들기 소식"
+          >
+            <div>
+              <output>
+                {generationBusy
+                  ? generationReviewOnly
+                    ? '만든 그림의 검사를 이어가고 있어요'
+                    : 'AI 그림친구를 만들고 있어요'
+                  : generationFailed
+                    ? '이번 만들기를 끝내지 못했어요'
+                    : '새 그림친구가 완성됐어요'}
+              </output>
+              <small>
+                {generationBusy
+                  ? visibleGenerationPhaseLabel
+                  : generationFailed
+                    ? '이유와 다시 할 수 있는 방법을 확인해 주세요. 지금 모험은 계속할 수 있어요.'
+                    : '만든 모습을 확인하고 보관할 수 있어요. 지금 친구는 바꾸지 않았어요.'}
+              </small>
+            </div>
+            <button
+              type="button"
+              onClick={
+                generationBusy || generationFailed
+                  ? openGenerationView
+                  : openCompletedCharacter
+              }
+            >
+              {generationBusy
+                ? '진행 보기'
+                : generationFailed
+                  ? '문제 확인'
+                  : '완성 친구 보기'}
+            </button>
+            {!generationBusy && (
+              <button
+                type="button"
+                className="notice-later"
+                onClick={() => {
+                  setArrivalDismissed(true);
+                  setGenerationFailureDismissed(true);
+                }}
+              >
+                나중에
+              </button>
+            )}
+          </aside>
+        )}
+        <CompanionExperience
+          onBack={() =>
+            setStep(generated.some(Boolean) ? 'character' : 'welcome')
+          }
+          recoveryImage={selectedHasAiCharacter ? chosenImage : null}
+          onExit={() => setStep('welcome')}
+          onDrawing={() =>
+            generationBusy
+              ? openGenerationView()
+              : setStep(
+                  guardianVerified && photoConsent ? 'upload' : 'guardian',
+                )
+          }
+          sourceImage={image}
+          age={age}
+          incomingArtwork={companionArtwork}
+          onArtworkAccepted={acknowledgeCompanionArtwork}
+        />
+      </>
     );
 
   return (
     <main
       className={`app ${generationFloatsOverPlay ? 'has-generation-floating' : ''}`}
     >
+      <dialog
+        ref={drawingReplacementDialog}
+        className="drawing-replacement-dialog"
+        aria-labelledby="drawing-replacement-title"
+        aria-describedby="drawing-replacement-description"
+        onCancel={(event) => {
+          event.preventDefault();
+          cancelImagePreparation();
+        }}
+      >
+        <h2 id="drawing-replacement-title">완성한 친구를 먼저 챙길까요?</h2>
+        <p id="drawing-replacement-description">
+          새 그림을 고르면 이 화면의 완성 결과가 바뀌어요. 아직 보관하지 않은
+          친구는 사라져요. 이미 기기에 보관한 친구는 그대로 남아요.
+        </p>
+        <div>
+          <button
+            type="button"
+            onClick={() => {
+              cancelImagePreparation();
+              openCompletedCharacter();
+            }}
+          >
+            완성 친구 보러 가기
+          </button>
+          <button
+            type="button"
+            data-replacement-cancel
+            onClick={() => cancelImagePreparation()}
+          >
+            취소 · 지금 그림 유지
+          </button>
+          <button
+            type="button"
+            className="replace-drawing"
+            onClick={confirmDrawingReplacement}
+          >
+            보관 없이 새 그림 사용
+          </button>
+        </div>
+      </dialog>
       <header>
         <button className="logo-button" onClick={() => setStep('welcome')}>
           <Logo />
@@ -3268,12 +3442,14 @@ export default function Home() {
               className="return-to-play"
               onClick={returnToPreviousPlay}
             >
-              <ArrowLeft /> 하던{' '}
+              <ArrowLeft /> {generationReturnStep !== 'companion' && '하던 '}
               {generationReturnStep === 'chat'
                 ? '대화로'
                 : generationReturnStep === 'adventure'
                   ? '모험으로'
-                  : '동화책으로'}{' '}
+                  : generationReturnStep === 'companion'
+                    ? '친구의 집으로'
+                    : '동화책으로'}{' '}
               돌아가기
             </button>
           )}

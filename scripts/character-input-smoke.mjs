@@ -155,6 +155,10 @@ function createFixture() {
   const bindings = {
     ...setters,
     characterInput,
+    drawingReplacement: { current: null },
+    // These input tests cover decode/cancellation. The recovery smoke exercises
+    // the actual confirmation; here the user explicitly accepts a valid source.
+    offerDrawingReplacement: (_epoch, apply) => apply(),
     generationRequest: { current: new AbortController() },
     generationRun: { current: 1 },
     chatRequest: { current: new AbortController() },
@@ -241,9 +245,8 @@ function leaveUpload(fixture) {
     if (
       ts.isCallExpression(node) &&
       node.expression.getText(ast) === 'useEffect' &&
-      node.arguments[0]
-        ?.getText(ast)
-        .includes("step !== 'upload' && characterInput.current.reading")
+      node.arguments[0]?.getText(ast).includes("step !== 'upload'") &&
+      node.arguments[0]?.getText(ast).includes('cancelImagePreparation(false)')
     )
       callback = node.arguments[0];
     ts.forEachChild(node, visit);
