@@ -73,6 +73,42 @@ export function createWorldPointerGesture() {
   };
 }
 
+type HomeGazePoint = { x: number; y: number; width: number; height: number };
+
+/** A small local pose cue, not a camera turn or a new facial rig. Screen-down
+ * maps to positive head pitch. Side/rear views fade out instead of reversing. */
+export function getHomeGazeTarget(
+  point: HomeGazePoint | null,
+  relativeYaw: number,
+  options: { drawing: boolean; reducedMotion: boolean },
+) {
+  const neutral = { lookX: 0, lookY: 0 };
+  if (
+    !point ||
+    options.reducedMotion ||
+    ![point.x, point.y, point.width, point.height, relativeYaw].every(
+      Number.isFinite,
+    ) ||
+    point.width <= 0 ||
+    point.height <= 0 ||
+    point.x < 0 ||
+    point.x > point.width ||
+    point.y < 0 ||
+    point.y > point.height
+  )
+    return neutral;
+  const facing = Math.max(0, Math.cos(relativeYaw));
+  return {
+    lookX:
+      T.MathUtils.clamp((point.x / point.width) * 2 - 1, -1, 1) * 0.45 * facing,
+    lookY: options.drawing
+      ? 0
+      : T.MathUtils.clamp((point.y / point.height) * 2 - 1, -1, 1) *
+        0.3 *
+        facing,
+  };
+}
+
 export function forestPlushTargetYaw(
   moving: boolean,
   movement: ForestPoint,
@@ -1493,6 +1529,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
   let yaw = 0;
   let targetYaw = 0;
   let orbit = 0.42;
+  let homeGazePoint: HomeGazePoint | null = null;
   const keys = new Set<string>();
   const joystick = new T.Vector2();
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -1672,20 +1709,54 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
       return { point };
     return null;
   }
+  function rememberHomeGaze(e: PointerEvent) {
+    if (!home || paused || document.hidden || !visible || reduced.matches) {
+      homeGazePoint = null;
+      return;
+    }
+    const bounds = renderer.domElement.getBoundingClientRect();
+    homeGazePoint = {
+      x: e.clientX - bounds.left,
+      y: e.clientY - bounds.top,
+      width: bounds.width,
+      height: bounds.height,
+    };
+  }
   function pointerDown(e: PointerEvent) {
     if (paused) return;
+    if (
+      home &&
+      pointerGesture.pointerId === null &&
+      e.isPrimary &&
+      e.button !== 0
+    )
+      homeGazePoint = null;
     if (!pointerGesture.begin(e)) return;
+    homeGazePoint = null;
+    if (home && e.pointerType === 'touch') rememberHomeGaze(e);
     pressedTarget = home ? null : pickForestTarget(e);
     renderer.domElement.setPointerCapture(e.pointerId);
     renderer.domElement.focus({ preventScroll: true });
   }
   function pointerMove(e: PointerEvent) {
     const dx = pointerGesture.move(e);
-    if (dx !== null && home) orbit -= dx * 0.009;
+    if (dx !== null && home) {
+      orbit -= dx * 0.009;
+      // Any owned movement belongs to orbiting, never to a competing gaze.
+      homeGazePoint = null;
+    } else if (
+      home &&
+      pointerGesture.pointerId === null &&
+      e.isPrimary &&
+      e.buttons === 0 &&
+      (e.pointerType === 'mouse' || e.pointerType === 'pen')
+    )
+      rememberHomeGaze(e);
   }
   function pointerUp(e: PointerEvent) {
     const ended = pointerGesture.end(e);
     if (!ended) return;
+    homeGazePoint = null;
     const selected = pressedTarget;
     pressedTarget = null;
     if (renderer.domElement.hasPointerCapture(e.pointerId))
@@ -1700,6 +1771,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
     else if (selected) navigate(selected.point, null);
   }
   function cancelPointerGesture() {
+    homeGazePoint = null;
     const owner = pointerGesture.pointerId;
     pointerGesture.cancel();
     pressedTarget = null;
@@ -1707,6 +1779,16 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
       renderer.domElement.releasePointerCapture(owner);
   }
   function pointerCancel(e: PointerEvent) {
+    if (home && e.type === 'pointerleave') {
+      if (
+        (pointerGesture.pointerId === null && e.isPrimary) ||
+        pointerGesture.pointerId === e.pointerId
+      )
+        homeGazePoint = null;
+      return;
+    }
+    if (home && pointerGesture.pointerId === null && e.isPrimary)
+      homeGazePoint = null;
     if (pointerGesture.pointerId === e.pointerId) stop();
   }
   function keyDown(e: KeyboardEvent) {
@@ -1752,6 +1834,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
   renderer.domElement.addEventListener('pointerup', pointerUp);
   renderer.domElement.addEventListener('pointercancel', pointerCancel);
   renderer.domElement.addEventListener('lostpointercapture', pointerCancel);
+  if (home) renderer.domElement.addEventListener('pointerleave', pointerCancel);
   renderer.domElement.addEventListener('keydown', keyDown);
   renderer.domElement.addEventListener('blur', blur);
   window.addEventListener('keyup', keyUp);
@@ -1776,6 +1859,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
     ?.querySelector<HTMLElement>('.cw-game-hud');
   let hudBottom: number | undefined;
   function resize() {
+    homeGazePoint = null;
     width = host.clientWidth;
     height = host.clientHeight;
     if (!width || !height) return;
@@ -1804,6 +1888,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
   rebuild();
   const observer = new IntersectionObserver((entries) => {
     visible = entries[0]?.isIntersecting ?? true;
+    if (!visible) homeGazePoint = null;
   });
   observer.observe(host);
   const moveVector = new T.Vector3();
@@ -1814,7 +1899,10 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
     frame = requestAnimationFrame(animate);
     const dt = Math.min((now - last) / 1000, 0.05);
     last = now;
-    if (paused || document.hidden) return;
+    if (paused || document.hidden) {
+      if (home) homeGazePoint = null;
+      return;
+    }
     // Mobile action controls sit below the canvas. A requested journey must
     // finish even while the user scrolls to read the objective.
     if (
@@ -1958,12 +2046,27 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
       );
       camera.lookAt(0, 1.32, 0);
     }
+    if (home && reduced.matches) homeGazePoint = null;
+    const gaze = home
+      ? getHomeGazeTarget(
+          homeGazePoint,
+          Math.atan2(
+            camera.position.x - creature.root.position.x,
+            camera.position.z - creature.root.position.z,
+          ) - creature.root.rotation.y,
+          {
+            drawing: creature.root.userData.rigType === 'alpha-cushion',
+            reducedMotion: reduced.matches,
+          },
+        )
+      : { lookX: 0, lookY: 0 };
     creature.update(dt, elapsed, {
       moving,
       speed: 3,
       action: elapsed < actionUntil ? action : 'idle',
       actionId,
       reducedMotion: reduced.matches,
+      ...gaze,
     });
     diorama?.update({
       dt,
@@ -2382,6 +2485,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
     stop,
     setPaused,
     turn(direction: number) {
+      homeGazePoint = null;
       orbit += direction * 0.5;
     },
     steer(x: number, z: number) {
@@ -2532,6 +2636,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
       renderer.domElement.removeEventListener('pointermove', pointerMove);
       renderer.domElement.removeEventListener('pointerup', pointerUp);
       renderer.domElement.removeEventListener('pointercancel', pointerCancel);
+      renderer.domElement.removeEventListener('pointerleave', pointerCancel);
       renderer.domElement.removeEventListener(
         'lostpointercapture',
         pointerCancel,

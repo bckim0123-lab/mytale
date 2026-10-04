@@ -28,6 +28,10 @@ import CompanionBookshelf from './companion-bookshelf';
 import CompanionArtLibrary from './companion-art-library';
 import ForestToybox from './forest-toybox';
 import {
+  ForestNarrationReader,
+  type ForestNarrationReaderHandle,
+} from './forest-narration-reader';
+import {
   ForestCompanionFace,
   ForestMemories,
   ForestMoment,
@@ -37,6 +41,13 @@ import { forestToyFor, forestToyStillCurrent } from './forest-play-controls';
 import { drawingPalette } from './companion-palette';
 import { useCompanionStorage } from './use-companion-storage';
 import { useDrawingAsset } from './use-drawing-asset';
+import {
+  createFamilyBackupPlan,
+  buildFamilyBackupPart,
+  parseFamilyBackupPartInfo,
+  type FamilyBackupPlan,
+  type FamilyBackupPartInfo,
+} from './family-backup-parts';
 import {
   keepDrawingAsset,
   portableArtwork,
@@ -58,6 +69,8 @@ import {
   type CompanionStoryBook,
   serializeCompanionBackup,
   parseCompanionBackup,
+  createCompanionSave,
+  sanitizeCompanionSave,
   readCompanionSave,
   COMPANION_SAVE_KEY,
   MAX_COMPANION_BOOKS,
@@ -124,6 +137,33 @@ function forestMomentKey(
 ) {
   return `${forest.chapter}-${forest.bridges || forest.gardenBloom}`;
 }
+type BackupCheckpoint = {
+  generation: string;
+  revision: number;
+  record: string;
+};
+type PreparedFamilyBackup = {
+  plan: FamilyBackupPlan;
+  checkpoint: BackupCheckpoint;
+  metadataKey: string;
+  requestedParts: number[];
+};
+function backupMetadataKey(metadata: readonly DrawingAssetMetadata[]) {
+  return JSON.stringify(
+    [...metadata]
+      .sort((a, b) => a.id.localeCompare(b.id))
+      .map(({ id, createdAt, name, persona, pngLength }) => ({
+        id,
+        createdAt,
+        name,
+        persona,
+        pngLength,
+      })),
+  );
+}
+function newFamilyBackupIdentity() {
+  return { bundleId: crypto.randomUUID(), exportedAt: Date.now() };
+}
 type Props = {
   onExit: () => void;
   onDrawing: () => void;
@@ -166,10 +206,16 @@ export default function CompanionExperience({
   const [backupBusy, setBackupBusy] = useState(false);
   const artworkEpoch = useRef(0);
   const backupOperation = useRef(false);
+  const backupEpoch = useRef(0);
+  const [splitBackupOffered, setSplitBackupOffered] = useState(false);
+  const [splitBackup, setSplitBackup] = useState<PreparedFamilyBackup | null>(
+    null,
+  );
   const [backupStatus, setBackupStatus] = useState('');
   const [pendingBackup, setPendingBackup] = useState<{
     save: CompanionSave;
     assets: DrawingAsset[];
+    part?: FamilyBackupPartInfo;
   } | null>(null);
   const [artLibrary, setArtLibrary] = useState<DrawingAssetMetadata[]>([]);
   const artLibraryRef = useRef<DrawingAssetMetadata[]>([]);
@@ -231,11 +277,24 @@ export default function CompanionExperience({
   const mounted = useRef(false);
   const colorRequest = useRef(0);
   const soundRef = useRef(sound);
+  const forestReader = useRef<ForestNarrationReaderHandle>(null);
   const cancelToyRequest = useCallback((dismiss = true) => {
+    forestReader.current?.stop();
     toyRequestEpoch.current += 1;
     toyOpening.current = null;
     forestInteractionEnabled.current = false;
     if (dismiss) setToybox(null);
+  }, []);
+  const cancelBackupWork = useCallback((dismiss = true) => {
+    backupEpoch.current++;
+    backupOperation.current = false;
+    if (dismiss) {
+      setBackupBusy(false);
+      setSplitBackup(null);
+      setSplitBackupOffered(false);
+      setPendingBackup(null);
+      if (backupInput.current) backupInput.current.value = '';
+    }
   }, []);
   const forest = save.forest ?? initialForestState();
   const momentKey = forestMomentKey(forest);
@@ -395,6 +454,7 @@ export default function CompanionExperience({
     mounted.current = true;
     return () => {
       mounted.current = false;
+      cancelBackupWork(false);
       cancelToyRequest(false);
       timers.current.forEach(clearTimeout);
       chatAbort.current?.abort();
@@ -402,7 +462,7 @@ export default function CompanionExperience({
       void audio.current?.close().catch(() => {});
       audio.current = null;
     };
-  }, [cancelToyRequest]);
+  }, [cancelToyRequest, cancelBackupWork]);
   useEffect(() => {
     soundRef.current = sound;
     if (!sound) void audio.current?.suspend().catch(() => {});
@@ -624,6 +684,7 @@ export default function CompanionExperience({
     }
   }, []);
   const replayMelody = useCallback(() => {
+    forestReader.current?.stop();
     timers.current.forEach(clearTimeout);
     timers.current = [];
     const current = saveRef.current;
@@ -666,6 +727,7 @@ export default function CompanionExperience({
         }
         return;
       }
+      forestReader.current?.stop();
       const ending = getForestEnding(next);
       const timestamp = Date.now();
       let nextSave = { ...old, forest: next, updatedAt: timestamp };
@@ -780,6 +842,7 @@ export default function CompanionExperience({
     const current = saveRef.current.forest ?? initialForestState();
     const kind = forestToyFor(current, id);
     if (kind) {
+      forestReader.current?.stop();
       world.current?.stop();
       setWalking('');
       const stateKey = JSON.stringify(current);
@@ -928,6 +991,7 @@ export default function CompanionExperience({
     if (showBooks) setPanel('books');
   }
   function closeDialog() {
+    cancelBackupWork();
     cancelToyRequest();
     forestInteractionEnabled.current = mode === 'forest';
     setBook(null);
@@ -942,34 +1006,88 @@ export default function CompanionExperience({
     setChatStatus('');
     setBusy(false);
   }
+  function backupIsCurrent(operation: number) {
+    return mounted.current && operation === backupEpoch.current;
+  }
+  function assertBackupCurrent(
+    operation: number,
+    checkpoint: BackupCheckpoint,
+  ) {
+    if (!backupIsCurrent(operation)) throw new Error('백업 준비를 취소했어요.');
+    const latest = readCompanionSave();
+    const local = sanitizeCompanionSave(saveRef.current);
+    if (
+      !local ||
+      (latest.status !== 'ready' && latest.status !== 'empty') ||
+      latest.snapshot.generation !== checkpoint.generation ||
+      latest.snapshot.revision !== checkpoint.revision ||
+      JSON.stringify(local) !== checkpoint.record ||
+      (latest.status === 'ready' &&
+        JSON.stringify(sanitizeCompanionSave(latest.save)) !==
+          checkpoint.record) ||
+      (latest.status === 'empty' &&
+        JSON.stringify(local) !==
+          JSON.stringify(
+            createCompanionSave({
+              ...(initialName ? { name: initialName } : {}),
+              updatedAt: local.updatedAt,
+            }),
+          ))
+    )
+      throw new Error(
+        '현재 창과 저장된 기록이 달라요. 필요한 글·설정은 복구 파일로 먼저 보관하고, 저장된 기록을 다시 불러온 뒤 백업을 다시 준비해 주세요.',
+      );
+  }
+  async function captureBackupState(operation: number) {
+    if (!(await flushCharacterName()))
+      throw new Error(
+        '친구 이름 보관을 먼저 마쳐 주세요. 원래 백업과 그림은 그대로예요.',
+      );
+    if (!backupIsCurrent(operation)) throw new Error('백업 준비를 취소했어요.');
+    await flush();
+    if (!backupIsCurrent(operation)) throw new Error('백업 준비를 취소했어요.');
+    const exportSave = structuredClone(saveRef.current);
+    const before = readCompanionSave();
+    if (before.status !== 'ready' && before.status !== 'empty')
+      throw new Error(
+        '저장 공간의 상태를 확인하지 못했어요. 기존 기록을 덮어쓰지 않았어요.',
+      );
+    const checkpoint = {
+      generation: before.snapshot.generation,
+      revision: before.snapshot.revision,
+      record: JSON.stringify(sanitizeCompanionSave(exportSave)),
+    };
+    assertBackupCurrent(operation, checkpoint);
+    return { exportSave, checkpoint };
+  }
   async function exportBackup() {
+    if (!mounted.current || backupOperation.current || artworkBusy) return;
+    backupOperation.current = true;
+    const operation = ++backupEpoch.current;
+    setBackupBusy(true);
+    setSplitBackup(null);
+    setSplitBackupOffered(false);
+    setPendingBackup(null);
     setBackupStatus('친구와 책을 백업에 담고 있어요…');
     try {
-      if (!(await flushCharacterName()))
-        throw new Error(
-          '친구 이름 보관을 먼저 마쳐 주세요. 원래 백업과 그림은 그대로예요.',
-        );
-      await flush();
-      const exportSave = structuredClone(saveRef.current);
-      const before = readCompanionSave();
-      if (before.status !== 'ready' && before.status !== 'empty')
-        throw new Error(
-          '저장 공간의 상태를 확인하지 못했어요. 기존 기록을 덮어쓰지 않았어요.',
-        );
-      const exportGeneration = before.snapshot.generation;
+      const { exportSave, checkpoint } = await captureBackupState(operation);
       const serialized = serializeCompanionBackup(exportSave);
       if (!serialized.ok) throw new Error(serialized.error);
-      // Reject an already oversized library before allocating every PNG plus
-      // the serialized JSON and UTF-8 copy. The final exact-size check remains.
+      // Offer metadata-only planning before allocating a large library's PNGs.
       const metadata = await listDrawingAssetMetadata();
+      assertBackupCurrent(operation, checkpoint);
       if (
         metadata.reduce((size, asset) => size + asset.pngLength, 0) >
         32 * 1024 * 1024
-      )
-        throw new Error(
-          '보관한 그림이 많아 전체 백업이 32MB를 넘었어요. 각 친구 그림도 별도로 저장해 주세요.',
+      ) {
+        setSplitBackupOffered(true);
+        setBackupStatus(
+          '그림이 많아 한 파일의 32MB 한도를 넘어요. 아래에서 나눠 저장을 준비하면 친구와 책을 여러 파일에 담을 수 있어요.',
         );
+        return;
+      }
       const assets = await listDrawingAssets();
+      assertBackupCurrent(operation, checkpoint);
       const required = [
         exportSave.appearance.drawingAssetId,
         ...exportSave.storyBooks.map(
@@ -983,44 +1101,163 @@ export default function CompanionExperience({
         throw new Error(
           '책에 필요한 친구 그림이 일부 없어요. 그림이 포함된 기존 백업을 먼저 가져와 주세요. 불완전한 백업을 만들지는 않았어요.',
         );
-      for (const asset of assets)
+      for (const asset of assets) {
         if (
           !validDrawingAsset(asset) ||
           (await artworkId(asset.png)) !== asset.id
         )
           throw new Error('손상된 친구 그림이 있어 백업을 멈췄어요.');
+        assertBackupCurrent(operation, checkpoint);
+      }
       const backup = JSON.stringify({
         format: 'drawing-friend-family-backup',
         version: 1,
         record: JSON.parse(serialized.json),
         assets,
       });
-      if (new TextEncoder().encode(backup).length > 32 * 1024 * 1024)
-        throw new Error(
-          '보관한 그림이 많아 전체 백업이 32MB를 넘었어요. 각 친구 그림도 별도로 저장해 주세요.',
+      if (new TextEncoder().encode(backup).length > 32 * 1024 * 1024) {
+        setSplitBackupOffered(true);
+        setBackupStatus(
+          '그림과 이야기를 합치면 32MB를 넘어요. 아래에서 나눠 저장을 준비해 주세요.',
         );
-      const after = readCompanionSave();
-      if (
-        (after.status !== 'ready' && after.status !== 'empty') ||
-        after.snapshot.generation !== exportGeneration
-      )
+        return;
+      }
+      const afterMetadata = await listDrawingAssetMetadata();
+      assertBackupCurrent(operation, checkpoint);
+      if (backupMetadataKey(metadata) !== backupMetadataKey(afterMetadata))
         throw new Error(
-          '백업을 만드는 동안 다른 창에서 기록을 지웠어요. 현재 기록으로 다시 시도해 주세요.',
+          '그림 보관함이 바뀌었어요. 현재 기록으로 백업을 다시 준비해 주세요.',
         );
       downloadLocalFile(
         `그림친구-우리집-백업-${new Date().toISOString().slice(0, 10)}.json`,
         backup,
       );
       setBackupStatus(
-        '백업 파일에 친구 그림·설정·모든 책을 담았어요. 사진 원본과 대화는 들어가지 않아요.',
+        '친구 그림·설정·모든 책을 담은 백업 파일의 저장을 요청했어요. 다운로드 폴더에서 확인해 주세요. 사진 원본과 대화는 들어가지 않아요.',
       );
     } catch (error) {
-      setBackupStatus(
-        error instanceof Error ? error.message : '백업을 만들지 못했어요.',
+      if (backupIsCurrent(operation))
+        setBackupStatus(
+          error instanceof Error ? error.message : '백업을 만들지 못했어요.',
+        );
+    } finally {
+      if (backupIsCurrent(operation)) {
+        backupOperation.current = false;
+        setBackupBusy(false);
+      }
+    }
+  }
+  async function prepareSplitBackup() {
+    if (!mounted.current || backupOperation.current || artworkBusy) return;
+    backupOperation.current = true;
+    const operation = ++backupEpoch.current;
+    setBackupBusy(true);
+    setSplitBackup(null);
+    setPendingBackup(null);
+    setBackupStatus('그림과 책의 목록으로 나눠 저장할 파일을 준비해요…');
+    try {
+      const { exportSave, checkpoint } = await captureBackupState(operation);
+      const metadata = await listDrawingAssetMetadata();
+      assertBackupCurrent(operation, checkpoint);
+      const plan = createFamilyBackupPlan(
+        exportSave,
+        metadata,
+        newFamilyBackupIdentity(),
       );
+      setSplitBackup({
+        plan,
+        checkpoint,
+        metadataKey: backupMetadataKey(metadata),
+        requestedParts: [],
+      });
+      setSplitBackupOffered(true);
+      setBackupStatus(
+        `${plan.parts.length}개 파일을 준비했어요. 아래 버튼을 하나씩 눌러 모두 보관해 주세요. 아직 파일을 저장하지 않았어요.`,
+      );
+    } catch (error) {
+      if (backupIsCurrent(operation))
+        setBackupStatus(
+          error instanceof Error
+            ? error.message
+            : '나눠 저장을 준비하지 못했어요.',
+        );
+    } finally {
+      if (backupIsCurrent(operation)) {
+        backupOperation.current = false;
+        setBackupBusy(false);
+      }
+    }
+  }
+  async function downloadBackupPart(index: number) {
+    if (
+      !splitBackup ||
+      !mounted.current ||
+      backupOperation.current ||
+      artworkBusy
+    )
+      return;
+    const prepared = splitBackup;
+    backupOperation.current = true;
+    const operation = ++backupEpoch.current;
+    setBackupBusy(true);
+    setBackupStatus(
+      `${index} / ${prepared.plan.parts.length} 파일에 필요한 그림을 담고 있어요…`,
+    );
+    try {
+      await flush();
+      assertBackupCurrent(operation, prepared.checkpoint);
+      const metadata = await listDrawingAssetMetadata();
+      assertBackupCurrent(operation, prepared.checkpoint);
+      if (backupMetadataKey(metadata) !== prepared.metadataKey)
+        throw new Error(
+          '그림 보관함이 바뀌었어요. 현재 기록으로 나눠 저장을 다시 준비해 주세요.',
+        );
+      const built = await buildFamilyBackupPart(prepared.plan, index, {
+        assertCurrent: () =>
+          assertBackupCurrent(operation, prepared.checkpoint),
+      });
+      const afterMetadata = await listDrawingAssetMetadata();
+      assertBackupCurrent(operation, prepared.checkpoint);
+      if (backupMetadataKey(afterMetadata) !== prepared.metadataKey)
+        throw new Error(
+          '그림 보관함이 바뀌었어요. 현재 기록으로 나눠 저장을 다시 준비해 주세요.',
+        );
+      downloadLocalFile(
+        `그림친구-우리집-${prepared.plan.bundleId}-${index}-of-${prepared.plan.parts.length}.json`,
+        built.json,
+      );
+      setSplitBackup((current) =>
+        current === prepared
+          ? {
+              ...current,
+              requestedParts: Array.from(
+                new Set([...current.requestedParts, index]),
+              ),
+            }
+          : current,
+      );
+      setBackupStatus(
+        `${index} / ${prepared.plan.parts.length} 파일 저장을 요청했어요. 다운로드 폴더에서 확인해 주세요. 전체 보관함을 옮기려면 모든 파일을 가져와야 해요.`,
+      );
+    } catch (error) {
+      if (backupIsCurrent(operation)) {
+        setSplitBackup(null);
+        setSplitBackupOffered(true);
+        setBackupStatus(
+          error instanceof Error
+            ? error.message
+            : '이 파일을 준비하지 못했어요. 나눠 저장을 다시 준비해 주세요.',
+        );
+      }
+    } finally {
+      if (backupIsCurrent(operation)) {
+        backupOperation.current = false;
+        setBackupBusy(false);
+      }
     }
   }
   function exportRecoveryRecord() {
+    if (backupOperation.current) return;
     try {
       // A read-only rescue of this window, even when browser storage is blocked.
       // Never strip artwork IDs or silently substitute a stock character.
@@ -1043,16 +1280,25 @@ export default function CompanionExperience({
     }
   }
   async function inspectBackup(file?: File) {
-    if (!file) return;
+    if (!file || !mounted.current || backupOperation.current || artworkBusy)
+      return;
+    backupOperation.current = true;
+    const operation = ++backupEpoch.current;
+    setBackupBusy(true);
+    setPendingBackup(null);
+    setSplitBackup(null);
+    setSplitBackupOffered(false);
     try {
       if (file.size > 32 * 1024 * 1024)
         throw new Error('32MB 이하의 그림친구 백업 파일을 골라 주세요.');
       const raw: unknown = JSON.parse(await file.text());
+      if (!backupIsCurrent(operation)) return;
       const wrapper = raw as {
         format?: string;
         version?: number;
         record?: unknown;
         assets?: unknown[];
+        part?: unknown;
       };
       if (wrapper.format === 'drawing-friend-backup') {
         const checked = parseCompanionBackup(JSON.stringify(wrapper));
@@ -1066,6 +1312,7 @@ export default function CompanionExperience({
           ].filter((id): id is string => Boolean(id)),
         );
         const available = needed.size ? await listDrawingAssets() : [];
+        if (!backupIsCurrent(operation)) return;
         const assets = available.filter((asset) => needed.has(asset.id));
         if (assets.length !== needed.size)
           throw new Error(
@@ -1089,7 +1336,17 @@ export default function CompanionExperience({
       if (!wrapper.assets.every(validDrawingAsset))
         throw new Error('백업 속 친구 그림 정보를 확인하지 못했어요.');
       const assets = wrapper.assets as DrawingAsset[];
+      const part = parseFamilyBackupPartInfo(wrapper.part);
       const ids = new Set(assets.map((asset) => asset.id));
+      if (
+        part &&
+        (part.assetCount !== assets.length ||
+          part.bookCount !== checked.save.storyBooks.length ||
+          ids.size !== assets.length)
+      )
+        throw new Error(
+          '나눠 저장한 파일의 그림·책 개수가 안내와 맞지 않아요. 원래 기기에서 다시 준비해 주세요.',
+        );
       const needed = [
         checked.save.appearance.drawingAssetId,
         ...checked.save.storyBooks.map(
@@ -1100,26 +1357,48 @@ export default function CompanionExperience({
         throw new Error(
           '백업에서 필요한 친구 그림이 빠져 있어요. 원래 기기에서 다시 백업해 주세요.',
         );
-      setPendingBackup({ save: checked.save, assets });
-      setBackupStatus('아직 바꾸지 않았어요. 아래 내용을 확인하고 가져오세요.');
-    } catch (error) {
-      setPendingBackup(null);
+      setPendingBackup({
+        save: checked.save,
+        assets,
+        ...(part ? { part } : {}),
+      });
       setBackupStatus(
-        error instanceof Error ? error.message : '백업 파일을 읽지 못했어요.',
+        part
+          ? `${part.index} / ${part.total} 파일을 읽었어요. 전체 보관함을 옮기려면 같은 묶음의 모든 파일을 하나씩 가져와야 해요. 아직 기록은 바꾸지 않았어요.`
+          : '아직 바꾸지 않았어요. 아래 내용을 확인하고 가져오세요.',
       );
+    } catch (error) {
+      if (backupIsCurrent(operation)) {
+        setPendingBackup(null);
+        setBackupStatus(
+          error instanceof Error ? error.message : '백업 파일을 읽지 못했어요.',
+        );
+      }
     } finally {
-      if (backupInput.current) backupInput.current.value = '';
+      if (backupIsCurrent(operation)) {
+        backupOperation.current = false;
+        setBackupBusy(false);
+        if (backupInput.current) backupInput.current.value = '';
+      }
     }
   }
   async function importBackup() {
-    if (!pendingBackup || backupOperation.current || artworkBusy) return;
+    if (
+      !pendingBackup ||
+      !mounted.current ||
+      backupOperation.current ||
+      artworkBusy
+    )
+      return;
     backupOperation.current = true;
     setBackupBusy(true);
-    const operation = ++artworkEpoch.current;
+    const operation = ++backupEpoch.current;
+    const artworkOperation = ++artworkEpoch.current;
     let assetsStaged = false;
     let recordRestored = false;
     try {
       await flush();
+      if (!backupIsCurrent(operation)) return;
       const before = readCompanionSave();
       if (before.status !== 'ready' && before.status !== 'empty')
         throw new Error('먼저 기존 기록의 저장 문제를 확인해 주세요.');
@@ -1145,12 +1424,15 @@ export default function CompanionExperience({
       );
       await putDrawingAssets(incomingAssets, {
         expectedGeneration: before.snapshot.generation,
-        cancelled: () => operation !== artworkEpoch.current,
+        cancelled: () =>
+          !backupIsCurrent(operation) ||
+          artworkOperation !== artworkEpoch.current,
       });
       assetsStaged = true;
       const after = readCompanionSave();
       if (
-        operation !== artworkEpoch.current ||
+        !backupIsCurrent(operation) ||
+        artworkOperation !== artworkEpoch.current ||
         (after.status !== 'ready' && after.status !== 'empty') ||
         after.snapshot.generation !== before.snapshot.generation ||
         after.snapshot.revision !== before.snapshot.revision
@@ -1159,6 +1441,7 @@ export default function CompanionExperience({
       // Existing artwork wins on identity too, not just in the library. Otherwise
       // a later name flush could copy the backup's old identity over that artwork.
       const kept = selectedId ? await readDrawingAsset(selectedId) : null;
+      if (!backupIsCurrent(operation)) return;
       if (selectedId && !kept)
         throw new Error(
           '가져올 친구의 그림을 확인하지 못했어요. 다시 확인해 주세요.',
@@ -1176,24 +1459,30 @@ export default function CompanionExperience({
       });
       if (!result.ok) throw new Error(result.error);
       recordRestored = true;
+      if (!backupIsCurrent(operation)) return;
       setPendingBackup(null);
-      setArtLibrary(await listDrawingAssetMetadata());
+      const metadata = await listDrawingAssetMetadata();
+      if (!backupIsCurrent(operation)) return;
+      setArtLibrary(metadata);
       setBackupStatus(
-        '친구와 책을 가져왔어요. 같은 책은 중복하지 않고, 보관함에 이미 있는 그림의 이름과 취향은 유지했어요.',
+        `${pendingBackup.part ? `${pendingBackup.part.index} / ${pendingBackup.part.total} 이 파일에 담긴 ` : ''}친구와 책을 가져왔어요. 같은 책은 중복하지 않고, 보관함에 이미 있는 그림의 이름과 취향은 유지했어요.${pendingBackup.part ? ' 전체 보관함을 옮기려면 나머지 파일도 하나씩 가져와 주세요.' : ''}`,
       );
     } catch (error) {
+      if (!backupIsCurrent(operation)) return;
       const message =
         error instanceof Error ? error.message : '백업을 가져오지 못했어요.';
       setBackupStatus(
         recordRestored
-          ? '기록은 가져왔지만 보관함 화면을 새로 읽지 못했어요. 새로고침하면 저장된 기록을 다시 볼 수 있어요.'
+          ? `${pendingBackup.part ? '이 파일의 ' : ''}기록은 가져왔지만 보관함 화면을 새로 읽지 못했어요. 새로고침하면 저장된 기록을 다시 볼 수 있어요.${pendingBackup.part ? ' 나머지 백업 파일도 따로 가져와야 해요.' : ''}`
           : assetsStaged
             ? `${message} 새로 가져온 그림은 보관함에 남아 있을 수 있어요. 기존 그림의 이름과 취향은 덮어쓰지 않았어요.`
             : message,
       );
     } finally {
-      backupOperation.current = false;
-      setBackupBusy(false);
+      if (backupIsCurrent(operation)) {
+        backupOperation.current = false;
+        setBackupBusy(false);
+      }
     }
   }
   async function extractColors(url: string) {
@@ -1410,6 +1699,14 @@ export default function CompanionExperience({
             {artworkBusy
               ? '완성한 친구를 안전하게 보관하고 있어요…'
               : artworkError || art.error || backupStatus}
+            {backupStatus && !settings && (
+              <button
+                disabled={backupBusy || artworkBusy}
+                onClick={openSettings}
+              >
+                {splitBackupOffered ? '나눠 저장 준비 열기' : '백업·복구 열기'}
+              </button>
+            )}
           </output>
         )}
         {incomingArtwork && artworkError && !artworkBusy && (
@@ -1822,6 +2119,7 @@ export default function CompanionExperience({
                   </p>
                   <button
                     className="cw-outline"
+                    disabled={backupBusy || artworkBusy}
                     onClick={() => void exportBackup()}
                   >
                     친구와 책 전체 백업
@@ -2051,6 +2349,22 @@ export default function CompanionExperience({
                 <Sparkles size={18} />
                 <strong>{view.objective}</strong>
               </div>
+              <ForestNarrationReader
+                ref={forestReader}
+                dialogue={view.dialogue}
+                objective={view.objective}
+                choices={view.choices}
+                revisionKey={`${momentKey}:${forest.moves}`}
+                suspended={
+                  mode !== 'forest' ||
+                  Boolean(book || chat || settings || toybox || replaying)
+                }
+                suspendedReason={
+                  replaying
+                    ? '종소리 순서를 들은 뒤 이야기를 읽어 주세요.'
+                    : undefined
+                }
+              />
               {walking && <output className="cw-walking">{walking}</output>}
               {forestToyFor(
                 forest,
@@ -2532,12 +2846,14 @@ export default function CompanionExperience({
                 </p>
                 <button
                   className="cw-outline"
+                  disabled={backupBusy || artworkBusy}
                   onClick={() => void exportBackup()}
                 >
                   친구·그림·동화책 백업 저장
                 </button>
                 <button
                   className="cw-outline"
+                  disabled={backupBusy || artworkBusy}
                   onClick={() => backupInput.current?.click()}
                 >
                   다른 기기의 백업 가져오기
@@ -2546,12 +2862,63 @@ export default function CompanionExperience({
                   hidden
                   type="file"
                   accept="application/json,.json"
+                  disabled={backupBusy || artworkBusy}
                   ref={backupInput}
                   onChange={(event) =>
                     void inspectBackup(event.target.files?.[0])
                   }
                 />
-                {backupStatus && <output>{backupStatus}</output>}
+                {backupStatus && (
+                  <output aria-live="polite">{backupStatus}</output>
+                )}
+                {splitBackupOffered && (
+                  <section
+                    className="cw-backup-parts"
+                    aria-label="여러 파일로 백업 저장"
+                  >
+                    <h4>그림과 책을 나눠 보관해요</h4>
+                    <p>
+                      전체 보관함을 옮기려면 이 묶음의 모든 파일이 필요해요.
+                      아래 버튼을 하나씩 눌러 같은 폴더에 보관한 뒤, 새 기기에서
+                      각 파일을 하나씩 가져와 주세요. 저장 요청 표시는 실제 파일
+                      저장이나 전체 복원 완료를 뜻하지 않아요.
+                    </p>
+                    <button
+                      className="cw-outline"
+                      disabled={backupBusy || artworkBusy}
+                      onClick={() => void prepareSplitBackup()}
+                    >
+                      {splitBackup
+                        ? '현재 기록으로 나눠 저장 다시 준비'
+                        : '나눠 저장 준비하기'}
+                    </button>
+                    {splitBackup && (
+                      <ol>
+                        {splitBackup.plan.parts.map((part) => (
+                          <li key={part.index}>
+                            <button
+                              className="cw-outline"
+                              disabled={backupBusy || artworkBusy}
+                              onClick={() =>
+                                void downloadBackupPart(part.index)
+                              }
+                            >
+                              {part.index} / {splitBackup.plan.parts.length}{' '}
+                              파일 저장
+                            </button>
+                            <small>
+                              그림 {part.assetIds.length}개 · 책{' '}
+                              {part.bookIds.length}권
+                              {splitBackup.requestedParts.includes(part.index)
+                                ? ' · 저장 요청함'
+                                : ''}
+                            </small>
+                          </li>
+                        ))}
+                      </ol>
+                    )}
+                  </section>
+                )}
                 {pendingBackup && (
                   <div className="cw-reset-confirm">
                     <strong>
@@ -2563,67 +2930,81 @@ export default function CompanionExperience({
                       이 파일의 친구 설정을 적용하고 기존 책과 합쳐요. 파일
                       내용은 서버로 전송하지 않아요.
                     </p>
+                    {pendingBackup.part && (
+                      <p>
+                        나눠 저장한 {pendingBackup.part.index} /{' '}
+                        {pendingBackup.part.total} 파일이에요. 이 파일만
+                        가져오면 전체 보관함 복원이 끝난 것은 아니에요. 같은
+                        묶음의 나머지 파일도 하나씩 가져와 주세요.
+                      </p>
+                    )}
                     <button
                       className="cw-primary"
+                      disabled={backupBusy || artworkBusy}
                       onClick={() => void importBackup()}
                     >
                       확인하고 가져오기
                     </button>
                     <button
                       className="cw-outline"
+                      disabled={backupBusy || artworkBusy}
                       onClick={() => setPendingBackup(null)}
                     >
                       취소
                     </button>
                   </div>
                 )}
-                {blocked && (
-                  <>
+                <div className="cw-backup-recovery">
+                  {blocked && (
                     <p>
                       자동 저장을 멈춰 기존 기록을 보호하고 있어요. 현재 창의
                       변경을 먼저 백업한 뒤 다시 불러오세요.
                     </p>
-                    <p>
-                      저장 공간을 읽지 못해도 현재 창의 글·설정·책은 보관할 수
-                      있어요. 아래 복구 파일에는 친구 그림이 포함되지 않습니다.
-                    </p>
-                    <button
-                      className="cw-outline"
-                      onClick={exportRecoveryRecord}
-                    >
-                      현재 창 글·설정 복구 파일 저장 · 그림 별도
-                    </button>
-                    <button
-                      className="cw-outline"
-                      onClick={() => {
-                        try {
-                          const original =
-                            window.localStorage.getItem(COMPANION_SAVE_KEY);
-                          if (!original) throw new Error();
-                          downloadLocalFile(
-                            '그림친구-복구용-원본기록.json',
-                            original,
-                          );
-                          setBackupStatus(
-                            '기기의 원본 기록을 복구용 파일로 보관했어요. 그림 파일은 포함되지 않으며, 손상된 형식이라면 자동 가져오기는 되지 않아요.',
-                          );
-                        } catch {
-                          setBackupStatus(
-                            '기기의 원본 기록을 읽지 못했어요. 브라우저 저장 공간 설정을 확인해 주세요.',
-                          );
-                        }
-                      }}
-                    >
-                      기기의 원본 기록 파일 보관
-                    </button>
-                    <button
-                      className="cw-outline"
-                      onClick={() => void reloadLatest()}
-                    >
-                      현재 창 변경을 내려놓고 저장된 기록 다시 불러오기
-                    </button>
-                  </>
-                )}
+                  )}
+                  <p>
+                    저장 공간을 읽지 못해도 현재 창의 글·설정·책은 보관할 수
+                    있어요. 아래 복구 파일에는 친구 그림이 포함되지 않습니다.
+                  </p>
+                  <button
+                    className="cw-outline"
+                    disabled={backupBusy || artworkBusy}
+                    onClick={exportRecoveryRecord}
+                  >
+                    현재 창 글·설정 복구 파일 저장 · 그림 별도
+                  </button>
+                  <button
+                    className="cw-outline"
+                    disabled={backupBusy || artworkBusy}
+                    onClick={() => {
+                      if (backupOperation.current) return;
+                      try {
+                        const original =
+                          window.localStorage.getItem(COMPANION_SAVE_KEY);
+                        if (!original) throw new Error();
+                        downloadLocalFile(
+                          '그림친구-복구용-원본기록.json',
+                          original,
+                        );
+                        setBackupStatus(
+                          '기기의 원본 기록을 복구용 파일로 보관했어요. 그림 파일은 포함되지 않으며, 손상된 형식이라면 자동 가져오기는 되지 않아요.',
+                        );
+                      } catch {
+                        setBackupStatus(
+                          '기기의 원본 기록을 읽지 못했어요. 브라우저 저장 공간 설정을 확인해 주세요.',
+                        );
+                      }
+                    }}
+                  >
+                    기기의 원본 기록 파일 보관
+                  </button>
+                  <button
+                    className="cw-outline"
+                    disabled={backupBusy || artworkBusy}
+                    onClick={() => void reloadLatest()}
+                  >
+                    현재 창 변경을 내려놓고 저장된 기록 다시 불러오기
+                  </button>
+                </div>
               </section>
               {consent && (
                 <button
@@ -2678,20 +3059,35 @@ export default function CompanionExperience({
                         backupOperation.current
                       )
                         return;
+                      chatAbort.current?.abort();
+                      chatAbort.current = null;
+                      setBusy(false);
+                      setConsent(false);
+                      setMessages([]);
+                      setInput('');
+                      setGuardianChecked(false);
+                      setGuardianAnswer('');
                       cancelToyRequest();
+                      cancelBackupWork();
+                      const operation = backupEpoch.current;
                       backupOperation.current = true;
                       setBackupBusy(true);
                       artworkEpoch.current++;
                       const result = await reset();
                       if (!result.ok) {
+                        if (!backupIsCurrent(operation)) return;
                         setBackupStatus(result.error);
                         backupOperation.current = false;
                         setBackupBusy(false);
                         return;
                       }
-                      setPendingBackup(null);
-                      onArtworkAccepted?.();
-                      acceptedArtwork.current = null;
+                      if (backupIsCurrent(operation)) {
+                        setPendingBackup(null);
+                        onArtworkAccepted?.();
+                        acceptedArtwork.current = null;
+                      }
+                      // A committed reset still needs generation-safe artwork cleanup
+                      // if the dialog closed while the record reset was awaiting storage.
                       try {
                         const cleared = readCompanionSave();
                         if (
@@ -2703,12 +3099,17 @@ export default function CompanionExperience({
                           expectedGeneration: cleared.snapshot.generation,
                           preserveCurrentGeneration: true,
                         });
-                        setArtLibrary(await listDrawingAssetMetadata());
+                        if (!backupIsCurrent(operation)) return;
+                        const metadata = await listDrawingAssetMetadata();
+                        if (!backupIsCurrent(operation)) return;
+                        setArtLibrary(metadata);
                       } catch {
+                        if (!backupIsCurrent(operation)) return;
                         setBackupStatus(
                           '놀이 기록은 지웠지만 그림 보관함 삭제를 완료하지 못했어요. 다시 확인해 주세요.',
                         );
                       }
+                      if (!backupIsCurrent(operation)) return;
                       backupOperation.current = false;
                       setBackupBusy(false);
                       colorRequest.current++;
@@ -2716,9 +3117,6 @@ export default function CompanionExperience({
                       timers.current = [];
                       setActiveNote(null);
                       setReplaying(false);
-                      setConsent(false);
-                      setMessages([]);
-                      setInput('');
                       setNotice('안녕! 나는 몽글. 우리 같이 놀까?');
                       setPanel('customize');
                       setMode('home');

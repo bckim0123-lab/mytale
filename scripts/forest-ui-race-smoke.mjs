@@ -105,9 +105,12 @@ function harness(overrides = {}) {
     saveRef: { current: save },
     timers: { current: [] },
     world: { current: { stop: noop, react: noop } },
+    forestReader: { current: { stop: noop } },
     chatAbort: { current: null },
     audio: { current: null },
     backupOperation: { current: false },
+    backupEpoch: { current: 0 },
+    backupInput: { current: null },
     artworkEpoch: { current: 0 },
     resetAnswer: '지우기',
     acceptedArtwork: { current: null },
@@ -167,6 +170,8 @@ function harness(overrides = {}) {
     setBusy: noop,
     setBackupBusy: noop,
     setPendingBackup: noop,
+    setSplitBackup: noop,
+    setSplitBackupOffered: noop,
     setArtLibrary: noop,
     setConsent: noop,
     setMessages: noop,
@@ -179,6 +184,8 @@ function harness(overrides = {}) {
     ...overrides,
   };
   bindings.cancelToyRequest = load('cancelToyRequest', bindings);
+  bindings.cancelBackupWork = load('cancelBackupWork', bindings);
+  bindings.backupIsCurrent = load('backupIsCurrent', bindings);
   bindings.openSettings = load('openSettings', bindings);
   bindings.closeDialog = (...args) => load('closeDialog', bindings)(...args);
   return {

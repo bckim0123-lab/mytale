@@ -63,6 +63,28 @@ function objectKeys(node) {
         .filter(Boolean)
     : [];
 }
+function backupBindings(overrides) {
+  const bindings = {
+    mounted: { current: true },
+    backupEpoch: { current: 0 },
+    backupOperation: { current: false },
+    artworkBusy: false,
+    initialName: undefined,
+    setBackupBusy: () => {},
+    setSplitBackup: () => {},
+    setSplitBackupOffered: () => {},
+    setPendingBackup: () => {},
+    ...overrides,
+  };
+  for (const name of [
+    'backupMetadataKey',
+    'backupIsCurrent',
+    'assertBackupCurrent',
+    'captureBackupState',
+  ])
+    bindings[name] = loadFunction(experienceAst, name, bindings);
+  return bindings;
+}
 
 // The painted selection and the announced selection must identify the same
 // friend. A saved fallback species is not selected while artwork is active.
@@ -121,6 +143,7 @@ const server = await createServer({
 try {
   const {
     createCompanionSave,
+    sanitizeCompanionSave,
     persistCompanionSave,
     readCompanionSave,
     serializeCompanionBackup,
@@ -178,33 +201,39 @@ try {
     let generation = 'before';
     const downloads = [];
     const statuses = [];
-    const exportBackup = loadFunction(experienceAst, 'exportBackup', {
-      saveRef,
-      flushCharacterName: async () => true,
-      flush: async () => {},
-      serializeCompanionBackup,
-      readCompanionSave: () => ({
-        status: 'ready',
-        save: saveRef.current,
-        snapshot: { generation, revision: 1, save: saveRef.current },
-      }),
-      listDrawingAssets: async () =>
-        onList({
-          saveRef,
-          reset: () => {
-            generation = 'after';
-            saveRef.current = createCompanionSave();
-          },
+    const exportBackup = loadFunction(
+      experienceAst,
+      'exportBackup',
+      backupBindings({
+        saveRef,
+        flushCharacterName: async () => true,
+        flush: async () => {},
+        serializeCompanionBackup,
+        createCompanionSave,
+        sanitizeCompanionSave,
+        readCompanionSave: () => ({
+          status: 'ready',
+          save: saveRef.current,
+          snapshot: { generation, revision: 1, save: saveRef.current },
         }),
-      listDrawingAssetMetadata: async () => [{ id: artwork.id, pngLength }],
-      validDrawingAsset: () => true,
-      artworkId: async () => artwork.id,
-      downloadLocalFile: (...args) => downloads.push(args),
-      setBackupStatus: (value) => statuses.push(value),
-      setBackupBusy: () => {},
-      backupOperation: { current: false },
-      artworkBusy: false,
-    });
+        listDrawingAssets: async () =>
+          onList({
+            saveRef,
+            reset: () => {
+              generation = 'after';
+              saveRef.current = createCompanionSave();
+            },
+          }),
+        listDrawingAssetMetadata: async () => [{ id: artwork.id, pngLength }],
+        validDrawingAsset: () => true,
+        artworkId: async () => artwork.id,
+        downloadLocalFile: (...args) => downloads.push(args),
+        setBackupStatus: (value) => statuses.push(value),
+        setBackupBusy: () => {},
+        backupOperation: { current: false },
+        artworkBusy: false,
+      }),
+    );
     await exportBackup();
     return { downloads, statuses };
   }
@@ -229,15 +258,19 @@ try {
   const noStorage = () => {
     throw new Error('Storage inaccessible');
   };
-  const rescue = loadFunction(experienceAst, 'exportRecoveryRecord', {
-    saveRef: { current: saved },
-    serializeCompanionBackup,
-    flush: noStorage,
-    readCompanionSave: noStorage,
-    listDrawingAssets: noStorage,
-    downloadLocalFile: (...args) => rescueDownloads.push(args),
-    setBackupStatus: () => {},
-  });
+  const rescue = loadFunction(
+    experienceAst,
+    'exportRecoveryRecord',
+    backupBindings({
+      saveRef: { current: saved },
+      serializeCompanionBackup,
+      flush: noStorage,
+      readCompanionSave: noStorage,
+      listDrawingAssets: noStorage,
+      downloadLocalFile: (...args) => rescueDownloads.push(args),
+      setBackupStatus: () => {},
+    }),
+  );
   rescue();
   assert.equal(
     rescueDownloads.length,
@@ -261,15 +294,19 @@ try {
   for (const available of [[], [artwork]]) {
     let pending = null;
     const statuses = [];
-    const inspect = loadFunction(experienceAst, 'inspectBackup', {
-      parseCompanionBackup,
-      listDrawingAssets: async () => available,
-      setPendingBackup: (value) => {
-        pending = value;
-      },
-      setBackupStatus: (value) => statuses.push(value),
-      backupInput: { current: null },
-    });
+    const inspect = loadFunction(
+      experienceAst,
+      'inspectBackup',
+      backupBindings({
+        parseCompanionBackup,
+        listDrawingAssets: async () => available,
+        setPendingBackup: (value) => {
+          pending = value;
+        },
+        setBackupStatus: (value) => statuses.push(value),
+        backupInput: { current: null },
+      }),
+    );
     await inspect({
       size: rescueDownloads[0][1].length,
       text: async () => rescueDownloads[0][1],
@@ -302,32 +339,36 @@ try {
   let restored = false;
   let importOptions;
   const importStatus = [];
-  const importBackup = loadFunction(experienceAst, 'importBackup', {
-    MAX_COMPANION_BOOKS: 100,
-    pendingBackup: { save: saved, assets: [artwork] },
-    backupOperation: { current: false },
-    artworkBusy: false,
-    artworkEpoch: { current: 0 },
-    setBackupBusy: () => {},
-    flush: async () => {},
-    readCompanionSave: () => ({
-      status: 'ready',
-      save: saved,
-      snapshot: { generation: importGeneration, revision: 1, save: saved },
+  const importBackup = loadFunction(
+    experienceAst,
+    'importBackup',
+    backupBindings({
+      MAX_COMPANION_BOOKS: 100,
+      pendingBackup: { save: saved, assets: [artwork] },
+      backupOperation: { current: false },
+      artworkBusy: false,
+      artworkEpoch: { current: 0 },
+      setBackupBusy: () => {},
+      flush: async () => {},
+      readCompanionSave: () => ({
+        status: 'ready',
+        save: saved,
+        snapshot: { generation: importGeneration, revision: 1, save: saved },
+      }),
+      putDrawingAssets: async (_assets, options) => {
+        importOptions = options;
+        importGeneration = 'after';
+      },
+      restoreSave: async () => {
+        restored = true;
+        return { ok: true };
+      },
+      listDrawingAssets: async () => [artwork],
+      setArtLibrary: () => {},
+      setPendingBackup: () => {},
+      setBackupStatus: (value) => importStatus.push(value),
     }),
-    putDrawingAssets: async (_assets, options) => {
-      importOptions = options;
-      importGeneration = 'after';
-    },
-    restoreSave: async () => {
-      restored = true;
-      return { ok: true };
-    },
-    listDrawingAssets: async () => [artwork],
-    setArtLibrary: () => {},
-    setPendingBackup: () => {},
-    setBackupStatus: (value) => importStatus.push(value),
-  });
+  );
   await importBackup();
   assert.equal(importOptions.expectedGeneration, 'before');
   assert.equal(restored, false);
@@ -358,60 +399,64 @@ try {
       ...saved,
       storyBooks: mode === 'full' ? [{ id: 'new-book' }] : saved.storyBooks,
     };
-    const execute = loadFunction(experienceAst, 'importBackup', {
-      MAX_COMPANION_BOOKS: 100,
-      pendingBackup: { save: incomingSave, assets: [artwork] },
-      backupOperation: { current: false },
-      artworkBusy: false,
-      artworkEpoch: { current: 0 },
-      setBackupBusy: () => {},
-      flush: async () => {},
-      readCompanionSave: () => ({
-        status: 'ready',
-        save: currentSave,
-        snapshot: {
-          generation: 'stable',
-          revision: mode === 'changed-record' && assetWrites ? 2 : 1,
+    const execute = loadFunction(
+      experienceAst,
+      'importBackup',
+      backupBindings({
+        MAX_COMPANION_BOOKS: 100,
+        pendingBackup: { save: incomingSave, assets: [artwork] },
+        backupOperation: { current: false },
+        artworkBusy: false,
+        artworkEpoch: { current: 0 },
+        setBackupBusy: () => {},
+        flush: async () => {},
+        readCompanionSave: () => ({
+          status: 'ready',
           save: currentSave,
+          snapshot: {
+            generation: 'stable',
+            revision: mode === 'changed-record' && assetWrites ? 2 : 1,
+            save: currentSave,
+          },
+        }),
+        putDrawingAssets: async (_assets, options) => {
+          assetWrites++;
+          assert.equal(options.cancelled(), false);
         },
+        readDrawingAsset: async () => (mode === 'missing-art' ? null : artwork),
+        restoreSave: async (incoming, options) => {
+          recordWrites++;
+          assert.equal(
+            incoming.name,
+            artwork.name,
+            'Active friend uses the preserved library name',
+          );
+          assert.deepEqual(
+            incoming.persona,
+            artwork.persona,
+            'Active friend uses the preserved library persona',
+          );
+          assert.deepEqual(
+            incoming.storyBooks,
+            incomingSave.storyBooks,
+            'Historical book identity is not rewritten',
+          );
+          assert.equal(options.expectedRevision, 1);
+          return mode === 'restore-failed'
+            ? { ok: false, error: '저장 공간이 부족해요.' }
+            : { ok: true };
+        },
+        listDrawingAssetMetadata: async () => {
+          if (mode === 'library-failed') throw new Error('read failed');
+          return [artwork];
+        },
+        setArtLibrary: () => {},
+        setPendingBackup: (value) => {
+          cleared = value === null;
+        },
+        setBackupStatus: (value) => statuses.push(value),
       }),
-      putDrawingAssets: async (_assets, options) => {
-        assetWrites++;
-        assert.equal(options.cancelled(), false);
-      },
-      readDrawingAsset: async () => (mode === 'missing-art' ? null : artwork),
-      restoreSave: async (incoming, options) => {
-        recordWrites++;
-        assert.equal(
-          incoming.name,
-          artwork.name,
-          'Active friend uses the preserved library name',
-        );
-        assert.deepEqual(
-          incoming.persona,
-          artwork.persona,
-          'Active friend uses the preserved library persona',
-        );
-        assert.deepEqual(
-          incoming.storyBooks,
-          incomingSave.storyBooks,
-          'Historical book identity is not rewritten',
-        );
-        assert.equal(options.expectedRevision, 1);
-        return mode === 'restore-failed'
-          ? { ok: false, error: '저장 공간이 부족해요.' }
-          : { ok: true };
-      },
-      listDrawingAssetMetadata: async () => {
-        if (mode === 'library-failed') throw new Error('read failed');
-        return [artwork];
-      },
-      setArtLibrary: () => {},
-      setPendingBackup: (value) => {
-        cleared = value === null;
-      },
-      setBackupStatus: (value) => statuses.push(value),
-    });
+    );
     await execute();
     assert.equal(
       assetWrites,

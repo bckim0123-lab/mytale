@@ -1,0 +1,50 @@
+.fnr-reader {
+  display: grid;
+  justify-items: start;
+  gap: 7px;
+  margin: 12px 0;
+}
+.fnr-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
+  min-width: 44px;
+  max-width: 100%;
+  padding: 10px 16px;
+  border: 1px solid #a8c9b8;
+  border-radius: 14px;
+  background: #edf7ef;
+  color: #254f3c;
+  font: inherit;
+  font-weight: 800;
+  line-height: 1.45;
+  text-align: start;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.fnr-button svg {
+  flex: none;
+}
+.fnr-button:focus-visible {
+  outline: 3px solid #3b806d;
+  outline-offset: 3px;
+}
+.fnr-button[aria-pressed='true'] {
+  background: #dceee1;
+  border-color: #5d8b71;
+}
+.fnr-button:disabled {
+  color: #576d60;
+  background: #eef0ec;
+  border-color: #c3cfc6;
+  cursor: default;
+}
+.fnr-hint {
+  margin: 0;
+  color: #52675a;
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
