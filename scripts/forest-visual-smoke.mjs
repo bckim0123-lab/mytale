@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'vite';
-import { Box3, Vector3 } from 'three';
+import {
+  Box3,
+  BoxGeometry,
+  Group,
+  Mesh,
+  MeshBasicMaterial,
+  PerspectiveCamera,
+  Vector3,
+} from 'three';
 const server = await createServer({
   configFile: false,
   cacheDir: 'node_modules/.vite-forest-visual-test',
@@ -23,6 +31,7 @@ try {
     bindForestHotspotButton,
     forestTreeOpacity,
     layoutForestLabels,
+    projectForestActorBounds,
     forestPlushTargetYaw,
     createWorldPointerGesture,
   } = await server.ssrLoadModule('/app/companion-world-runtime.ts');
@@ -512,7 +521,7 @@ try {
     );
     for (const label of layout) {
       assert.ok(
-        label.y - label.height >= (width < 650 ? 172 : 188),
+        label.y - label.height >= (width < 650 ? 186 : 212),
         'labels stay below title and mission HUD',
       );
       assert.ok(
@@ -593,6 +602,117 @@ try {
       'optional exploration still works after required objectives are finished',
     );
   }
+  for (const [width, height] of [
+    [320, 410],
+    [390, 410],
+    [390, 490],
+    [1280, 720],
+  ]) {
+    const actors = [
+      { left: width * 0.22, top: 223, right: width * 0.57, bottom: 327 },
+      { left: width * 0.6, top: 233, right: width * 0.81, bottom: 300 },
+    ];
+    const labels = Array.from({ length: 6 }, (_, index) => ({
+      id: index < 3 ? `lantern-${index}` : `secret-${index}`,
+      x: width / 2,
+      y: 254,
+      width: 126,
+      height: 44,
+      onscreen: true,
+      distance: index,
+    }));
+    const layout = layoutForestLabels(labels, width, height, {
+      top: 160,
+      avoid: actors,
+    });
+    assert.ok(
+      layout.some((label) => label.id === 'lantern-0'),
+      'nearest required target remains when a safe slot exists',
+    );
+    for (const label of layout) {
+      assert.equal(
+        label.height,
+        44,
+        'avoidance never shrinks the touch target',
+      );
+      assert.ok(label.y - label.height >= 160);
+      assert.ok(label.y <= height - 108);
+      for (const rect of actors)
+        assert.ok(
+          label.x + label.width / 2 <= rect.left ||
+            label.x - label.width / 2 >= rect.right ||
+            label.y <= rect.top ||
+            label.y - label.height >= rect.bottom,
+          'both greedy and grid placements keep the actual actors unobscured',
+        );
+      for (const other of layout.filter((candidate) => candidate !== label))
+        assert.ok(
+          Math.abs(label.x - other.x) >=
+            (label.width + other.width) / 2 + 7.9 ||
+            label.y <= other.y - other.height - 7.9 ||
+            label.y - label.height >= other.y + 7.9,
+          'actor avoidance does not stack hit targets',
+        );
+    }
+    assert.deepEqual(
+      layoutForestLabels(labels, width, height, {
+        top: 160,
+        avoid: [{ left: 0, top: 0, right: width, bottom: height }],
+      }),
+      [],
+      'completely obstructed canvas defers to the existing full action guide, never overlays a face',
+    );
+    const required = { ...labels[0], onscreen: false, distance: 50 };
+    const secret = { ...labels[3], distance: 0 };
+    const prioritized = layoutForestLabels([secret, required], width, height, {
+      top: 160,
+      avoid: actors,
+    });
+    assert.equal(prioritized[0].id, required.id);
+    assert.ok(
+      prioritized.some((label) => label.id === secret.id),
+      'safe optional discoveries remain selectable',
+    );
+  }
+  const camera = new PerspectiveCamera(40, 390 / 490, 0.1, 100);
+  camera.position.set(0, 2, 8);
+  camera.lookAt(0, 1, 0);
+  camera.updateMatrixWorld();
+  const actor = new Group();
+  const silhouette = new Mesh(
+    new BoxGeometry(4, 2, 0.3),
+    new MeshBasicMaterial(),
+  );
+  silhouette.name = 'InflatedDrawingSilhouette';
+  silhouette.position.y = 1;
+  actor.add(silhouette);
+  const before = projectForestActorBounds(actor, camera, 390, 490);
+  assert.ok(
+    before.right - before.left > 250,
+    'wide drawings protect the whole authored silhouette',
+  );
+  actor.position.x = 1;
+  actor.scale.setScalar(0.6);
+  const after = projectForestActorBounds(actor, camera, 390, 490);
+  assert.ok(
+    after.right - after.left < before.right - before.left,
+    'cached mesh follows current scale',
+  );
+  assert.ok(
+    (after.right + after.left) / 2 > (before.right + before.left) / 2,
+    'cached mesh follows current translation',
+  );
+  actor.visible = false;
+  assert.equal(projectForestActorBounds(actor, camera, 390, 490), null);
+  actor.visible = true;
+  actor.position.z = 100;
+  assert.equal(
+    projectForestActorBounds(actor, camera, 390, 490),
+    null,
+    'behind-camera actor does not reserve the screen',
+  );
+  silhouette.geometry.dispose();
+  silhouette.material.dispose();
   const resources = new Set();
   visual.root.traverse((node) => {
     if (node.isMesh) {

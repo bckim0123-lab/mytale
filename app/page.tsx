@@ -6,6 +6,11 @@ import CharacterWelcome from './character-welcome';
 import { characterRecoveryMode } from './character-recovery';
 import { withCharacterDeadline } from './character-request-deadline';
 import {
+  cancelLocalSpeech,
+  localKoreanVoice,
+  LOCAL_SPEECH_UNAVAILABLE,
+} from './local-speech';
+import {
   adventureStories,
   traitMeta,
   type AdventureChoice,
@@ -190,7 +195,7 @@ const characterStyles = [
   {
     name: '보송 3D 친구',
     detail: '안아 주고 싶은 보송한 인형 스타일',
-    preview: '/style-plush-3d-v2.png',
+    preview: '/style-plush-3d-v2.webp',
   },
 ] as const;
 const colorChoices = [
@@ -816,6 +821,8 @@ export default function Home() {
   const [bookDirection, setBookDirection] = useState<BookDirection>('next');
   const [readingAloud, setReadingAloud] = useState(false);
   const [adventureSpeaking, setAdventureSpeaking] = useState(false);
+  const [speechNotice, setSpeechNotice] = useState('');
+  const activeSpeech = useRef<SpeechSynthesisUtterance | null>(null);
   const [savedStorybooks, setSavedStorybooks] = useState<SavedStorybook[]>([]);
   const [bookArchiveStatus, setBookArchiveStatus] = useState('');
   const [bookArchiving, setBookArchiving] = useState(false);
@@ -957,12 +964,30 @@ export default function Home() {
   }, [generationRetryRemainingSeconds]);
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
-    if (step !== 'book' && 'speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-      queueMicrotask(() => setReadingAloud(false));
-    }
-    if (step !== 'adventure') queueMicrotask(() => setAdventureSpeaking(false));
+    cancelLocalSpeech(activeSpeech);
+    let active = true;
+    queueMicrotask(() => {
+      if (!active) return;
+      setReadingAloud(false);
+      setAdventureSpeaking(false);
+      setSpeechNotice('');
+    });
+    return () => {
+      active = false;
+      cancelLocalSpeech(activeSpeech);
+    };
   }, [step]);
+  useEffect(() => {
+    const stopWhenHidden = () => {
+      if (!document.hidden) return;
+      cancelLocalSpeech(activeSpeech);
+      setReadingAloud(false);
+      setAdventureSpeaking(false);
+    };
+    document.addEventListener('visibilitychange', stopWhenHidden);
+    return () =>
+      document.removeEventListener('visibilitychange', stopWhenHidden);
+  }, []);
   useEffect(() => {
     if (cameraOpen && video.current && cameraStream.current) {
       video.current.srcObject = cameraStream.current;
@@ -2080,8 +2105,7 @@ export default function Home() {
   };
   const beginAdventureChoice = (choice: AdventureChoice) => {
     if (adventurePhase !== 'idle') return;
-    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
-    setAdventureSpeaking(false);
+    stopPageSpeech();
     questFinishing.current = false;
     setPendingChoice(choice);
     setPreviewTrait(choice.trait);
@@ -2094,6 +2118,7 @@ export default function Home() {
     navigator.vibrate?.(14);
   };
   const finishSceneQuest = (choice: AdventureChoice) => {
+    stopPageSpeech();
     if (questFinishing.current) return;
     questFinishing.current = true;
     setQuestMessage(sceneQuests[scene % sceneQuests.length].success);
@@ -2176,6 +2201,7 @@ export default function Home() {
     finishSceneQuest(pendingChoice);
   };
   const cancelPendingChoice = () => {
+    stopPageSpeech();
     if (questCommitTimer.current) window.clearTimeout(questCommitTimer.current);
     questFinishing.current = false;
     setPendingChoice(null);
@@ -2328,33 +2354,60 @@ export default function Home() {
     storyPages[Math.min(page, Math.max(0, storyPages.length - 1))];
   const moveBookPage = (nextPage: number) => {
     const safePage = Math.max(0, Math.min(nextPage, storyPages.length - 1));
-    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
-    setReadingAloud(false);
+    stopPageSpeech();
     setBookDirection(safePage >= page ? 'next' : 'previous');
     setPage(safePage);
   };
-  const toggleReadAloud = () => {
-    if (!currentStoryPage || !('speechSynthesis' in window)) return;
-    window.speechSynthesis.cancel();
-    if (readingAloud) {
-      setReadingAloud(false);
+  function stopPageSpeech() {
+    cancelLocalSpeech(activeSpeech);
+    setReadingAloud(false);
+    setAdventureSpeaking(false);
+  }
+  function readLocalText(text: string, kind: 'book' | 'adventure') {
+    const wasSpeaking = kind === 'book' ? readingAloud : adventureSpeaking;
+    stopPageSpeech();
+    setSpeechNotice('');
+    if (wasSpeaking) return;
+    const voice = localKoreanVoice();
+    if (!voice) {
+      setSpeechNotice(LOCAL_SPEECH_UNAVAILABLE);
       return;
     }
-    const utterance = new SpeechSynthesisUtterance(
-      `${currentStoryPage.title}. ${currentStoryPage.body}. ${
-        currentStoryPage.quote || ''
-      }`,
+    try {
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = 'ko-KR';
+      utterance.voice = voice;
+      utterance.rate = age === '4–6세' ? 0.78 : age === '7–9세' ? 0.86 : 0.94;
+      const finish = () => {
+        if (activeSpeech.current !== utterance) return;
+        activeSpeech.current = null;
+        setReadingAloud(false);
+        setAdventureSpeaking(false);
+      };
+      utterance.onend = finish;
+      utterance.onerror = (event) => {
+        if (activeSpeech.current !== utterance) return;
+        finish();
+        if (event.error !== 'canceled' && event.error !== 'interrupted')
+          setSpeechNotice(
+            '읽어 주기를 시작하지 못했어요. 글로 함께 읽어 주세요.',
+          );
+      };
+      activeSpeech.current = utterance;
+      setReadingAloud(kind === 'book');
+      setAdventureSpeaking(kind === 'adventure');
+      window.speechSynthesis.speak(utterance);
+    } catch {
+      stopPageSpeech();
+      setSpeechNotice('읽어 주기를 시작하지 못했어요. 글로 함께 읽어 주세요.');
+    }
+  }
+  const toggleReadAloud = () => {
+    if (!currentStoryPage) return;
+    readLocalText(
+      `${currentStoryPage.title}. ${currentStoryPage.body}. ${currentStoryPage.quote || ''}`,
+      'book',
     );
-    utterance.lang = 'ko-KR';
-    utterance.rate = age === '4–6세' ? 0.78 : age === '7–9세' ? 0.86 : 0.94;
-    const koreanVoice = window.speechSynthesis
-      .getVoices()
-      .find((voice) => voice.lang.toLowerCase().startsWith('ko'));
-    if (koreanVoice) utterance.voice = koreanVoice;
-    utterance.onend = () => setReadingAloud(false);
-    utterance.onerror = () => setReadingAloud(false);
-    setReadingAloud(true);
-    window.speechSynthesis.speak(utterance);
   };
   const currentScene = activeScenes[Math.max(0, scene)];
   const previousDecision = scene > 0 ? adventureTrail[scene - 1] : null;
@@ -2401,23 +2454,7 @@ export default function Home() {
       ? `${currentScene.body.split(/[.!?]/)[0]}!`
       : currentScene.body;
   const speakAdventureGuide = (text: string) => {
-    if (!('speechSynthesis' in window)) return;
-    window.speechSynthesis.cancel();
-    if (adventureSpeaking) {
-      setAdventureSpeaking(false);
-      return;
-    }
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = 'ko-KR';
-    utterance.rate = age === '4–6세' ? 0.76 : age === '7–9세' ? 0.86 : 0.94;
-    const koreanVoice = window.speechSynthesis
-      .getVoices()
-      .find((voice) => voice.lang.toLowerCase().startsWith('ko'));
-    if (koreanVoice) utterance.voice = koreanVoice;
-    utterance.onend = () => setAdventureSpeaking(false);
-    utterance.onerror = () => setAdventureSpeaking(false);
-    setAdventureSpeaking(true);
-    window.speechSynthesis.speak(utterance);
+    readLocalText(text, 'adventure');
   };
   const sceneGuideText = `${currentScene.title}. ${sceneBody}. ${visibleChoices
     .map((choice, index) => `${index + 1}번, ${choice.label}`)
@@ -3246,9 +3283,13 @@ export default function Home() {
           </p>
           {generationFailed && usingLocalCharacter && (
             <div className="local-play-actions">
-              <Button onClick={startChat}>
-                <Play /> 내 그림 친구로 바로 놀기
+              <Button onClick={() => setStep('companion')}>
+                <Play /> AI 없이 친구 고르고 놀기
               </Button>
+              <small className="character-recovery-note">
+                준비된 봉제친구를 고르고, 내 그림의 색을 기기에서 가져올 수
+                있어요.
+              </small>
               {generationMayRetry && (
                 <Button
                   secondary
@@ -4212,6 +4253,9 @@ export default function Home() {
                       ? '안내 멈추기'
                       : '장면과 선택 읽어 주기'}
                   </button>
+                  <output className="local-speech-note">
+                    {speechNotice || '기기에 설치된 한국어 음성으로만 읽어요.'}
+                  </output>
                   <div
                     className={`choices choice-count-${visibleChoices.length}`}
                   >
@@ -4330,6 +4374,9 @@ export default function Home() {
                       <Heart /> 친구와 함께 완성하기
                     </button>
                   </div>
+                  <output className="local-speech-note">
+                    {speechNotice || '기기에 설치된 한국어 음성으로만 읽어요.'}
+                  </output>
                 </div>
               ) : choiceResult ? (
                 <div className={`stage-outcome path-${choiceResult.trait}`}>
@@ -4446,6 +4493,10 @@ export default function Home() {
               <Printer /> 인쇄·PDF로 간직하기
             </button>
           </div>
+          <output className="local-speech-note">
+            {speechNotice ||
+              '읽어 주기는 기기에 설치된 한국어 음성을 사용해요. 이야기를 음성 서버에 보내지 않아요.'}
+          </output>
           {bookArchiveStatus && (
             <output className="book-archive-status">{bookArchiveStatus}</output>
           )}
@@ -4507,6 +4558,8 @@ export default function Home() {
                       storybook === savedBook.pages ? 'true' : undefined
                     }
                     onClick={() => {
+                      stopPageSpeech();
+                      setSpeechNotice('');
                       setStorybook(savedBook.pages);
                       setStorybookImage(savedBook.image);
                       setStorybookTheme(savedBook.theme);

@@ -695,8 +695,8 @@
   word-break: keep-all;
   text-wrap: balance;
 }
-.style-preview-grid img[src='/style-plush-3d-v2.png'],
-.candidates img[src='/style-plush-3d-v2.png'] {
+.style-preview-grid img[src='/style-plush-3d-v2.webp'],
+.candidates img[src='/style-plush-3d-v2.webp'] {
   object-fit: contain;
   padding: 12px;
   background: radial-gradient(ellipse, #e9edda, #faf6e9);

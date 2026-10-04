@@ -172,16 +172,86 @@ type ForestLabel = {
   onscreen: boolean;
   distance: number;
 };
+type ForestScreenRect = {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+};
+const actorLabelMeshes = new WeakMap<T.Object3D, T.Mesh>();
+
+/** Protect the authored drawing silhouette, or the actual plush face, not a
+ * guessed central point. Bounding boxes are cached by the existing geometry. */
+export function projectForestActorBounds(
+  actor: T.Object3D,
+  camera: T.Camera,
+  width: number,
+  height: number,
+): ForestScreenRect | null {
+  if (!actor.visible) return null;
+  let mesh = actorLabelMeshes.get(actor);
+  if (!mesh) {
+    const found =
+      actor.getObjectByName('InflatedDrawingSilhouette') ??
+      actor.getObjectByName('CloudHead');
+    if (!(found instanceof T.Mesh)) return null;
+    mesh = found;
+    actorLabelMeshes.set(actor, mesh);
+  }
+  if (!mesh.visible) return null;
+  if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
+  const bounds = mesh.geometry.boundingBox;
+  if (!bounds || bounds.isEmpty()) return null;
+  mesh.updateWorldMatrix(true, false);
+  const point = new T.Vector3();
+  let left = Infinity,
+    top = Infinity,
+    right = -Infinity,
+    bottom = -Infinity;
+  for (const x of [bounds.min.x, bounds.max.x]) {
+    for (const y of [bounds.min.y, bounds.max.y]) {
+      for (const z of [bounds.min.z, bounds.max.z]) {
+        point.set(x, y, z).applyMatrix4(mesh.matrixWorld).project(camera);
+        if (point.z < -1 || point.z > 1) continue;
+        const px = (point.x * 0.5 + 0.5) * width;
+        const py = (-point.y * 0.5 + 0.5) * height;
+        left = Math.min(left, px);
+        right = Math.max(right, px);
+        top = Math.min(top, py);
+        bottom = Math.max(bottom, py);
+      }
+    }
+  }
+  if (
+    !Number.isFinite(left) ||
+    right < 0 ||
+    left > width ||
+    bottom < 0 ||
+    top > height
+  )
+    return null;
+  return { left: left - 8, top: top - 8, right: right + 8, bottom: bottom + 8 };
+}
 /** Screen-space placement respects the real HUD and packs separate hit targets.
  * The closest real destination remains reachable even at an empty map edge. */
 export function layoutForestLabels(
   labels: ForestLabel[],
   width: number,
   height: number,
+  safety: { top?: number; avoid?: ForestScreenRect[] } = {},
 ) {
   const right = Math.max(100, width - (width >= 1000 ? 340 : 14));
   const bottom = Math.max(80, height - 108);
-  const top = Math.min(width < 650 ? 186 : 212, bottom - 34);
+  const top = safety.top ?? Math.min(width < 650 ? 186 : 212, bottom - 34);
+  const avoid = safety.avoid ?? [];
+  const clearOfActors = (x: number, y: number, w: number, h: number) =>
+    avoid.every(
+      (rect) =>
+        x + w / 2 <= rect.left ||
+        x - w / 2 >= rect.right ||
+        y <= rect.top ||
+        y - h >= rect.bottom,
+    );
   const visible = labels.filter((label) => label.onscreen);
   const isSecret = (label: ForestLabel) => label.id.startsWith('secret-');
   const nearestRequired = [...labels]
@@ -213,11 +283,25 @@ export function layoutForestLabels(
       maxX = right - labelWidth / 2;
     const minY = top + label.height,
       maxY = bottom;
+    if (minY > maxY) continue;
     const desired = {
       x: T.MathUtils.clamp(label.x, minX, maxX),
       y: T.MathUtils.clamp(label.y, minY, maxY),
     };
     const candidates = [desired];
+    const xs = [minX, desired.x, maxX];
+    const ys = [minY, desired.y, maxY];
+    for (const rect of avoid) {
+      xs.push(
+        T.MathUtils.clamp(rect.left - labelWidth / 2 - 1, minX, maxX),
+        T.MathUtils.clamp(rect.right + labelWidth / 2 + 1, minX, maxX),
+      );
+      ys.push(
+        T.MathUtils.clamp(rect.top - 1, minY, maxY),
+        T.MathUtils.clamp(rect.bottom + label.height + 1, minY, maxY),
+      );
+    }
+    for (const x of xs) for (const y of ys) candidates.push({ x, y });
     for (let y = minY; y <= maxY; y += label.height + 9) {
       candidates.push({ x: desired.x, y });
       for (let x = minX; x <= maxX; x += 24) candidates.push({ x, y });
@@ -230,14 +314,16 @@ export function layoutForestLabels(
         (b.x - desired.x) ** 2 -
         (b.y - desired.y) ** 2,
     );
-    const position = candidates.find((candidate) =>
-      placed.every(
-        (other) =>
-          Math.abs(candidate.x - other.x) >=
-            (labelWidth + other.width) / 2 + 8 ||
-          candidate.y <= other.y - other.height - 8 ||
-          candidate.y - label.height >= other.y + 8,
-      ),
+    const position = candidates.find(
+      (candidate) =>
+        clearOfActors(candidate.x, candidate.y, labelWidth, label.height) &&
+        placed.every(
+          (other) =>
+            Math.abs(candidate.x - other.x) >=
+              (labelWidth + other.width) / 2 + 8 ||
+            candidate.y <= other.y - other.height - 8 ||
+            candidate.y - label.height >= other.y + 8,
+        ),
     );
     if (!position) continue;
     placed.push({
@@ -257,12 +343,19 @@ export function layoutForestLabels(
     const cellHeight = Math.max(...chosen.map((label) => label.height));
     const columns = Math.min(2, Math.floor((right - 14 + 8) / (cellWidth + 8)));
     const rows = Math.floor((bottom - top + 8) / (cellHeight + 8));
-    const count = Math.min(chosen.length, columns * rows);
-    if (columns > 0 && count > placed.length) {
+    const cells: { x: number; y: number }[] = [];
+    for (let row = 0; row < rows; row++)
+      for (let column = 0; column < columns; column++) {
+        const x = 14 + cellWidth / 2 + column * (cellWidth + 8);
+        const y = top + cellHeight + row * (cellHeight + 8);
+        if (clearOfActors(x, y, cellWidth, cellHeight)) cells.push({ x, y });
+      }
+    const count = Math.min(chosen.length, cells.length);
+    if (count > placed.length) {
       return chosen.slice(0, count).map((label, index) => ({
         id: label.id,
-        x: 14 + cellWidth / 2 + (index % columns) * (cellWidth + 8),
-        y: top + cellHeight + Math.floor(index / columns) * (cellHeight + 8),
+        x: cells[index].x,
+        y: cells[index].y,
         width: Math.min(label.width, cellWidth),
         height: label.height,
         edge: !label.onscreen,
@@ -1646,6 +1739,10 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
   let visible = true;
   let width = 1;
   let height = 1;
+  const hud = host
+    .closest('.cw-game-stage')
+    ?.querySelector<HTMLElement>('.cw-game-hud');
+  let hudBottom: number | undefined;
   function resize() {
     width = host.clientWidth;
     height = host.clientHeight;
@@ -1653,6 +1750,12 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
     renderer.setSize(width, height);
     camera.aspect = width / height;
     camera.updateProjectionMatrix();
+    if (hud)
+      hudBottom =
+        Math.max(
+          0,
+          hud.getBoundingClientRect().bottom - host.getBoundingClientRect().top,
+        ) + 10;
     for (const tag of tags) {
       // Hidden labels have zero layout size; briefly measure without painting.
       const hidden = tag.node.hidden;
@@ -1664,6 +1767,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
   }
   const resizeObserver = new ResizeObserver(resize);
   resizeObserver.observe(host);
+  if (hud) resizeObserver.observe(hud);
   resize();
   rebuild();
   const observer = new IntersectionObserver((entries) => {
@@ -2209,6 +2313,12 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
       if (reduced.matches) bed.bloom.scale.setScalar(1);
       else bed.bloom.scale.lerp(new T.Vector3(1, 1, 1), Math.min(1, dt * 4));
     });
+    camera.updateMatrixWorld();
+    const actorBounds = (
+      home || tags.length === 0 ? [] : [creature.root, ...routeFriends]
+    )
+      .map((actor) => projectForestActorBounds(actor, camera, width, height))
+      .filter((bounds): bounds is ForestScreenRect => bounds !== null);
     const labelPositions = tags.map((tag) => {
       projected.copy(tag.position).project(camera);
       return {
@@ -2224,7 +2334,10 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
         distance: tag.position.distanceToSquared(creature.root.position),
       };
     });
-    const packedLabels = layoutForestLabels(labelPositions, width, height);
+    const packedLabels = layoutForestLabels(labelPositions, width, height, {
+      top: hudBottom,
+      avoid: actorBounds,
+    });
     for (const tag of tags) {
       const position = packedLabels.find((label) => label.id === tag.id);
       tag.node.hidden = !position;

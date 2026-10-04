@@ -52,11 +52,17 @@
   border-radius: 30px;
   box-shadow: 0 14px 45px #35513d12;
 }
-.cw-forest-immersive .cw-game-title {
+.cw-forest-immersive .cw-game-hud {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
   top: 25px;
   left: 30px;
   right: 355px;
   text-shadow: 0 1px 12px #ffffeb;
+}
+.cw-forest-immersive .cw-game-title {
+  position: static;
 }
 .cw-forest-immersive .cw-game-title h1 {
   font-size: 28px;
@@ -151,15 +157,15 @@
   display: none;
 }
 .cw-stage-objective {
-  position: absolute;
-  top: 139px;
-  left: 29px;
+  position: static;
+  margin-top: 8px;
   z-index: 2;
   display: flex;
   align-items: center;
   gap: 7px;
   padding: 10px 15px;
-  max-width: calc(100% - 390px);
+  width: fit-content;
+  max-width: 100%;
   border: 1px solid #f7ffe780;
   background: #ffffffc9;
   border-radius: 40px;
@@ -386,15 +392,13 @@
   .cw-forest-immersive .cw-narrator {
     max-width: 600px;
   }
-  .cw-forest-immersive .cw-game-title {
+  .cw-forest-immersive .cw-game-hud {
     right: 20px;
     top: 20px;
     left: 24px;
   }
   .cw-stage-objective {
-    max-width: calc(100% - 45px);
-    left: 22px;
-    top: 132px;
+    max-width: 100%;
   }
   .cw-forest-immersive .cw-world-instructions {
     right: 62px;
@@ -432,7 +436,7 @@
     min-height: 410px;
     max-height: 540px;
   }
-  .cw-forest-immersive .cw-game-title {
+  .cw-forest-immersive .cw-game-hud {
     left: 19px;
     top: 18px;
   }
@@ -444,9 +448,7 @@
     letter-spacing: 1.7px;
   }
   .cw-stage-objective {
-    left: 18px;
-    top: 113px;
-    max-width: calc(100% - 36px);
+    max-width: 100%;
     padding: 9px 13px;
     font-size: 14px;
   }

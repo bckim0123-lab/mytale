@@ -1,8 +1,13 @@
 'use client';
 /* eslint-disable next/no-img-element -- Shared Sites/Vercel static transparent asset; explicit intrinsic size and fetch priority avoid layout shift. */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Heart, ImagePlus, Leaf, ShieldCheck, Sparkles } from 'lucide-react';
+import {
+  COMPANION_SAVE_KEY,
+  readCompanionSave,
+  type CompanionReadResult,
+} from './companion-save';
 import './character-welcome.css';
 
 const greetings = [
@@ -10,6 +15,15 @@ const greetings = [
   '간질간질! 나도 너랑 친구가 되고 싶어.',
   '우리, 별빛 숲에 같이 가 볼까?',
 ];
+
+export function welcomePlayLabel(
+  status: CompanionReadResult['status'] | 'checking',
+) {
+  if (status === 'checking') return '친구의 집 열기';
+  if (status === 'ready') return '내 친구·책장으로 돌아가기';
+  if (status === 'empty') return '그림 없이 3D 친구와 먼저 놀기';
+  return '보관 기록 확인하기';
+}
 
 export default function CharacterWelcome({
   onCreate,
@@ -21,6 +35,35 @@ export default function CharacterWelcome({
   generating?: boolean;
 }) {
   const [greeting, setGreeting] = useState(0);
+  const [resumeStatus, setResumeStatus] = useState<
+    CompanionReadResult['status'] | 'checking'
+  >('checking');
+  useEffect(() => {
+    let active = true;
+    // Read only the validated status, not names, artwork or story text. Opening
+    // the home remains the sole owner of restoring or repairing a save.
+    const refresh = () => {
+      if (active) setResumeStatus(readCompanionSave().status);
+    };
+    const storage = (event: StorageEvent) => {
+      if (event.key === COMPANION_SAVE_KEY || event.key === null) refresh();
+    };
+    const visible = () => {
+      if (document.visibilityState === 'visible') refresh();
+    };
+    queueMicrotask(refresh);
+    window.addEventListener('storage', storage);
+    window.addEventListener('focus', refresh);
+    window.addEventListener('pageshow', refresh);
+    document.addEventListener('visibilitychange', visible);
+    return () => {
+      active = false;
+      window.removeEventListener('storage', storage);
+      window.removeEventListener('focus', refresh);
+      window.removeEventListener('pageshow', refresh);
+      document.removeEventListener('visibilitychange', visible);
+    };
+  }, []);
   return (
     <section
       className="creation-welcome"
@@ -49,7 +92,7 @@ export default function CharacterWelcome({
               : '내 그림으로 친구 만들기'}
           </button>
           <button className="creation-secondary" onClick={onPlay}>
-            <Leaf size={18} /> 그림 없이 3D 친구와 먼저 놀기
+            <Leaf size={18} /> {welcomePlayLabel(resumeStatus)}
           </button>
         </div>
         <p className="creation-care">
@@ -97,7 +140,7 @@ export default function CharacterWelcome({
         >
           <span key={greeting} className={greeting ? 'creation-pop' : ''}>
             <img
-              src="/style-plush-3d-v2.png"
+              src="/style-plush-3d-v2.webp"
               alt="둥근 눈과 작은 발, 연둣빛 잎을 가진 보송한 캐릭터 스타일 예시"
               width={1224}
               height={1285}

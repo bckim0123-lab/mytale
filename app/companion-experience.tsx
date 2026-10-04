@@ -1789,10 +1789,16 @@ export default function CompanionExperience({
             className={`cw-forest-layout cw-forest-immersive cw-chapter-${forest.chapter}`}
           >
             <section ref={gameStage} className="cw-game-stage">
-              <div className="cw-game-title">
-                <span className="cw-eyebrow">MOONLIGHT FOREST</span>
-                <h1>{view.title}</h1>
-                <span>{view.chapterLabel}</span>
+              <div className="cw-game-hud">
+                <div className="cw-game-title">
+                  <span className="cw-eyebrow">MOONLIGHT FOREST</span>
+                  <h1>{view.title}</h1>
+                  <span>{view.chapterLabel}</span>
+                </div>
+                <div className="cw-stage-objective">
+                  <Sparkles size={15} />
+                  <span>{view.objective}</span>
+                </div>
               </div>
               {save.appearance.drawingAssetId && !art.png ? (
                 <output className="cw-art-loading">
@@ -1817,10 +1823,6 @@ export default function CompanionExperience({
                 chapter={forest.chapter}
                 crafted={forest.bridges || forest.gardenBloom}
               />
-              <div className="cw-stage-objective">
-                <Sparkles size={15} />
-                <span>{view.objective}</span>
-              </div>
               <div className="cw-stage-tools">
                 <button
                   className="cw-pet-friend"

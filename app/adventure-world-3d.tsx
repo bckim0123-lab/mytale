@@ -172,8 +172,7 @@ export function AdventureWorld3D(props: AdventureWorld3DProps) {
     let failed = false;
     let asyncCleanup: (() => void) | undefined;
     let textureRequest = 0;
-    let loadedImage = '';
-    let loadingImage = '';
+    let requestedImage = '';
     let reducedMotion = window.matchMedia(
       '(prefers-reduced-motion: reduce)',
     ).matches;
@@ -644,7 +643,6 @@ export function AdventureWorld3D(props: AdventureWorld3DProps) {
 
         const loadCharacter = async (source: string) => {
           const request = ++textureRequest;
-          loadingImage = source;
           try {
             const texture = await new THREE.TextureLoader().loadAsync(source);
             if (disposed || request !== textureRequest) {
@@ -652,11 +650,10 @@ export function AdventureWorld3D(props: AdventureWorld3DProps) {
               return;
             }
             installCharacterTexture(texture);
-            loadedImage = source;
           } catch {
+            if (disposed || request !== textureRequest) return;
             if (source !== DEFAULT_CHARACTER_ASSET) {
-              loadingImage = '';
-              void loadCharacter(DEFAULT_CHARACTER_ASSET);
+              await loadCharacter(DEFAULT_CHARACTER_ASSET);
               return;
             }
             failToFallback();
@@ -726,8 +723,10 @@ export function AdventureWorld3D(props: AdventureWorld3DProps) {
           const elapsed = clock.elapsedTime;
           const current = latestProps.current;
           const desiredImage = current.image || DEFAULT_CHARACTER_ASSET;
-          if (desiredImage !== loadedImage && desiredImage !== loadingImage)
+          if (desiredImage !== requestedImage) {
+            requestedImage = desiredImage;
             void loadCharacter(desiredImage);
+          }
 
           if (current.sceneIndex !== lastScene) {
             lastScene = current.sceneIndex;
@@ -959,9 +958,8 @@ export function AdventureWorld3D(props: AdventureWorld3DProps) {
         };
         asyncCleanup = cleanup;
 
-        await loadCharacter(
-          latestProps.current.image || DEFAULT_CHARACTER_ASSET,
-        );
+        requestedImage = latestProps.current.image || DEFAULT_CHARACTER_ASSET;
+        await loadCharacter(requestedImage);
         if (disposed || failed) {
           cleanup();
           return;

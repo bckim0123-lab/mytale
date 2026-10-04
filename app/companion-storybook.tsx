@@ -25,6 +25,11 @@ import {
 } from './storybook-export';
 import { downloadLocalFile } from './drawing-assets';
 import {
+  cancelLocalSpeech,
+  localKoreanVoice,
+  LOCAL_SPEECH_UNAVAILABLE,
+} from './local-speech';
+import {
   forestKeepsakeMemory,
   forestKeepsakeSvg,
   getForestKeepsake,
@@ -455,7 +460,6 @@ function CompanionStorybookReader({
   const [exporting, setExporting] = useState(false);
   const [exportStatus, setExportStatus] = useState('');
   const speech = useRef<SpeechSynthesisUtterance | null>(null);
-  const localVoice = useRef<SpeechSynthesisVoice | null>(null);
   const frame = useRef<HTMLElement>(null);
   const pageMoved = useRef(false);
   const exportJob = useRef<AbortController | null>(null);
@@ -492,34 +496,24 @@ function CompanionStorybookReader({
     )
       return;
     const updateVoices = () => {
-      localVoice.current =
-        window.speechSynthesis
-          .getVoices()
-          .find(
-            (voice) =>
-              voice.localService && voice.lang.toLowerCase().startsWith('ko'),
-          ) ?? null;
-      setSpeechAvailable(Boolean(localVoice.current));
+      setSpeechAvailable(Boolean(localKoreanVoice()));
+    };
+    const stopWhenHidden = () => {
+      if (!document.hidden) return;
+      cancelLocalSpeech(speech);
+      setSpeaking(false);
     };
     updateVoices();
     window.speechSynthesis.addEventListener('voiceschanged', updateVoices);
+    document.addEventListener('visibilitychange', stopWhenHidden);
     return () => {
       window.speechSynthesis.removeEventListener('voiceschanged', updateVoices);
-      if (speech.current) {
-        speech.current.onend = null;
-        speech.current.onerror = null;
-        window.speechSynthesis?.cancel();
-        speech.current = null;
-      }
+      document.removeEventListener('visibilitychange', stopWhenHidden);
+      cancelLocalSpeech(speech);
     };
   }, []);
   function stopSpeech() {
-    if (speech.current) {
-      speech.current.onend = null;
-      speech.current.onerror = null;
-      window.speechSynthesis.cancel();
-      speech.current = null;
-    }
+    cancelLocalSpeech(speech);
     setSpeaking(false);
   }
   function readPage() {
@@ -527,37 +521,41 @@ function CompanionStorybookReader({
       stopSpeech();
       return;
     }
-    if (!speechAvailable || !localVoice.current) return;
-    const utterance = new SpeechSynthesisUtterance(
-      `${storybookChapterTitle(book, activePage)}. ${book.pages[activePage]}`,
-    );
-    utterance.lang = 'ko-KR';
-    utterance.rate = 0.86;
-    utterance.pitch = 1.04;
-    utterance.voice = localVoice.current;
-    utterance.onend = () => {
-      if (speech.current === utterance) {
+    const voice = localKoreanVoice();
+    if (!voice) {
+      setSpeechAvailable(false);
+      setSpeechError(LOCAL_SPEECH_UNAVAILABLE);
+      return;
+    }
+    try {
+      const utterance = new SpeechSynthesisUtterance(
+        `${storybookChapterTitle(book, activePage)}. ${book.pages[activePage]}`,
+      );
+      utterance.lang = 'ko-KR';
+      utterance.rate = 0.86;
+      utterance.pitch = 1.04;
+      utterance.voice = voice;
+      utterance.onend = () => {
+        if (speech.current === utterance) {
+          setSpeaking(false);
+          speech.current = null;
+        }
+      };
+      utterance.onerror = (event) => {
+        if (speech.current !== utterance) return;
         setSpeaking(false);
         speech.current = null;
-      }
-    };
-    utterance.onerror = (event) => {
-      if (speech.current !== utterance) return;
-      setSpeaking(false);
-      speech.current = null;
-      if (event.error !== 'canceled' && event.error !== 'interrupted')
-        setSpeechError(
-          '이 기기에서 읽어 주기를 시작하지 못했어요. 글로 함께 읽어 주세요.',
-        );
-    };
-    speech.current = utterance;
-    setSpeechError('');
-    setSpeaking(true);
-    try {
+        if (event.error !== 'canceled' && event.error !== 'interrupted')
+          setSpeechError(
+            '이 기기에서 읽어 주기를 시작하지 못했어요. 글로 함께 읽어 주세요.',
+          );
+      };
+      speech.current = utterance;
+      setSpeechError('');
+      setSpeaking(true);
       window.speechSynthesis.speak(utterance);
     } catch {
-      speech.current = null;
-      setSpeaking(false);
+      stopSpeech();
       setSpeechError(
         '이 기기에서 읽어 주기를 시작하지 못했어요. 글로 함께 읽어 주세요.',
       );
