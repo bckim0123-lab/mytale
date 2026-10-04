@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import ts from 'typescript';
 import { withCharacterDeadline } from '../app/character-request-deadline.ts';
+import { imageInputLimitError } from '../app/image-input-limits.ts';
 
 const source = await readFile('app/page.tsx', 'utf8');
 const ast = ts.createSourceFile(
@@ -80,6 +81,21 @@ for (const component of ['CompanionExperience', 'CharacterWelcome']) {
   }
 }
 
+for (const generated of [[], [null, 'approved-picture'], [null, null]]) {
+  const steps = [];
+  const before = [...generated];
+  loadJsxHandler('CompanionExperience', 'onBack', {
+    generated,
+    setStep: (step) => steps.push(step),
+  })();
+  assert.deepEqual(steps, [generated.some(Boolean) ? 'character' : 'welcome']);
+  assert.deepEqual(
+    generated,
+    before,
+    'Returning from a failed scene preserves completed styles.',
+  );
+}
+
 function createFixture() {
   const state = {
     image: 'previous-drawing',
@@ -148,6 +164,7 @@ function createFixture() {
     defaultPersona: { name: '친구' },
     Date: { now: () => now },
     FileReader: FakeReader,
+    imageInputLimitError: () => null,
     Image: FakeImage,
     document: {
       createElement: () => {
@@ -192,6 +209,31 @@ function createFixture() {
   };
 }
 const file = (name) => ({ name, type: 'image/png', size: 1000 });
+
+{
+  const fixture = createFixture();
+  const tinyButHugePng = Buffer.alloc(24);
+  Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(tinyButHugePng);
+  tinyButHugePng.writeUInt32BE(13, 8);
+  tinyButHugePng.write('IHDR', 12);
+  tinyButHugePng.writeUInt32BE(30000, 16);
+  tinyButHugePng.writeUInt32BE(30000, 20);
+  const inputBindings = { ...fixture.bindings, imageInputLimitError };
+  delete inputBindings.load;
+  const load = loadArrow('load', inputBindings);
+  load(file('huge.png'));
+  fixture.readers[0].result = `data:image/png;base64,${tinyButHugePng.toString('base64')}`;
+  fixture.readers[0].onload();
+  assert.equal(
+    fixture.decoders.length,
+    0,
+    'A tiny oversized header never creates Image or decoded pixels.',
+  );
+  assert.equal(fixture.state.image, 'previous-drawing');
+  assert.deepEqual(fixture.state.generated, ['previous-result']);
+  assert.match(fixture.state.uploadError, /이전 그림은 그대로/);
+  assert.equal(fixture.state.preparingImage, false);
+}
 
 function leaveUpload(fixture) {
   let callback;

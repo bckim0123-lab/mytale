@@ -112,7 +112,155 @@ assert.equal(
   'disposed world never reschedules',
 );
 
+const travelStop = runInNewContext(
+  ts.transpileModule(
+    `
+let destination = { x: 1 }, pendingId = 'garden-gate', journeyTarget = { x: 2 }, pathQueue = [1];
+const keys = new Set(['w']), joystick = { set() {} }, cursor = { visible: true };
+const statuses = [], options = { onStatus: text => statuses.push(text) };
+function cancelPointerGesture() {}
+${actualFunction('cancelJourney')}
+${actualFunction('stop')}
+${actualFunction('keyDown')}
+const home = false, paused = false;
+({ stop, keyDown, cancelJourney, statuses, start: () => { destination = {}; pendingId = 'garden-gate'; journeyTarget = {}; }, snapshot: () => ({ destination, pendingId, journeyTarget, pathQueue, visible: cursor.visible, keyCount: keys.size }) });
+`,
+    { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
+  ).outputText,
+);
+travelStop.stop();
+assert.equal(travelStop.statuses.length, 1);
+assert.equal(
+  travelStop.statuses[0],
+  '',
+  'Canceled travel cannot retain an in-progress status.',
+);
+assert.equal(travelStop.snapshot().destination, null);
+assert.equal(travelStop.snapshot().pendingId, null);
+assert.equal(travelStop.snapshot().journeyTarget, null);
+assert.equal(travelStop.snapshot().pathQueue.length, 0);
+assert.equal(travelStop.snapshot().keyCount, 0);
+assert.equal(travelStop.snapshot().visible, false);
+travelStop.stop();
+assert.equal(
+  travelStop.statuses.length,
+  1,
+  'Idle cleanup preserves unrelated load/error messages.',
+);
+travelStop.start();
+travelStop.keyDown({ key: 'ArrowRight', preventDefault() {} });
+assert.equal(travelStop.snapshot().destination, null);
+assert.equal(
+  travelStop.statuses.length,
+  2,
+  'Keyboard steering clears automatic-travel status.',
+);
+travelStop.start();
+travelStop.cancelJourney();
+assert.equal(
+  travelStop.statuses.length,
+  3,
+  'Manual joystick cancellation clears automatic-travel status.',
+);
+const steeringBranch = findAll(
+  ast,
+  (node) =>
+    ts.isIfStatement(node) &&
+    node.expression.getText(ast) === 'moveVector.lengthSq() > 0.04',
+)[0];
+assert.ok(steeringBranch);
+assert.match(
+  steeringBranch.thenStatement.getText(ast),
+  /cancelJourney\(\)/,
+  'The actual animation steering branch uses the same cancellation.',
+);
+
 const wrapper = readFileSync('app/companion-world.tsx', 'utf8');
+const disposeNode = findAll(
+  ast,
+  (node) =>
+    ts.isMethodDeclaration(node) &&
+    node.name.getText(ast) === 'dispose' &&
+    node.getText(ast).includes('renderer.forceContextLoss()'),
+)[0];
+assert.ok(disposeNode);
+const disposalCalls = [];
+const record = (name) => () => disposalCalls.push(name);
+const disposable = (name) => ({ dispose: record(name) });
+const disposal = runInNewContext(
+  ts.transpileModule(
+    `
+let disposed = false;
+function dispose() ${disposeNode.body.getText(ast)}
+({ dispose, isDisposed: () => disposed });
+`,
+    { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
+  ).outputText,
+  {
+    frame: 17,
+    cancelAnimationFrame: record('frame'),
+    resizeObserver: { disconnect: record('resize') },
+    observer: { disconnect: record('intersection') },
+    blur: record('blur'),
+    labelDisposers: [record('labels')],
+    renderer: {
+      domElement: { removeEventListener() {}, remove: record('canvas') },
+      dispose: record('renderer'),
+      // Model an unavailable WEBGL_lose_context extension: no implicit cleanup.
+      forceContextLoss() {},
+    },
+    pointerDown() {},
+    pointerMove() {},
+    pointerUp() {},
+    pointerCancel() {},
+    keyDown() {},
+    keyUp() {},
+    window: { removeEventListener() {} },
+    creature: disposable('creature'),
+    diorama: disposable('diorama'),
+    pawprints: disposable('instance-buffer'),
+    sun: { shadow: disposable('shadow-target') },
+    geometries: [disposable('geometry')],
+    materials: [disposable('material')],
+    textures: [disposable('texture')],
+    env: disposable('environment'),
+    labelLayer: { remove: record('label-layer') },
+    scene: { clear: record('scene') },
+  },
+);
+disposal.dispose();
+assert.equal(disposal.isDisposed(), true);
+for (const resource of [
+  'frame',
+  'resize',
+  'intersection',
+  'creature',
+  'diorama',
+  'instance-buffer',
+  'shadow-target',
+  'geometry',
+  'material',
+  'texture',
+  'environment',
+  'renderer',
+  'canvas',
+  'label-layer',
+  'scene',
+]) {
+  assert.equal(
+    disposalCalls.filter((item) => item === resource).length,
+    1,
+    `${resource} released without context-loss support`,
+  );
+}
+const disposedCount = disposalCalls.length;
+disposal.dispose();
+assert.equal(
+  disposalCalls.length,
+  disposedCount,
+  'Repeated cleanup is harmless.',
+);
+
 const wrapperAst = ts.createSourceFile(
   'wrapper.tsx',
   wrapper,

@@ -170,11 +170,34 @@ try {
               'not completed before exact melody length',
             );
           }
-          for (const id of FOREST_LANTERN_IDS) interact(id);
+          for (const [index, id] of FOREST_LANTERN_IDS.entries()) {
+            interact(id);
+            if (difficulty !== 'simple' && index < 2) {
+              assert.match(
+                state.message,
+                owlChoice === 'listen' ? /반딧불/ : /부엉이/,
+              );
+              assert.doesNotMatch(state.message, /손을 마주치/);
+              if (owlChoice === 'listen')
+                assert.doesNotMatch(state.message, /부엉이도 날개/);
+            }
+          }
           event({ type: 'choose-ending', choice: ending });
           assert.equal(state.chapter, 'complete');
           const book = getForestEnding(state);
           assert.equal(book.paragraphs.length, 5);
+          assert.doesNotMatch(
+            book.paragraphs.join(' '),
+            /소매를|손을 짝|손을 내밀/,
+          );
+          if (difficulty === 'challenge') {
+            assert.match(
+              book.paragraphs[2],
+              owlChoice === 'listen'
+                ? /기다려 주는 친구들/
+                : /친구들의 소리를 만나/,
+            );
+          }
           assert.ok(
             book.paragraphs[2].includes(
               melody.map((id) => names[id]).join(', '),

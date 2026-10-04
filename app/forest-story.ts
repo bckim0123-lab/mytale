@@ -776,7 +776,7 @@ export function transitionForest(
         state,
         { ending: event.choice, chapter: 'complete' },
         event.choice === 'sky'
-          ? `${getForestCompanion(state.route)}와 손을 번쩍! ${craftName(state)}의 표식을 닮은 빛이 하늘로 올라갔어. 달빛 나무가 눈을 뜨자 모두 “와아!” 하고 웃어.`
+          ? `${getForestCompanion(state.route)}와 함께 환호했어! ${craftName(state)}의 표식을 닮은 빛이 하늘로 올라갔어. 달빛 나무가 눈을 뜨자 모두 “와아!” 하고 웃어.`
           : `${getForestCompanion(state.route)}가 앞장서고 우리는 빛을 나누었어. ${craftName(state)}부터 집 앞까지 환해졌어. “오늘은 나도 혼자 돌아갈 수 있겠다!”`,
         event.choice === 'sky'
           ? `${getForestCompanion(state.route)}와 별을 띄웠어! 우리 이야기가 책이 됐어.`
@@ -818,8 +818,8 @@ export function transitionForest(
       id === 'secret-shell'
         ? `돌 아래서 속삭이는 조개를 찾았어! 모모가 귀에 대 보래. “쉬이이…” 작은 파도 소리야. 축제에 가져가 볼까?`
         : id === 'secret-mushroom'
-          ? '풀잎을 살짝 들자 포근한 버섯 배지가 짠! 포포가 네 옷깃에 달아 주었어. “우리 탐험대 표식이네!”'
-          : `${companion}가 가리킨 잎 사이에 별빛 조각이 반짝! 손바닥 위에서 데굴 굴리니 주변 잎들이 노랗게 빛나. 등불 곁에 놓아 보자.`,
+          ? '풀잎을 살짝 들자 포근한 버섯 배지가 짠! 포포가 건네주었어. “우리 탐험대 표식이네!”'
+          : `${companion}가 가리킨 잎 사이에 별빛 조각이 반짝! 가까이에서 살펴보니 주변 잎들이 노랗게 빛나. 등불 곁에 놓아 보자.`,
       `${discovery.label} 발견! ${companion}와 살짝 간직하자.`,
     );
   }
@@ -875,7 +875,7 @@ export function transitionForest(
         return advance(
           state,
           { chapter: 'grove' },
-          `수달 모모가 ${craftName(state)}를 톡톡 두드려 보고 따라왔어. 나무 아래에서 부엉이가 입을 열었다 닫아. “노래가… 잘 안 나와.” 모모가 네 손을 꼭 잡아.`,
+          `수달 모모가 ${craftName(state)}를 톡톡 두드려 보고 따라왔어. 나무 아래에서 부엉이가 입을 열었다 닫아. “노래가… 잘 안 나와.” 모모가 네 곁을 지켜 줘.`,
           `수달 모모와 ${craftName(state)}를 건넜어. 부엉이가 떨린대!`,
         );
       return advance(
@@ -896,7 +896,7 @@ export function transitionForest(
           { collected: [...state.collected, id] },
           state.collected.length === 2
             ? '씨앗 세 개를 다 모았어! 포포가 화단에 놓는 동안 우리는 물길 조각을 이어 보자.'
-            : '동그란 씨앗이 손바닥에 쏙! 포포에게 가져다주니 빈 화단 옆에 조심히 놓았어.',
+            : '동그란 씨앗을 찾았어! 포포에게 가져다주니 빈 화단 옆에 조심히 놓았어.',
           state.collected.length === 2
             ? '세 개 다 찾았어! 포포와 물길을 이어 줘.'
             : '씨앗을 찾았어! 포포가 잘 보관해 줄게.',
@@ -1076,7 +1076,7 @@ export function transitionForest(
           ? `${getForestCompanion(state.route)}가 세 번째 등불을 받쳐 주자 달빛 나무가 반짝! 우리가 고른 ${craftName(state)}의 표식도 빛나. 이 빛을 어디에 남길까?`
           : (state.discoveries ?? []).includes('secret-star')
             ? `${getForestCompanion(state.route)}와 등불 옆에 별빛 조각을 놓았어. 빛이 반사되어 잎사귀에 작은 별이 춤춰! 등불 ${lanterns.length}개가 켜졌어.`
-            : `${getForestCompanion(state.route)}가 등불을 잡고 네가 불을 켜. ${lanterns.length}개가 반짝! 손을 마주치니 부엉이도 날개로 짝짝!`,
+            : `${getForestCompanion(state.route)}가 등불을 잡고 네가 불을 켜. ${lanterns.length}개가 반짝! 우리가 환호하자 ${state.owlChoice === 'invite' ? '부엉이도 날개로 짝짝!' : '반딧불도 빛을 깜빡여!'}`,
         lanterns.length === 3
           ? `${getForestCompanion(state.route)}와 다 켰어! 빛을 어디로 보낼까?`
           : `${getForestCompanion(state.route)}와 반짝! 등불 ${lanterns.length}개가 켜졌어.`,
@@ -1128,11 +1128,11 @@ function editionTwoEnding(state: ForestState): ForestEnding {
           ? `${companion}와 기다렸어요. 부엉이가 ${melodyWords(state)}! 하고 불렀어요. 반딧불도 왔어요.`
           : `${companion}와 톡톡! ${melodyWords(state)}! 부엉이도 함께 불렀어요.`,
         `${companion}와 등불을 켰어요.${foundStar ? ' 별빛 조각도 반짝!' : ''} ${sky ? '하늘로 별이 둥실! 나무가 깨어났어요.' : '집 앞이 환해졌어요. 모두 손을 흔들었어요.'}`,
-        `“또 놀자!” ${companion}와 손을 짝! ${design}${river ? '와' : '과'} 오늘의 모험을 책에 담았어요.`,
+        `“또 놀자!” ${companion}와 반갑게 인사했어요. ${design}${river ? '와' : '과'} 오늘의 모험을 책에 담았어요.`,
       ]
     : [
         river
-          ? '작은 친구 둘이 시냇가에 도착했어요. 물에서 얼굴을 내민 수달 모모가 다리의 빈 곳을 가리켰어요. “나는 가지를 잡을게. 너희가 맞춰 줄래?” 두 친구는 소매를 걷었어요.'
+          ? '작은 친구 둘이 시냇가에 도착했어요. 물에서 얼굴을 내민 수달 모모가 다리의 빈 곳을 가리켰어요. “나는 가지를 잡을게. 너희가 맞춰 줄래?” 두 친구는 조각을 살펴보았어요.'
           : '작은 친구 둘이 정원에 들어섰어요. 토끼 포포가 빈 물뿌리개를 흔들었어요. 달그락! “꽃들이 목말라하는데 물길이 끊겼어.” 두 친구는 포포 옆에 쪼그려 앉았어요.',
         (river
           ? `모모가 한쪽 끝을 잡고 두 친구가 조각을 밀었어요. 어긋난 곳은 살짝 돌리고, 마지막 빈칸에는 꼭 맞는 조각을 쏙! ${design}가 완성됐어요. 모모가 먼저 발을 톡 굴리고 폴짝 건넜어요.`
@@ -1140,19 +1140,21 @@ function editionTwoEnding(state: ForestState): ForestEnding {
           (foundRoute
             ? river
               ? ' 돌 아래서 속삭이는 조개도 찾았어요. 모모와 번갈아 귀에 대자 작은 파도 소리가 났어요.'
-              : ' 풀잎 아래에는 포근한 버섯 배지가 숨어 있었어요. 포포가 탐험대 표식이라며 옷깃에 달아 주었어요.'
+              : ' 풀잎 아래에는 포근한 버섯 배지가 숨어 있었어요. 포포가 탐험대 표식이라며 건네주었어요.'
             : ''),
         (listen
           ? `${companion}와 두 친구가 부엉이 곁에 앉았어요. 아무도 서두르라고 하지 않았어요. 부엉이가 숨을 고르더니 ${melodyWords(state)}… 조그만 노래를 꺼냈어요. 종으로 답하자 반딧불이 모여들었어요.`
           : `${companion}가 발로 박자를 톡톡 밟았어요. 두 친구도 ${melodyWords(state)}! 하고 불렀어요. 부엉이가 머뭇거리다 마지막 소리를 보탰어요. 다시 부를 때는 날개까지 활짝 폈어요. “나도 축제에 갈래!”`) +
           (thoughtful
-            ? ' 혼자서는 멈추던 노래가 친구들의 소리를 만나 끝까지 이어졌어요.'
+            ? listen
+              ? ' 기다려 주는 친구들 덕분에 노래가 끝까지 이어졌어요.'
+              : ' 혼자서는 멈추던 노래가 친구들의 소리를 만나 끝까지 이어졌어요.'
             : ''),
         `${companion}가 등불을 받치고 두 친구가 하나씩 불을 켰어요.${foundStar ? ' 나무 곁에서 찾은 별빛 조각을 가까이 놓자, 잎사귀 위에 작은 별들이 춤췄어요.' : ''} ` +
           (sky
             ? `${design}의 표식을 닮은 빛을 하늘로 보냈어요. 점점 작아지는 별을 따라 모두 고개를 들었어요. 달빛 나무가 눈을 뜨고 가지를 쭉 폈어요!`
             : `${design}에서 집 앞까지 빛을 나눴어요. 작은 계단도 구불구불한 길도 잘 보였어요. 돌아가던 친구가 뒤돌아 손을 흔들자 달빛 나무도 가지를 흔들었어요.`),
-        `${companion}가 돌아가는 두 친구에게 손을 내밀었어요. 짝! “다음에는 내가 너희를 도와줄게.” 두 친구는 ${design}${river ? '를' : '을'} 한 번 돌아보았어요.${foundRoute ? ` ${routeTreasure}를 만지니 함께 찾던 순간이 떠올랐어요.` : ''}${foundStar ? ' 별빛 조각은 마지막 장을 환하게 밝혔어요.' : ''} 오늘 우리가 고르고 만든 일들이 이 책에 고스란히 남았어요.`,
+        `${companion}가 돌아가는 두 친구에게 인사했어요. “다음에는 내가 너희를 도와줄게.” 두 친구는 ${design}${river ? '를' : '을'} 한 번 돌아보았어요.${foundRoute ? ` ${routeTreasure}를 살펴보니 함께 찾던 순간이 떠올랐어요.` : ''}${foundStar ? ' 별빛 조각은 마지막 장을 환하게 밝혔어요.' : ''} 오늘 우리가 고르고 만든 일들이 이 책에 고스란히 남았어요.`,
       ];
   return {
     title: sky

@@ -39,6 +39,7 @@
   gap: 16px;
 }
 .cw-brand {
+  min-height: 44px;
   border: 0;
   background: transparent;
   display: flex;
@@ -80,8 +81,8 @@
   color: #3f6d50;
 }
 .cw-icon {
-  width: 40px;
-  height: 40px;
+  width: 44px;
+  height: 44px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1025,14 +1026,15 @@
   max-width: 1460px;
   margin: 0 auto;
   padding: 20px 4% 25px;
-  font-size: 10px;
-  color: #95a08c;
+  font-size: 12px;
+  color: #64735b;
 }
 .cw-footer button {
   border: 0;
   background: none;
-  font-size: 10px;
-  color: #839075;
+  min-height: 44px;
+  font-size: 14px;
+  color: #546b57;
 }
 .cw-alert {
   display: block;
@@ -1361,7 +1363,7 @@
 @media (max-width: 760px) {
   .cw-header {
     height: 66px;
-    padding: 0 4%;
+    padding: 0 10px;
     gap: 7px;
   }
   .cw-brand {
@@ -1375,16 +1377,17 @@
     gap: 0;
   }
   .cw-header nav button {
-    font-size: 11px;
-    padding: 10px 9px;
-    gap: 5px;
+    min-height: 44px;
+    font-size: 14px;
+    padding: 10px 6px;
+    white-space: nowrap;
   }
   .cw-header nav svg {
-    width: 14px;
+    display: none;
   }
   .cw-header > .cw-icon {
-    width: 33px;
-    height: 33px;
+    width: 44px;
+    height: 44px;
   }
   .cw-home-layout {
     display: flex;
@@ -1430,6 +1433,19 @@
   }
   .cw-pet-controls {
     bottom: 12px;
+    gap: 6px;
+  }
+  .cw-pet-controls button:not(.cw-icon) {
+    min-height: 44px;
+    padding: 10px 8px;
+    gap: 4px;
+    font-size: 14px;
+    white-space: nowrap;
+  }
+  .cw-pet-controls svg {
+    width: 16px;
+    height: 16px;
+    flex: none;
   }
   .cw-stage-hint {
     display: none;
@@ -1474,7 +1490,7 @@
     padding: 20px 6%;
     flex-direction: column;
     align-items: center;
-    font-size: 9px;
+    font-size: 12px;
     gap: 10px;
   }
   .cw-forest-layout {

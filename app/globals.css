@@ -4533,6 +4533,10 @@ body {
 .center > p {
   color: #51655d;
 }
+.upload > h2 {
+  word-break: keep-all;
+  text-wrap: balance;
+}
 .hero-art {
   position: relative;
   height: 100%;

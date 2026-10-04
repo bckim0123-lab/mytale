@@ -443,7 +443,8 @@ for (const [state, id] of [
 // Execute the real native-dialog effect: content replacement must recover
 // lost focus, while normal renders leave an active control alone.
 const dialogEffect = findAll(
-  (node) => ts.isCallExpression(node) &&
+  (node) =>
+    ts.isCallExpression(node) &&
     node.expression.getText(ast) === 'useEffect' &&
     node.arguments[0]?.getText(ast).includes('current.showModal()'),
 )[0];
@@ -452,26 +453,92 @@ for (const state of ['new', 'switched', 'focused', 'closed', 'absent']) {
   const calls = [];
   const inside = {};
   const doc = { activeElement: state === 'focused' ? inside : {} };
-  const target = { focus: (options) => calls.push(['focus', options.preventScroll]) };
+  const target = {
+    focus: (options) => calls.push(['focus', options.preventScroll]),
+  };
   const current = {
     open: state !== 'new',
     contains: (element) => element === inside,
-    showModal() { this.open = true; doc.activeElement = inside; calls.push('show'); },
-    close() { this.open = false; calls.push('close'); },
-    querySelector: (selector) => { calls.push(selector); return target; },
+    showModal() {
+      this.open = true;
+      doc.activeElement = inside;
+      calls.push('show');
+    },
+    close() {
+      this.open = false;
+      calls.push('close');
+    },
+    querySelector: (selector) => {
+      calls.push(selector);
+      return target;
+    },
   };
   evaluate(dialogEffect.arguments[0], {
     dialog: { current: state === 'absent' ? null : current },
     document: doc,
     world: { current: { stop: () => calls.push('stop') } },
-    book: state === 'closed' ? null : {}, chat: false, settings: false,
+    book: state === 'closed' ? null : {},
+    chat: false,
+    settings: false,
   })();
   if (state === 'new') assert.deepEqual(calls, ['stop', 'show']);
-  if (state === 'switched') assert.deepEqual(calls, ['stop', '.csb-screen-page', ['focus', true]]);
+  if (state === 'switched')
+    assert.deepEqual(calls, ['stop', '.csb-screen-page', ['focus', true]]);
   if (state === 'focused') assert.deepEqual(calls, ['stop']);
   if (state === 'closed') assert.deepEqual(calls, ['close']);
   if (state === 'absent') assert.deepEqual(calls, []);
 }
+
+const storyFocusEffect = findAll(
+  (node) =>
+    ts.isCallExpression(node) &&
+    node.expression.getText(ast) === 'useEffect' &&
+    node.arguments[0]?.getText(ast).includes('storyPanel.current?.focus'),
+)[0];
+assert.ok(storyFocusEffect);
+for (const blockedBy of [
+  null,
+  'active-control',
+  'home',
+  'loading',
+  'book',
+  'chat',
+  'settings',
+  'toybox',
+]) {
+  const calls = [],
+    body = {};
+  evaluate(storyFocusEffect.arguments[0], {
+    document: {
+      body,
+      activeElement: blockedBy === 'active-control' ? {} : body,
+    },
+    mode: blockedBy === 'home' ? 'home' : 'forest',
+    hydrated: blockedBy !== 'loading',
+    book: blockedBy === 'book',
+    chat: blockedBy === 'chat',
+    settings: blockedBy === 'settings',
+    toybox: blockedBy === 'toybox',
+    storyPanel: {
+      current: { focus: (options) => calls.push(options.preventScroll) },
+    },
+  })();
+  assert.deepEqual(
+    calls,
+    blockedBy ? [] : [true],
+    `Focus ownership respected: ${blockedBy}`,
+  );
+}
+
+const nextTarget = findAll((node) => ts.isVariableDeclaration(node) && node.name.getText(ast) === 'compactNextTarget')[0];
+assert.ok(nextTarget?.initializer);
+const portal = { kind: 'portal', available: true, complete: false };
+assert.strictEqual(evaluate(nextTarget.initializer, { view: { hotspots: [
+  { kind: 'secret', available: true, complete: false },
+  { kind: 'bell', available: true, complete: false },
+  { kind: 'seed', available: true, complete: true },
+  portal,
+] } }), portal, 'The compact action exposes the next chapter without choosing a secret or melody answer.');
 
 console.log(
   'Forest UI race smoke passed: actual delayed-flush handlers, navigation/dialog/unmount/reset cancellation, stale callback rejection, newer-request ownership and preserved normal play; no browser/network.',

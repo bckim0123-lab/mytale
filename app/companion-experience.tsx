@@ -208,6 +208,7 @@ export default function CompanionExperience({
   const [chatStatus, setChatStatus] = useState('');
   const world = useRef<CompanionWorldHandle>(null);
   const gameStage = useRef<HTMLElement>(null);
+  const storyPanel = useRef<HTMLElement>(null);
   const upload = useRef<HTMLInputElement>(null);
   const audio = useRef<AudioContext | null>(null);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
@@ -236,7 +237,7 @@ export default function CompanionExperience({
     (hot) =>
       hot.available &&
       !hot.complete &&
-      ['wood', 'seed', 'flower', 'water', 'bridge', 'lantern'].includes(
+      ['wood', 'seed', 'flower', 'water', 'bridge', 'lantern', 'portal'].includes(
         hot.kind,
       ),
   );
@@ -403,6 +404,20 @@ export default function CompanionExperience({
       }
     } else if (current.open) current.close();
   }, [book, chat, settings]);
+  useEffect(() => {
+    // Collected objects and story choices disappear after use. Keep a keyboard
+    // player near the new story/actions instead of dropping them onto body.
+    if (
+      mode === 'forest' &&
+      hydrated &&
+      !book &&
+      !chat &&
+      !settings &&
+      !toybox &&
+      document.activeElement === document.body
+    )
+      storyPanel.current?.focus({ preventScroll: true });
+  }, [mode, hydrated, forest.moves, book, chat, settings, toybox]);
   function updateAppearance(change: Partial<CreatureAppearance>) {
     friendSelection.current++;
     commitSave((s) => ({
@@ -1902,7 +1917,12 @@ export default function CompanionExperience({
                 </button>
               </div>
             </section>
-            <aside className="cw-story-panel">
+            <aside
+              ref={storyPanel}
+              className="cw-story-panel"
+              tabIndex={-1}
+              aria-label={`${view.title} · 모험 이야기와 다음 행동`}
+            >
               {petSpeech && (
                 <button
                   className="cw-forest-speech"

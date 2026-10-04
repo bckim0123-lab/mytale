@@ -4,6 +4,10 @@
   flex: none;
   filter: drop-shadow(0 3px 5px #71583b12);
 }
+.cw-story-panel:focus-visible {
+  outline: 2px solid #397660;
+  outline-offset: 3px;
+}
 .fa-moment {
   position: absolute;
   z-index: 4;
@@ -68,24 +72,24 @@
   align-items: center;
   cursor: pointer;
   list-style: none;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 750;
-  min-height: 26px;
+  min-height: 44px;
 }
 .fa-memories summary::-webkit-details-marker {
   display: none;
 }
 .fa-memories summary small {
-  font-size: 11px;
+  font-size: 12px;
   border-radius: 15px;
   padding: 5px 8px;
   background: #e9ecd9;
   white-space: nowrap;
 }
 .fa-memories p {
-  font-size: 11px;
+  font-size: 14px;
   line-height: 1.7;
-  color: #768168;
+  color: #5f7158;
 }
 .fa-memories figure {
   display: flex;
@@ -110,14 +114,14 @@
 }
 .fa-memories strong {
   display: block;
-  font-size: 12px;
+  font-size: 14px;
 }
 .fa-memories figcaption small {
   display: block;
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.6;
   margin-top: 4px;
-  color: #7b836f;
+  color: #5f7158;
 }
 .fa-memories-compact {
   padding: 10px 12px;

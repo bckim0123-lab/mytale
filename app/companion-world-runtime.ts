@@ -1689,25 +1689,26 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
     if (/^(ArrowUp|ArrowDown|ArrowLeft|ArrowRight|[wasdWASD])$/.test(e.key)) {
       e.preventDefault();
       keys.add(e.key.toLowerCase());
-      destination = null;
-      pendingId = null;
-      journeyTarget = null;
-      pathQueue = [];
-      cursor.visible = false;
+      cancelJourney();
     }
   }
   function keyUp(e: KeyboardEvent) {
     keys.delete(e.key.toLowerCase());
   }
-  function stop() {
-    keys.clear();
-    joystick.set(0, 0);
-    cancelPointerGesture();
+  function cancelJourney() {
+    const wasTravelling = Boolean(destination || pendingId || journeyTarget);
     destination = null;
     pendingId = null;
     journeyTarget = null;
     pathQueue = [];
     cursor.visible = false;
+    if (wasTravelling) options.onStatus('');
+  }
+  function stop() {
+    keys.clear();
+    joystick.set(0, 0);
+    cancelPointerGesture();
+    cancelJourney();
   }
   function setPaused(value: boolean) {
     paused = value;
@@ -1806,11 +1807,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
           joystick.y,
       );
       if (moveVector.lengthSq() > 0.04) {
-        destination = null;
-        pendingId = null;
-        journeyTarget = null;
-        pathQueue = [];
-        cursor.visible = false;
+        cancelJourney();
         moveVector.normalize().multiplyScalar(dt * 3);
         moving = true;
       } else if (destination) {
@@ -2494,6 +2491,7 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
       if (next.chapter === 'complete') react('celebrate');
     },
     dispose() {
+      if (disposed) return;
       disposed = true;
       cancelAnimationFrame(frame);
       resizeObserver.disconnect();
@@ -2514,6 +2512,10 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
       window.removeEventListener('blur', blur);
       creature.dispose();
       diorama?.dispose();
+      // These own GPU allocations beyond their shared geometry/material.
+      // Release them even on devices without WEBGL_lose_context support.
+      pawprints.dispose();
+      sun.shadow.dispose();
       geometries.forEach((g) => g.dispose());
       materials.forEach((m) => m.dispose());
       textures.forEach((t) => t.dispose());

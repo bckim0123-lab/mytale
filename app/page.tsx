@@ -1,10 +1,11 @@
 'use client';
 /* eslint-disable next/no-img-element */
 
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import CharacterWelcome from './character-welcome';
 import { characterRecoveryMode } from './character-recovery';
 import { withCharacterDeadline } from './character-request-deadline';
+import { imageInputLimitError } from './image-input-limits';
 import {
   cancelLocalSpeech,
   localKoreanVoice,
@@ -38,7 +39,7 @@ import {
   portableArtwork,
   type DrawingAssetPersona,
 } from './drawing-assets';
-const CompanionExperience = lazy(() => import('./companion-experience'));
+import CompanionExperience from './companion-entry';
 import {
   createLocalCharacterPreview,
   type LocalCharacterPreview,
@@ -1122,6 +1123,15 @@ export default function Home() {
       setFileError('그림 파일을 읽지 못했어요. 다른 파일을 골라 주세요.');
     reader.onload = () => {
       if (!isLatestUpload()) return;
+      if (typeof reader.result !== 'string') {
+        setFileError('그림 파일을 읽지 못했어요. 다른 파일을 골라 주세요.');
+        return;
+      }
+      const inputError = imageInputLimitError(reader.result);
+      if (inputError) {
+        setFileError(inputError);
+        return;
+      }
       const source = new Image();
       characterInput.current.decoder = source;
       source.onerror = () =>
@@ -1209,10 +1219,6 @@ export default function Home() {
           );
         }
       };
-      if (typeof reader.result !== 'string') {
-        setFileError('그림 파일을 읽지 못했어요. 다른 파일을 골라 주세요.');
-        return;
-      }
       source.src = reader.result;
     };
     try {
@@ -2544,35 +2550,22 @@ export default function Home() {
 
   if (step === 'companion')
     return (
-      <Suspense
-        fallback={
-          <main
-            className="app"
-            style={{
-              display: 'grid',
-              placeItems: 'center',
-              minHeight: '100vh',
-            }}
-          >
-            <output>친구의 집으로 가는 중…</output>
-          </main>
+      <CompanionExperience
+        onBack={() =>
+          setStep(generated.some(Boolean) ? 'character' : 'welcome')
         }
-      >
-        <CompanionExperience
-          onExit={() => setStep('welcome')}
-          onDrawing={() =>
-            generationBusy
-              ? openGenerationView()
-              : setStep(
-                  guardianVerified && photoConsent ? 'upload' : 'guardian',
-                )
-          }
-          sourceImage={image}
-          age={age}
-          incomingArtwork={companionArtwork}
-          onArtworkAccepted={() => setCompanionArtwork(null)}
-        />
-      </Suspense>
+        recoveryImage={selectedHasAiCharacter ? chosenImage : null}
+        onExit={() => setStep('welcome')}
+        onDrawing={() =>
+          generationBusy
+            ? openGenerationView()
+            : setStep(guardianVerified && photoConsent ? 'upload' : 'guardian')
+        }
+        sourceImage={image}
+        age={age}
+        incomingArtwork={companionArtwork}
+        onArtworkAccepted={() => setCompanionArtwork(null)}
+      />
     );
 
   return (

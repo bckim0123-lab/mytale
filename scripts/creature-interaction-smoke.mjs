@@ -432,15 +432,26 @@ try {
     runtime.indexOf('function stop()'),
     runtime.indexOf('function blur()'),
   );
+  const journeyBody = runtime.slice(
+    runtime.indexOf('function cancelJourney()'),
+    runtime.indexOf('function stop()'),
+  );
+  assert.ok(
+    stopBody.includes('cancelJourney()'),
+    'hard stop delegates travel cleanup',
+  );
   for (const statement of [
     'destination = null',
     'pendingId = null',
     'journeyTarget = null',
     'pathQueue = []',
-    'keys.clear()',
-    'joystick.set(0, 0)',
     'cursor.visible = false',
   ])
+    assert.ok(
+      journeyBody.includes(statement),
+      'journey cleanup cancels ' + statement,
+    );
+  for (const statement of ['keys.clear()', 'joystick.set(0, 0)'])
     assert.ok(stopBody.includes(statement), 'stop cancels ' + statement);
   assert.match(
     runtime,
