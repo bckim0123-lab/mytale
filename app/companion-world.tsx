@@ -22,6 +22,8 @@ type World = ReturnType<typeof mountCompanionWorld>;
 export type CompanionWorldHandle = {
   walkTo: (id: string) => void;
   react: (action: WorldAction) => void;
+  pet: () => void;
+  strikeBell: (id: string) => void;
   turn: (direction: number) => void;
   stop: () => void;
 };
@@ -107,6 +109,8 @@ export const CompanionWorld = forwardRef<CompanionWorldHandle, Props>(
       () => ({
         walkTo: (id) => withWorld((world) => world.walkTo(id)),
         react: (action) => withWorld((world) => world.react(action)),
+        pet: () => withWorld((world) => world.pet()),
+        strikeBell: (id) => withWorld((world) => world.strikeBell(id)),
         turn: (direction) => withWorld((world) => world.turn(direction)),
         stop,
       }),

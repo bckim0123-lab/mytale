@@ -181,11 +181,12 @@ globalThis.fetch = async (url, init) => {
   const expected = planned.shift();
   assert.ok(expected, `Unplanned external call blocked: ${kind}`);
   assert.equal(kind, expected.kind);
+  if (expected.gate) await expected.gate;
   if (expected.tick) expected.tick();
   if (expected.throw) throw expected.throw;
   if (expected.status)
     return Response.json(
-      { error: 'private-provider-debug-do-not-expose' },
+      { error: expected.error ?? 'private-provider-debug-do-not-expose' },
       { status: expected.status, headers: expected.headers },
     );
   if (expected.refusal)
@@ -226,6 +227,7 @@ async function request({
   contentLength,
   stream = false,
   clientId,
+  preferences = {},
 } = {}) {
   const form = new FormData();
   form.append(
@@ -236,6 +238,8 @@ async function request({
   form.append('styleIndex', String(style));
   form.append('age', '7–9세');
   form.append('qualityTier', 'high');
+  for (const [key, value] of Object.entries(preferences))
+    form.append(key, value);
   if (reviewTicket)
     form.append(
       'reviewTicket',
@@ -274,6 +278,29 @@ function exhausted() {
 
 // Reject format errors before they can reach image generation or paid review.
 for (const stream of [false, true]) {
+  for (const providerError of [
+    {
+      status: 400,
+      error: {
+        code: 'invalid_value',
+        param: 'background',
+        type: 'image_generation_user_error',
+      },
+    },
+    { status: 429, error: { code: 'insufficient_quota' } },
+    { status: 400, error: { code: 'billing_hard_limit_reached' } },
+  ]) {
+    plan({ kind: 'image', ...providerError });
+    const rejected = await request({ stream });
+    assert.equal(rejected.data.code, 'provider_unavailable');
+    assert.equal(
+      rejected.data.retryable,
+      false,
+      'configuration/quota failures do not invite repeated charges or blame the drawing',
+    );
+    assert.equal(calls.length, 1);
+    exhausted();
+  }
   for (const contentType of [
     undefined,
     'application/json',
@@ -362,14 +389,52 @@ plan(
   { kind: 'image', image: refined },
   { kind: 'review' },
 );
-result = await request();
+result = await request({
+  stream: true,
+  preferences: {
+    characterMood: '활발하고 씩씩한',
+    favoriteWorld: '로봇과 우주',
+    favoriteColor: '민트',
+    preserveFocus: '별 모양 배 무늬',
+    characterWish: '발 없는 구름 고래, 작은 별 가방',
+  },
+});
 assert.equal(result.response.status, 200);
 assert.equal(result.data.quality.polished, true);
+assert.deepEqual(
+  result.events
+    .filter((event) => event.type === 'stage')
+    .map((event) => event.stage),
+  ['preparing', 'generating', 'reviewing', 'refining', 'reviewing'],
+);
 assert.equal(
   result.data.image,
   `data:image/png;base64,${refined.toString('base64')}`,
 );
 assert.equal(calls.filter((call) => call.kind === 'image').length, 2);
+for (const call of calls) {
+  const prompt =
+    call.kind === 'image'
+      ? call.body.get('prompt')
+      : JSON.parse(call.body).input[0].content[0].text;
+  for (const wanted of [
+    '활발하고 씩씩한',
+    '로봇과 우주',
+    '민트',
+    '별 모양 배 무늬',
+    '작은 별 가방',
+  ]) {
+    assert.ok(
+      prompt.includes(wanted),
+      `${call.kind} retains the child's ${wanted} brief, including correction`,
+    );
+  }
+  assert.match(
+    prompt,
+    /차량·구름·네발동물·팔다리 없는 캐릭터/,
+    'all stages preserve non-humanoid anatomy',
+  );
+}
 exhausted();
 
 plan(
@@ -499,14 +564,32 @@ try {
   Date.now = realNow;
 }
 
+const sealedPreferences = {
+  characterMood: '활발하고 씩씩한',
+  favoriteWorld: '로봇과 우주',
+  favoriteColor: '민트',
+  preserveFocus: '별 모양 배 무늬',
+  characterWish: '작은 별 가방',
+};
 plan({ kind: 'image' }, { kind: 'review', status: 503 });
-result = await request({ stream: true });
+result = await request({ stream: true, preferences: sealedPreferences });
 assert.equal(result.events.at(-1).type, 'error');
 assert.equal(result.data.retryMode, 'review-only');
 assert.equal(result.data.image, undefined);
 assert.ok(result.data.reviewTicket);
 const resumeTicket = result.data.reviewTicket;
 const expires = result.data.reviewTicketExpiresAt;
+const openedPreferences = await quality.openReviewTicket(
+  Buffer.from(resumeTicket, 'base64'),
+  process.env.OPENAI_API_KEY,
+);
+assert.deepEqual(openedPreferences.metadata.preferences, {
+  mood: sealedPreferences.characterMood,
+  world: sealedPreferences.favoriteWorld,
+  color: sealedPreferences.favoriteColor,
+  focus: sealedPreferences.preserveFocus,
+  wish: sealedPreferences.characterWish,
+});
 exhausted();
 
 plan({ kind: 'review', status: 503 });
@@ -521,7 +604,14 @@ assert.equal(calls.length, 1);
 exhausted();
 
 plan({ kind: 'review' });
-result = await request({ reviewTicket: resumeTicket });
+result = await request({
+  reviewTicket: resumeTicket,
+  stream: true,
+  preferences: {
+    characterWish: '변경된 요청 무시하기',
+    favoriteColor: '보라색',
+  },
+});
 assert.equal(result.response.status, 200);
 assert.equal(
   result.data.image,
@@ -529,6 +619,19 @@ assert.equal(
 );
 assert.equal(calls.length, 1);
 assert.equal(calls[0].kind, 'review', 'Resume never generates another image');
+const resumedPrompt = JSON.parse(calls[0].body).input[0].content[0].text;
+for (const value of Object.values(sealedPreferences))
+  assert.ok(
+    resumedPrompt.includes(value),
+    'Review uses the authenticated original preferences.',
+  );
+assert.ok(!resumedPrompt.includes('변경된 요청 무시하기'));
+assert.deepEqual(
+  result.events
+    .filter((event) => event.type === 'stage')
+    .map((event) => event.stage),
+  ['preparing', 'reviewing'],
+);
 exhausted();
 
 plan({ kind: 'review', review: { ...passing, fullBody: 87 } });
@@ -714,6 +817,79 @@ assert.equal(result.data.code, 'quality_review_payload_too_large');
 assert.equal(result.data.reviewTicket, undefined);
 assert.equal(result.data.image, undefined);
 exhausted();
+
+// Stages must reach the client before the corresponding provider work finishes.
+{
+  const releases = [];
+  const gates = Array.from(
+    { length: 4 },
+    () => new Promise((resolve) => releases.push(resolve)),
+  );
+  plan(
+    { kind: 'image', gate: gates[0] },
+    { kind: 'review', gate: gates[1], review: { ...passing, score: 70 } },
+    { kind: 'image', gate: gates[2], image: refined },
+    { kind: 'review', gate: gates[3] },
+  );
+  const form = new FormData();
+  form.append(
+    'drawing',
+    new Blob([source], { type: 'image/png' }),
+    'drawing.png',
+  );
+  form.append('styleIndex', '0');
+  const response = route.POST(
+    new Request('http://local.test/api/character', {
+      method: 'POST',
+      body: form,
+      headers: {
+        accept: 'application/x-ndjson',
+        'x-forwarded-for': 'pending-stage-proof',
+      },
+    }),
+  );
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  async function readUntil(type, stage) {
+    for (;;) {
+      let timer;
+      const chunk = await Promise.race([
+        reader.read(),
+        new Promise((_, reject) => {
+          timer = setTimeout(
+            () =>
+              reject(
+                new Error('Stage was not streamed before provider completion'),
+              ),
+            1000,
+          );
+        }),
+      ]).finally(() => clearTimeout(timer));
+      assert.equal(chunk.done, false);
+      const event = JSON.parse(decoder.decode(chunk.value).trim());
+      if (event.type === type && (!stage || event.stage === stage)) {
+        if (type === 'stage')
+          assert.deepEqual(
+            Object.keys(event).sort(),
+            ['stage', 'type'],
+            'Progress never leaks prompt, image or receipt data.',
+          );
+        return event;
+      }
+    }
+  }
+  await readUntil('stage', 'generating');
+  releases[0]();
+  await readUntil('stage', 'reviewing');
+  releases[1]();
+  await readUntil('stage', 'refining');
+  releases[2]();
+  await readUntil('stage', 'reviewing');
+  releases[3]();
+  assert.equal((await readUntil('result')).data.quality.polished, true);
+  reader.releaseLock();
+  exhausted();
+}
 
 console.log(
   'character-quality smoke passed: strict numeric/boolean gates, bounded correction + re-review, encrypted expiring source-bound review-only retries, separate bounded image/review allowances, safe permanent/transient provider errors, no unreviewed image exposure, payload caps; all provider calls mocked.',

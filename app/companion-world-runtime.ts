@@ -8,6 +8,7 @@ import {
 import type { CreatureAppearance } from './creature-types';
 import {
   FOREST_BED_IDS,
+  FOREST_BELL_IDS,
   FOREST_LANTERN_IDS,
   FOREST_LOCATIONS,
   getForestView,
@@ -215,6 +216,27 @@ export function layoutForestLabels(
       height: label.height,
       edge: !label.onscreen,
     });
+  }
+  // Large touch targets can fragment the projected layout on short phones.
+  // A compact grid fallback retains more reachable destinations, never smaller text.
+  if (width < 650 && placed.length < chosen.length && chosen.length > 1) {
+    const cellWidth = Math.max(
+      ...chosen.map((label) => Math.min(label.width, right - 28)),
+    );
+    const cellHeight = Math.max(...chosen.map((label) => label.height));
+    const columns = Math.min(2, Math.floor((right - 14 + 8) / (cellWidth + 8)));
+    const rows = Math.floor((bottom - top + 8) / (cellHeight + 8));
+    const count = Math.min(chosen.length, columns * rows);
+    if (columns > 0 && count > placed.length) {
+      return chosen.slice(0, count).map((label, index) => ({
+        id: label.id,
+        x: 14 + cellWidth / 2 + (index % columns) * (cellWidth + 8),
+        y: top + cellHeight + Math.floor(index / columns) * (cellHeight + 8),
+        width: Math.min(label.width, cellWidth),
+        height: label.height,
+        edge: !label.onscreen,
+      }));
+    }
   }
   return placed;
 }
@@ -1291,8 +1313,8 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
         position: new T.Vector3(hot.x, hot.kind === 'npc' ? 1.5 : 1.1, hot.z),
         id: hot.id,
         label: hot.label,
-        width: (button.offsetWidth || hot.label.length * 11 + 28) + 18,
-        height: button.offsetHeight || 32,
+        width: button.offsetWidth || Math.min(hot.label.length * 13 + 18, 142),
+        height: button.offsetHeight || 44,
       });
     }
   }
@@ -1389,23 +1411,37 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
       (item) => item.id === id && item.available && !item.complete,
     );
     if (!hot) return;
-    const position = FOREST_LOCATIONS[id];
-    if (hot.kind === 'bell') {
-      bellStrikes.set(id, elapsed);
-      ripple(
-        position,
-        id === 'bell-dew'
-          ? '#9de9fa'
-          : id === 'bell-leaf'
-            ? '#b9eca7'
-            : '#ffe19a',
-        true,
-      );
-      react('wave');
-    } else if (hot.kind === 'flower' || hot.kind === 'water') react('curious');
+    // Accepted bell input (including the stationary buttons) owns its feedback.
+    // Arrival must not strike a second time or animate rejected replay input.
+    if (hot.kind === 'bell') return;
+    if (hot.kind === 'flower' || hot.kind === 'water') react('curious');
     else if (hot.kind === 'bridge') react('celebrate');
     else if (hot.kind === 'npc') react('wave');
     else react('hop');
+  }
+  function strikeBell(id: string) {
+    if (
+      home ||
+      !FOREST_BELL_IDS.includes(id as (typeof FOREST_BELL_IDS)[number])
+    )
+      return;
+    bellStrikes.set(id, elapsed);
+    ripple(
+      FOREST_LOCATIONS[id],
+      id === 'bell-dew'
+        ? '#9de9fa'
+        : id === 'bell-leaf'
+          ? '#b9eca7'
+          : '#ffe19a',
+      true,
+    );
+    react('wave');
+  }
+  function pet() {
+    stop();
+    options.onStatus('');
+    react('pet');
+    options.onPet();
   }
   function navigate(point: T.Vector3, id: string | null) {
     const safeStart = nearestWalkablePoint(
@@ -1441,7 +1477,11 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
     navigate(new T.Vector3(hot.x, 0, hot.z + 0.5), id);
   }
   const pointerGesture = createWorldPointerGesture();
-  let pressedTarget: { id: string } | { point: T.Vector3 } | null = null;
+  let pressedTarget:
+    | { id: string }
+    | { point: T.Vector3 }
+    | { pet: true }
+    | null = null;
   function pickForestTarget(e: PointerEvent) {
     const bounds = renderer.domElement.getBoundingClientRect();
     pointer.set(
@@ -1450,6 +1490,9 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
     );
     ray.setFromCamera(pointer, camera);
     const hits = ray.intersectObjects(hotObjects, true);
+    const friendHit = ray.intersectObject(creature.root, true)[0];
+    if (friendHit && (!hits.length || friendHit.distance < hits[0].distance))
+      return { pet: true as const };
     if (hits.length) {
       let object: T.Object3D | null = hits[0].object;
       while (object && !object.userData.hotspotId) object = object.parent;
@@ -1487,9 +1530,8 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
       renderer.domElement.releasePointerCapture(e.pointerId);
     if (home) orbit -= ended.dx * 0.009;
     if (!ended.tap) return;
-    if (home) {
-      react('pet');
-      options.onPet();
+    if (home || (selected && 'pet' in selected)) {
+      pet();
       return;
     }
     if (selected && 'id' in selected) walkTo(selected.id);
@@ -1569,6 +1611,14 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
     renderer.setSize(width, height);
     camera.aspect = width / height;
     camera.updateProjectionMatrix();
+    for (const tag of tags) {
+      // Hidden labels have zero layout size; briefly measure without painting.
+      const hidden = tag.node.hidden;
+      tag.node.hidden = false;
+      tag.width = tag.node.offsetWidth || tag.width;
+      tag.height = tag.node.offsetHeight || tag.height;
+      tag.node.hidden = hidden;
+    }
   }
   const resizeObserver = new ResizeObserver(resize);
   resizeObserver.observe(host);
@@ -2137,10 +2187,12 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
       const position = packedLabels.find((label) => label.id === tag.id);
       tag.node.hidden = !position;
       if (!position) continue;
-      const text = position.edge
-        ? `${tag.position.x < creature.root.position.x ? '↖' : '↗'} ${tag.label}`
-        : tag.label;
+      const text = tag.label;
       if (tag.node.textContent !== text) tag.node.textContent = text;
+      tag.node.setAttribute(
+        'aria-label',
+        `${position.edge ? '화면 밖 ' : ''}${tag.label} · 이동하기`,
+      );
       tag.node.style.transform = `translate(${position.x}px,${position.y}px) translate(-50%,-100%)`;
     }
     renderer.render(scene, camera);
@@ -2149,6 +2201,8 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
   return {
     walkTo,
     react,
+    pet,
+    strikeBell,
     stop,
     turn(direction: number) {
       orbit += direction * 0.5;

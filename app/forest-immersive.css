@@ -196,8 +196,10 @@
   box-shadow: 0 7px 22px #3c603425;
 }
 .cw-forest-immersive .cw-world-tag {
-  font-size: 11px;
-  min-height: 30px;
+  font-size: 14px;
+  min-height: 44px;
+  line-height: 1.3;
+  box-sizing: border-box;
   border-radius: 14px;
   padding: 6px 12px;
   border-color: #fffceb;
@@ -209,12 +211,12 @@
   padding-top: 13px;
 }
 .cw-action-guide summary {
-  font-size: 11px;
+  font-size: 14px;
   color: #6b7a5e;
   font-weight: 650;
   cursor: pointer;
   line-height: 1.7;
-  min-height: 28px;
+  min-height: 44px;
 }
 .cw-action-guide .cw-nearby h2 {
   margin-top: 10px;
@@ -304,27 +306,32 @@
   margin-left: auto;
 }
 .cw-forest-speech {
-  position: absolute;
-  z-index: 4;
-  left: 30%;
-  top: 36%;
+  position: relative;
+  grid-column: 1 / -1;
   border: 1px solid #fffbdb;
   border-radius: 22px 22px 22px 4px;
-  max-width: 225px;
+  width: 100%;
   background: #fffdf0ed;
   padding: 17px 20px;
   box-shadow: 0 8px 26px #2b472828;
-  font-size: 12px;
+  font-size: 16px;
   color: #4f654b;
   line-height: 1.8;
   text-align: left;
 }
-.cw-forest-speech span {
+.cw-forest-speech > span:first-child {
   display: block;
-  font-size: 9px;
+  font-size: 12px;
   color: #9d875e;
   font-weight: 800;
   margin-bottom: 3px;
+}
+.cw-play-help {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #586b55;
+  font-size: 14px;
+  line-height: 1.7;
 }
 .cw-forest-immersive .cw-completed {
   background: linear-gradient(150deg, #faf0cb, #f5efd8);
@@ -489,17 +496,14 @@
     left: 108px;
   }
   .cw-forest-immersive .cw-world-tag {
-    font-size: 9px;
-    min-height: 28px;
-    max-width: 145px;
-    padding: 6px 9px;
+    font-size: 14px;
+    min-height: 44px;
+    max-width: calc((100vw - 60px) / 2);
+    padding: 6px 8px;
+    white-space: normal;
   }
   .cw-forest-speech {
-    left: auto;
-    right: 20px;
-    top: 40%;
-    max-width: 175px;
-    font-size: 11px;
+    padding: 14px 16px;
   }
   .cw-forest-immersive .cw-melody > button {
     font-size: 12px;
@@ -522,6 +526,56 @@
   }
   .cw-craft-launch strong {
     font-size: 14px;
+  }
+}
+
+.cw-stage-tools {
+  position: absolute;
+  z-index: 4;
+  right: 344px;
+  bottom: 19px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cw-stage-tools .cw-pet-friend,
+.cw-forest-immersive .cw-stage-tools .cw-sound {
+  position: static;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 44px;
+  height: auto;
+  border: 1px solid #e9edcf;
+  background: #ffffeff2;
+  color: #42634a;
+  border-radius: 16px;
+  box-shadow: 0 3px 12px #23462b20;
+}
+.cw-stage-tools .cw-pet-friend {
+  padding: 8px 12px;
+  font-size: 14px;
+  font-weight: 700;
+}
+.cw-forest-immersive .cw-stage-tools .cw-sound {
+  width: 44px;
+}
+.cw-forest-immersive .cw-world-instructions {
+  right: 525px;
+  font-size: 12px;
+}
+@media (max-width: 999px) {
+  .cw-stage-tools {
+    right: 18px;
+    bottom: 42px;
+  }
+  .cw-forest-immersive .cw-world-instructions {
+    left: 108px;
+    right: 18px;
+    bottom: 12px;
+    font-size: 12px;
+    line-height: 1.5;
   }
 }
 @media (prefers-reduced-motion: reduce) {

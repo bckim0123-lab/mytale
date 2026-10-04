@@ -168,6 +168,62 @@ try {
     artwork.id,
   );
   assert.deepEqual(portable.assets[0].persona, artwork.persona);
+  const rescueDownloads = [];
+  const noStorage = () => {
+    throw new Error('Storage inaccessible');
+  };
+  const rescue = loadFunction(experienceAst, 'exportRecoveryRecord', {
+    saveRef: { current: saved },
+    serializeCompanionBackup,
+    flush: noStorage,
+    readCompanionSave: noStorage,
+    listDrawingAssets: noStorage,
+    downloadLocalFile: (...args) => rescueDownloads.push(args),
+    setBackupStatus: () => {},
+  });
+  rescue();
+  assert.equal(
+    rescueDownloads.length,
+    1,
+    'rescue works without any browser storage read/write',
+  );
+  const rescued = parseCompanionBackup(rescueDownloads[0][1]);
+  assert.equal(rescued.ok, true);
+  assert.equal(rescued.save.name, saved.name);
+  assert.equal(rescued.save.appearance.drawingAssetId, artwork.id);
+  assert.deepEqual(
+    rescued.save.storyBooks,
+    saved.storyBooks,
+    'all story text and hero artwork links survive',
+  );
+  assert.match(
+    rescueDownloads[0][0],
+    /그림별도/,
+    'incomplete artwork status is explicit in file name',
+  );
+  for (const available of [[], [artwork]]) {
+    let pending = null;
+    const statuses = [];
+    const inspect = loadFunction(experienceAst, 'inspectBackup', {
+      parseCompanionBackup,
+      listDrawingAssets: async () => available,
+      setPendingBackup: (value) => {
+        pending = value;
+      },
+      setBackupStatus: (value) => statuses.push(value),
+      backupInput: { current: null },
+    });
+    await inspect({
+      size: rescueDownloads[0][1].length,
+      text: async () => rescueDownloads[0][1],
+    });
+    assert.equal(
+      Boolean(pending),
+      available.length > 0,
+      'metadata import cannot silently omit required hero art',
+    );
+    if (!available.length) assert.match(statuses.at(-1), /필요한 친구 그림/);
+  }
   const missing = await runExport(async () => []);
   assert.equal(
     missing.downloads.length,

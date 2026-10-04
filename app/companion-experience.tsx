@@ -387,6 +387,7 @@ export default function CompanionExperience({
         setTimeout(() => {
           setActiveNote(id);
           setReplayStep(index);
+          world.current?.strikeBell(id);
           playTone(id);
         }, index * 720),
       );
@@ -404,6 +405,7 @@ export default function CompanionExperience({
       const old = saveRef.current;
       const previous = old.forest ?? initialForestState();
       const next = transitionForest(previous, event);
+      if (next === previous) return;
       const ending = getForestEnding(next);
       const timestamp = Date.now();
       let nextSave = { ...old, forest: next, updatedAt: timestamp };
@@ -450,6 +452,12 @@ export default function CompanionExperience({
       commitSave(nextSave);
       setWalking('');
       setPetSpeech('');
+      if (event.type === 'interact' && event.id.startsWith('bell-')) {
+        world.current?.strikeBell(event.id);
+        playTone(event.id);
+        setActiveNote(event.id);
+        timers.current.push(setTimeout(() => setActiveNote(null), 550));
+      }
       if (previous.chapter !== next.chapter) {
         setMelodyHelp(false);
         if (window.matchMedia('(max-width: 999px)').matches) {
@@ -467,11 +475,6 @@ export default function CompanionExperience({
             : 'wave',
         );
       }
-      if (event.type === 'interact' && event.id.startsWith('bell-')) {
-        playTone(event.id);
-        setActiveNote(event.id);
-        timers.current.push(setTimeout(() => setActiveNote(null), 550));
-      }
       if (
         (event.type === 'choose-owl' ||
           (event.type === 'interact' && event.id === 'owl-grove')) &&
@@ -486,6 +489,20 @@ export default function CompanionExperience({
     cancelToyRequest();
     forestInteractionEnabled.current =
       mode === 'forest' && !book && !settings && !chat;
+  }
+  function greetForestFriend() {
+    const current = saveRef.current.forest ?? initialForestState();
+    setPetSpeech(
+      current.chapter === 'complete'
+        ? '우리가 만든 이야기, 집에 가서 또 읽자!'
+        : current.chapter === 'grove'
+          ? '틀려도 괜찮아. 나도 같이 들어볼게!'
+          : current.route === 'river'
+            ? '모모 꼬리가 물에 닿으면 간지럽대. 헤헤!'
+            : current.route === 'garden'
+              ? '포포가 꽃한테 인사하는 거 봤어? 나도 해볼래!'
+              : '나랑 손잡을래? 같이 가면 덜 두근거릴 거야.',
+    );
   }
   async function handleInteraction(id: string) {
     if (
@@ -722,6 +739,28 @@ export default function CompanionExperience({
       );
     }
   }
+  function exportRecoveryRecord() {
+    try {
+      // A read-only rescue of this window, even when browser storage is blocked.
+      // Never strip artwork IDs or silently substitute a stock character.
+      const snapshot = structuredClone(saveRef.current);
+      const serialized = serializeCompanionBackup(snapshot);
+      if (!serialized.ok) throw new Error(serialized.error);
+      downloadLocalFile(
+        `그림친구-현재창-글과설정-그림별도-${new Date().toISOString().slice(0, 10)}.json`,
+        serialized.json,
+      );
+      setBackupStatus(
+        '현재 창의 이름·설정·이야기와 그림 연결 정보를 보관했어요. 친구 그림 파일은 포함되지 않아요. 그림이 포함된 전체 백업도 함께 보관해 주세요.',
+      );
+    } catch (error) {
+      setBackupStatus(
+        error instanceof Error
+          ? error.message
+          : '현재 창의 복구 파일을 만들지 못했어요.',
+      );
+    }
+  }
   async function inspectBackup(file?: File) {
     if (!file) return;
     try {
@@ -734,6 +773,29 @@ export default function CompanionExperience({
         record?: unknown;
         assets?: unknown[];
       };
+      if (wrapper.format === 'drawing-friend-backup') {
+        const checked = parseCompanionBackup(JSON.stringify(wrapper));
+        if (!checked.ok) throw new Error(checked.error);
+        const needed = new Set(
+          [
+            checked.save.appearance.drawingAssetId,
+            ...checked.save.storyBooks.map(
+              (item) => item.heroAppearance?.drawingAssetId,
+            ),
+          ].filter((id): id is string => Boolean(id)),
+        );
+        const available = needed.size ? await listDrawingAssets() : [];
+        const assets = available.filter((asset) => needed.has(asset.id));
+        if (assets.length !== needed.size)
+          throw new Error(
+            '글·설정 복구 파일은 읽었지만 필요한 친구 그림이 이 기기에 없어요. 그림이 포함된 전체 백업을 먼저 가져와 주세요. 지금 기록은 바꾸지 않았어요.',
+          );
+        setPendingBackup({ save: checked.save, assets });
+        setBackupStatus(
+          '글·설정 복구 파일을 읽었어요. 필요한 친구 그림은 이 기기에서 찾았어요. 아직 기록은 바꾸지 않았으니 아래 내용을 확인해 주세요.',
+        );
+        return;
+      }
       if (
         wrapper.format !== 'drawing-friend-family-backup' ||
         wrapper.version !== 1 ||
@@ -1575,19 +1637,7 @@ export default function CompanionExperience({
                   appearance={liveAppearance}
                   forest={forest}
                   onInteract={handleInteraction}
-                  onPet={() =>
-                    setPetSpeech(
-                      forest.chapter === 'complete'
-                        ? '우리가 만든 이야기, 집에 가서 또 읽자!'
-                        : forest.chapter === 'grove'
-                          ? '틀려도 괜찮아. 나도 같이 들어볼게!'
-                          : forest.route === 'river'
-                            ? '모모 꼬리가 물에 닿으면 간지럽대. 헤헤!'
-                            : forest.route === 'garden'
-                              ? '포포가 꽃한테 인사하는 거 봤어? 나도 해볼래!'
-                              : '나랑 손잡을래? 같이 가면 덜 두근거릴 거야.',
-                    )
-                  }
+                  onPet={greetForestFriend}
                   onStatus={setWalking}
                   onUnavailable={() => setUnavailable(true)}
                   onReady={() => setUnavailable(false)}
@@ -1598,34 +1648,45 @@ export default function CompanionExperience({
                 chapter={forest.chapter}
                 crafted={forest.bridges || forest.gardenBloom}
               />
+              <div className="cw-stage-objective">
+                <Sparkles size={15} />
+                <span>{view.objective}</span>
+              </div>
+              <div className="cw-stage-tools">
+                <button
+                  className="cw-pet-friend"
+                  onClick={() => {
+                    if (unavailable) greetForestFriend();
+                    else world.current?.pet();
+                  }}
+                >
+                  <Heart size={18} /> 쓰다듬기
+                </button>
+                <button
+                  className="cw-sound"
+                  aria-label={sound ? '효과음 끄기' : '효과음 켜기'}
+                  onClick={() => setSound((v) => !v)}
+                >
+                  {sound ? <Volume2 size={19} /> : <VolumeX size={19} />}
+                </button>
+              </div>
+            </section>
+            <aside className="cw-story-panel">
               {petSpeech && (
                 <button
                   className="cw-forest-speech"
                   onClick={() => setPetSpeech('')}
                   aria-label="친구의 말 닫기"
                 >
-                  <span>{save.name}</span>
-                  {petSpeech}
+                  <span>{save.name}의 한마디 · 눌러서 닫기</span>
+                  <output>{petSpeech}</output>
                 </button>
               )}
-              <div className="cw-stage-objective">
-                <Sparkles size={15} />
-                <span>{view.objective}</span>
-              </div>
-              <div className="cw-world-instructions">
+              <p className="cw-play-help">
                 {unavailable
                   ? '이야기 모드 · 아래 행동 버튼으로 함께해요'
-                  : '땅을 눌러 걷기 · 반짝이는 물건 누르기 · 방향키로 이동'}
-              </div>
-              <button
-                className="cw-sound"
-                aria-label={sound ? '효과음 끄기' : '효과음 켜기'}
-                onClick={() => setSound((v) => !v)}
-              >
-                {sound ? <Volume2 size={19} /> : <VolumeX size={19} />}
-              </button>
-            </section>
-            <aside className="cw-story-panel">
+                  : '땅을 누르면 걸어요. 반짝이는 물건을 찾아 눌러 보세요.'}
+              </p>
               {forest.edition !== 2 && forest.chapter !== 'complete' && (
                 <p className="cw-legacy-note">
                   전에 시작한 이야기를 이어가는 중이에요. 이 모험을 마치면 다음
@@ -2179,6 +2240,16 @@ export default function CompanionExperience({
                       자동 저장을 멈춰 기존 기록을 보호하고 있어요. 현재 창의
                       변경을 먼저 백업한 뒤 다시 불러오세요.
                     </p>
+                    <p>
+                      저장 공간을 읽지 못해도 현재 창의 글·설정·책은 보관할 수
+                      있어요. 아래 복구 파일에는 친구 그림이 포함되지 않습니다.
+                    </p>
+                    <button
+                      className="cw-outline"
+                      onClick={exportRecoveryRecord}
+                    >
+                      현재 창 글·설정 복구 파일 저장 · 그림 별도
+                    </button>
                     <button
                       className="cw-outline"
                       onClick={() => {

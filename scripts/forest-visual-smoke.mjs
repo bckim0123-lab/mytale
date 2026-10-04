@@ -427,6 +427,8 @@ try {
       );
     }
   for (const [width, height] of [
+    [320, 410],
+    [390, 410],
     [390, 480],
     [1280, 720],
     [768, 600],
@@ -435,16 +437,16 @@ try {
       id: `lamp-${index}`,
       x: index % 2 ? width - 10 : 5,
       y: 90 + index * 8,
-      width: 120,
-      height: 32,
+      width: width < 650 ? 130 : 150,
+      height: 48,
       onscreen: true,
       distance: index,
     }));
     const layout = layoutForestLabels(crowded, width, height);
     assert.equal(
       layout.length,
-      6,
-      'festival lamps and discoveries fit in the safe area',
+      height === 410 ? 4 : 6,
+      'readable touch targets fill the safe area without shrinking text',
     );
     for (const label of layout) {
       assert.ok(

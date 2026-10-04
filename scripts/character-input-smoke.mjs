@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import ts from 'typescript';
+import { withCharacterDeadline } from '../app/character-request-deadline.ts';
 
 const source = await readFile('app/page.tsx', 'utf8');
 const ast = ts.createSourceFile(
@@ -180,6 +181,55 @@ assert.equal(
   'late decode failure cannot overwrite B success',
 );
 assert.equal(uploads.state.preparingImage, false);
+assert.equal(
+  uploads.state.chatConsent,
+  false,
+  'a new accepted drawing needs fresh chat consent',
+);
+
+// Camera encoding may finish after another selection, closing, or camera flip.
+// Execute the real capture handler with a deliberately deferred toBlob callback.
+for (const supersedingAction of ['upload', 'close', 'capture']) {
+  const camera = createFixture();
+  const callbacks = [];
+  const accepted = [];
+  const cameraRequest = { current: 5 };
+  let closed = 0;
+  const capture = loadArrow('captureCamera', {
+    ...camera.bindings,
+    cameraRequest,
+    video: { current: { videoWidth: 640, videoHeight: 480 } },
+    File,
+    document: {
+      createElement: () => ({
+        getContext: () => ({ drawImage() {} }),
+        toBlob: (callback) => callbacks.push(callback),
+      }),
+    },
+    load: (file) => accepted.push(file.name),
+    closeCamera: () => {
+      cameraRequest.current++;
+      closed++;
+    },
+  });
+  capture();
+  if (supersedingAction === 'upload')
+    camera.bindings.characterInput.current.uploadEpoch++;
+  if (supersedingAction === 'close') cameraRequest.current++;
+  if (supersedingAction === 'capture') capture();
+  callbacks[0](new Blob(['old']));
+  assert.deepEqual(
+    accepted,
+    [],
+    `${supersedingAction} invalidates the earlier camera result`,
+  );
+  assert.equal(closed, 0, 'stale camera callback cannot close current camera');
+  if (supersedingAction === 'capture') {
+    callbacks[1](new Blob(['latest']));
+    assert.deepEqual(accepted, ['camera-drawing.jpg']);
+    assert.equal(closed, 1);
+  }
+}
 
 const reads = createFixture();
 reads.bindings.load(file('slow-A.png'));
@@ -271,6 +321,7 @@ let imageRequests = 0;
 const betweenStages = createFixture();
 const variantBindings = {
   ...betweenStages.bindings,
+  withCharacterDeadline,
   favoriteColor: '민트',
   preserveFocus: '귀',
   characterWish: '',
@@ -383,4 +434,35 @@ assert.equal(
 );
 console.log(
   'Character input smoke passed: latest-upload wins, decode cancellation, consent withdrawal/late-response guards, and absolute retry deadlines; no external network.',
+);
+
+let transportSignal;
+await assert.rejects(
+  withCharacterDeadline(
+    (signal) => {
+      transportSignal = signal;
+      return new Promise(() => {});
+    },
+    undefined,
+    5,
+  ),
+  { name: 'TimeoutError' },
+  'even a transport that never completes cannot leave generation pending forever',
+);
+assert.equal(transportSignal.aborted, true);
+assert.equal(
+  await withCharacterDeadline(async () => 'approved', undefined, 5),
+  'approved',
+);
+const externalAbort = new AbortController();
+const canceled = withCharacterDeadline(
+  () => new Promise(() => {}),
+  externalAbort.signal,
+  500,
+);
+externalAbort.abort();
+await assert.rejects(
+  canceled,
+  { name: 'AbortError' },
+  'user cancellation stays distinct from timeout',
 );

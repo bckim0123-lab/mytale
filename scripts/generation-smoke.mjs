@@ -95,7 +95,7 @@ assert.match(
 );
 assert.match(
   page,
-  /readCharacterStream<CharacterResponse>\(response,[\s\S]{0,180}setGenerationLastActivityAt/,
+  /readCharacterStream<CharacterResponse>\(\s*response,[\s\S]{0,300}setGenerationLastActivityAt/,
   '클라이언트가 장시간 생성 스트림의 결과와 실제 heartbeat를 읽어야 합니다.',
 );
 assert.match(
@@ -105,8 +105,13 @@ assert.match(
 );
 assert.match(
   page,
-  /고화질 완성은 보통 2–4분[\s\S]{0,1000}AI 캐릭터 예상 진행 단계/,
-  '장시간 생성에는 실제 예상 시간과 단계 안내가 보여야 합니다.',
+  /실제 작업 단계를 알려 드려요[\s\S]{0,1000}AI 캐릭터 실제 진행 단계/,
+  '대기 안내는 시간이 아닌 서버의 실제 작업 단계를 표시해야 합니다.',
+);
+assert.doesNotMatch(
+  page,
+  /generationElapsedSeconds\s*<\s*(8|135)/,
+  'Elapsed time cannot invent generation progress.',
 );
 assert.match(
   page,
@@ -225,7 +230,7 @@ assert.match(
 );
 assert.match(
   route,
-  /const generationAbort = new AbortController\(\)[\s\S]{0,1000}handleCharacterRequest\(request, operationSignal\)[\s\S]{0,2000}generationAbort\.abort\(\)/,
+  /const generationAbort = new AbortController\(\)[\s\S]{0,1000}handleCharacterRequest\(\s*request,\s*operationSignal,[\s\S]{0,2400}generationAbort\.abort\(\)/,
   '사용자가 스트림을 닫으면 진행 중인 이미지 생성과 품질 검사도 중단해야 합니다.',
 );
 assert.match(

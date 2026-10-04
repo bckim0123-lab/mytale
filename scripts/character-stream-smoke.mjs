@@ -35,11 +35,13 @@ visit(source);
 if (!requestDefinition.length)
   throw new TypeError('Missing actual requestVariant definition');
 const helpers =
+  readFileSync('app/character-request-deadline.ts', 'utf8') +
+  '\n' +
   declarations.join('\n') +
   `
 export function createVariantRequester(bindings) {
   const { generationRun, reviewTickets, characterInput, favoriteColor, preserveFocus, characterWish, age, childGender,
-    characterMood, favoriteWorld, styleReferenceBlob, plushReferenceVersion, setGenerationLastActivityAt, setReviewTicketStyles } = bindings;
+    characterMood, favoriteWorld, styleReferenceBlob, plushReferenceVersion, setGenerationLastActivityAt, setGenerationStage, setReviewTicketStyles } = bindings;
   const ${requestDefinition};
   return requestVariant;
 }
@@ -105,6 +107,42 @@ await assert.rejects(
   },
 );
 assert.equal(activity, 2);
+const stages = [];
+assert.deepEqual(
+  await api.readCharacterStream(
+    stream([
+      { type: 'stage', stage: 'preparing' },
+      { type: 'stage', stage: 'generating' },
+      { type: 'stage', stage: 'not-a-stage' },
+      { type: 'stage', stage: 'reviewing' },
+      { type: 'stage', stage: 'refining' },
+      { type: 'stage', stage: 'reviewing' },
+      { type: 'result', data: { image: 'approved' } },
+    ]),
+    () => activity++,
+    (stage) => stages.push(stage),
+  ),
+  { image: 'approved' },
+);
+assert.deepEqual(stages, [
+  'preparing',
+  'generating',
+  'reviewing',
+  'refining',
+  'reviewing',
+]);
+assert.equal(
+  activity,
+  7,
+  'Only recognized server stages update connection activity.',
+);
+const timeoutMessage = '연결을 기다리다 멈췄어요. 원본은 그대로 남아 있어요.';
+assert.equal(
+  api.characterFailureMessage(
+    new api.CharacterRequestError(timeoutMessage, 'generation_timeout', true),
+  ),
+  timeoutMessage,
+);
 assert.equal(
   response.body.locked,
   false,
@@ -146,6 +184,7 @@ function bindings() {
     styleReferenceBlob: { current: null },
     plushReferenceVersion: 'test',
     setGenerationLastActivityAt: () => {},
+    setGenerationStage: () => {},
   };
 }
 const originalFetch = globalThis.fetch;
@@ -163,7 +202,7 @@ try {
   reply = () => stream(events);
   await assert.rejects(request(drawing, 0), api.CharacterRequestError);
   assert.equal(
-    current.reviewTickets.current[0],
+    current.reviewTickets.current[0]?.value,
     ticket,
     'Actual NDJSON error stores its receipt',
   );
@@ -202,7 +241,10 @@ try {
     'Retry retains exact original source',
   );
 
-  current.reviewTickets.current[0] = ticket;
+  current.reviewTickets.current[0] = {
+    value: ticket,
+    expiresAt: Date.now() + 60_000,
+  };
   reply = () =>
     stream([
       {
@@ -250,10 +292,22 @@ try {
   reply = () => Response.json(ticketError, { status: 502 });
   await assert.rejects(invoke(drawing, 0), api.CharacterRequestError);
   assert.equal(
-    ctx.reviewTickets.current[0],
+    ctx.reviewTickets.current[0]?.value,
     ticket,
     'Nonstream JSON errors have the identical receipt contract',
   );
+  ctx.reviewTickets.current[0].expiresAt = Date.now() - 1;
+  const callCount = calls.length;
+  await assert.rejects(
+    invoke(drawing, 0),
+    (error) => error.code === 'review_ticket_invalid',
+  );
+  assert.equal(
+    calls.length,
+    callCount,
+    'an expired receipt never sends a request or buys a new image',
+  );
+  assert.equal(ctx.reviewTickets.current[0], undefined);
 } finally {
   globalThis.fetch = originalFetch;
 }

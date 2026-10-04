@@ -55,8 +55,14 @@ function moduleFromFile(filename) {
   runInNewContext(compile(readFileSync(filename, 'utf8')), { exports });
   return exports;
 }
-const { initialForestState, transitionForest, FOREST_WOOD_IDS } =
-  moduleFromFile('app/forest-story.ts');
+const {
+  initialForestState,
+  transitionForest,
+  FOREST_WOOD_IDS,
+  FOREST_BELL_IDS,
+  getForestMelody,
+  getForestEnding,
+} = moduleFromFile('app/forest-story.ts');
 const { forestToyFor, forestToyStillCurrent } = moduleFromFile(
   'app/forest-play-controls.ts',
 );
@@ -344,6 +350,93 @@ for (const inactive of [
     0,
     'The existing source-state guard remains intact.',
   );
+}
+
+function dispatchHarness(forest) {
+  const calls = [];
+  const test = harness();
+  const b = test.bindings;
+  b.saveRef.current = { ...b.save, forest };
+  Object.assign(b, {
+    transitionForest,
+    getForestEnding,
+    replayMelody: () => calls.push('replay'),
+    setTimeout: () => 1,
+    commitSave: (next) => {
+      b.saveRef.current = next;
+      calls.push('save');
+    },
+    playTone: (id) => calls.push(`tone:${id}`),
+    setActiveNote: (id) => calls.push(`highlight:${id}`),
+    world: {
+      current: {
+        strikeBell: (id) => calls.push(`strike:${id}`),
+        react: (action) => calls.push(`react:${action}`),
+      },
+    },
+  });
+  return {
+    calls,
+    current: () => b.saveRef.current.forest,
+    dispatch: load('dispatch', b),
+  };
+}
+let grove = transitionForest(readyForest(), {
+  type: 'complete-craft',
+  design: 'star',
+});
+grove = transitionForest(grove, { type: 'interact', id: 'river-gate' });
+const beforeOwl = grove;
+grove = transitionForest(grove, { type: 'choose-owl', choice: 'invite' });
+const melody = getForestMelody(grove);
+let almostFinished = grove;
+for (const id of melody.slice(0, -1))
+  almostFinished = transitionForest(almostFinished, { type: 'interact', id });
+{
+  const test = dispatchHarness(almostFinished);
+  const finalNote = melody.at(-1);
+  test.dispatch({ type: 'interact', id: finalNote });
+  assert.equal(test.current().chapter, 'festival');
+  assert.equal(
+    test.calls.filter((call) => call === `strike:${finalNote}`).length,
+    1,
+  );
+  assert.ok(
+    test.calls.indexOf(`strike:${finalNote}`) <
+      test.calls.indexOf('react:celebrate'),
+  );
+  assert.equal(
+    test.calls.at(-1),
+    'react:celebrate',
+    'Final celebration is not overwritten by the bell wave.',
+  );
+}
+for (const [state, id] of [
+  [initialForestState(), 'bell-dew'],
+  [beforeOwl, 'bell-dew'],
+  [grove, 'bell-imaginary'],
+  [{ ...grove, chapter: 'festival' }, 'bell-dew'],
+]) {
+  const test = dispatchHarness(state);
+  test.dispatch({ type: 'interact', id });
+  assert.strictEqual(test.current(), state);
+  assert.deepEqual(
+    test.calls,
+    [],
+    'Ignored events neither mutate saves nor play misleading feedback.',
+  );
+}
+{
+  const test = dispatchHarness(grove);
+  const wrongNote = FOREST_BELL_IDS.find((id) => id !== melody[0]);
+  test.dispatch({ type: 'interact', id: wrongNote });
+  assert.equal(test.current().chapter, 'grove');
+  assert.equal(
+    test.calls.filter((call) => call === `strike:${wrongNote}`).length,
+    1,
+  );
+  assert.ok(test.calls.includes(`tone:${wrongNote}`));
+  assert.ok(!test.calls.includes('react:celebrate'));
 }
 
 console.log(

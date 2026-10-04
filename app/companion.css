@@ -334,7 +334,7 @@
   border: 1px solid #bac8ae;
   border-radius: 10px;
   padding: 11px;
-  font-size: 13px;
+  font-size: 16px;
   background: white;
 }
 .cw-chat-consent > small {
@@ -1083,7 +1083,7 @@
 .cw-messages p {
   border-radius: 18px;
   padding: 13px 16px;
-  font-size: 13px;
+  font-size: 16px;
   line-height: 1.85;
   margin: 0;
   max-width: 90%;
@@ -1112,7 +1112,7 @@
   border-radius: 13px;
   padding: 12px 14px;
   background: white;
-  font-size: 12px;
+  font-size: 16px;
 }
 .cw-chat form button {
   border: 0;

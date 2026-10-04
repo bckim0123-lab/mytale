@@ -96,7 +96,10 @@ header {
   height: 76px;
   padding: 0 clamp(20px, 4vw, 64px);
   display: grid;
-  grid-template-columns: 1fr minmax(320px, 620px) 1fr;
+  grid-template-columns: minmax(136px, 1fr) minmax(240px, 620px) minmax(
+      110px,
+      1fr
+    );
   align-items: center;
   border-bottom: 1px solid #2438311c;
   background: #fffef9db;
@@ -118,6 +121,7 @@ header {
   font-weight: 900;
   font-size: 20px;
   letter-spacing: -0.05em;
+  white-space: nowrap;
 }
 .logo svg {
   width: 29px;

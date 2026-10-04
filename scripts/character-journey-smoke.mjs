@@ -112,6 +112,7 @@ try {
     characterStyles: [{ name: '동화' }, { name: '스티커' }, { name: '보송' }],
     setRegenerating: set('busy'),
     setGenerationStartedAt: set('started'),
+    setGenerationStage: set('stage'),
     setGenerationElapsedSeconds: set('elapsed'),
     setGenerationLastActivityAt: set('activity'),
     setGenerationConnectionDelayed: set('delayed'),
@@ -178,6 +179,45 @@ try {
   );
   assert.equal(state.statuses[2], 'ready');
   assert.equal(state.busy, false);
+
+  for (const replace of [false, true]) {
+    let finishSource;
+    const sourceReady = new Promise((resolve) => {
+      finishSource = resolve;
+    });
+    const requestRef = { current: null };
+    const runRef = { current: 0 };
+    const beforeCalls = calls.length;
+    const delayed = loadArrow('regenerateVariant', {
+      ...base,
+      generationRequest: requestRef,
+      generationRun: runRef,
+      fetch: () => sourceReady,
+    })(2, true);
+    const oldController = requestRef.current;
+    oldController.abort();
+    runRef.current++;
+    if (replace) requestRef.current = new AbortController();
+    const afterCancel = structuredClone(state);
+    finishSource({ blob: async () => new Blob(['old-source-bytes']) });
+    await delayed;
+    assert.equal(
+      calls.length,
+      beforeCalls,
+      'Canceled source preparation cannot borrow a newer controller or transmit the old picture.',
+    );
+    assert.deepEqual(
+      state,
+      afterCancel,
+      'An old run cannot write progress, failure, result or busy state after cancellation.',
+    );
+    if (replace)
+      assert.equal(
+        requestRef.current.signal.aborted,
+        false,
+        'The new request controller belongs only to its own run.',
+      );
+  }
 
   const reviewNotes = [];
   await loadArrow('regenerateVariant', {

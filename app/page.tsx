@@ -4,6 +4,7 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import CharacterWelcome from './character-welcome';
 import { characterRecoveryMode } from './character-recovery';
+import { withCharacterDeadline } from './character-request-deadline';
 import {
   adventureStories,
   traitMeta,
@@ -264,6 +265,9 @@ async function readJson<T>(response: Response): Promise<T | null> {
 async function readCharacterStream<T>(
   response: Response,
   onActivity?: () => void,
+  onStage?: (
+    stage: 'preparing' | 'generating' | 'reviewing' | 'refining',
+  ) => void,
 ): Promise<T> {
   if (!response.body)
     throw new CharacterRequestError(
@@ -278,6 +282,7 @@ async function readCharacterStream<T>(
     if (!line.trim()) return undefined;
     let event: {
       type?: string;
+      stage?: 'preparing' | 'generating' | 'reviewing' | 'refining';
       status?: number;
       data?: T & CharacterErrorPayload;
     };
@@ -288,6 +293,15 @@ async function readCharacterStream<T>(
     }
     if (event.type === 'accepted' || event.type === 'heartbeat') {
       onActivity?.();
+      return undefined;
+    }
+    if (
+      event.type === 'stage' &&
+      event.stage &&
+      ['preparing', 'generating', 'reviewing', 'refining'].includes(event.stage)
+    ) {
+      onActivity?.();
+      onStage?.(event.stage);
       return undefined;
     }
     if (event.type === 'result' && event.data !== undefined) return event.data;
@@ -346,6 +360,7 @@ function characterFailureMessage(error: unknown) {
     return 'AI 작업실을 준비하고 있어요. 기기에서 만든 임시 친구로 먼저 놀아 주세요.';
   if (error.code === 'provider_unavailable')
     return 'AI 작업실의 연결 설정을 확인해야 해요. 여러 번 눌러도 해결되지 않으니, 지금은 3D 친구와 먼저 놀아 주세요.';
+  if (error.code === 'generation_timeout') return error.message;
   if (
     error.code === 'generation_request_rejected' ||
     error.code === 'quality_review_refused'
@@ -555,9 +570,9 @@ function GenerationProgressPanel({
           <p>
             {reviewOnly
               ? '만들어 둔 같은 그림의 품질을 확인하고 있어요. 새 이미지는 생성하지 않아요.'
-              : '고화질 완성은 보통 2–4분 걸리고, 드물게 조금 더 걸릴 수 있어요. 화면을 이동해도 만들기는 계속돼요.'}
+              : '만드는 동안 실제 작업 단계를 알려 드려요. 품질 확인이나 한 번 더 다듬는 과정이 필요하면 시간이 더 걸릴 수 있어요.'}
           </p>
-          <ol aria-label="AI 캐릭터 예상 진행 단계">
+          <ol aria-label="AI 캐릭터 실제 진행 단계">
             {reviewOnly ? (
               <li className="active">
                 <i>
@@ -647,6 +662,9 @@ export default function Home() {
     null,
   );
   const [generationElapsedSeconds, setGenerationElapsedSeconds] = useState(0);
+  const [generationStage, setGenerationStage] = useState<
+    'preparing' | 'generating' | 'reviewing' | 'refining'
+  >('preparing');
   const [generationLastActivityAt, setGenerationLastActivityAt] = useState<
     number | null
   >(null);
@@ -712,7 +730,9 @@ export default function Home() {
     name: string;
     persona: typeof defaultPersona;
   } | null>(null);
-  const reviewTickets = useRef<Record<number, string>>({});
+  const reviewTickets = useRef<
+    Record<number, { value: string; expiresAt: number }>
+  >({});
   const [reviewTicketStyles, setReviewTicketStyles] = useState<number[]>([]);
   useEffect(() => {
     reviewTickets.current = {};
@@ -727,6 +747,46 @@ export default function Home() {
     favoriteWorld,
     childGender,
   ]);
+  useEffect(() => {
+    if (!reviewTicketStyles.length || generating || regenerating) return;
+    const expire = () => {
+      const now = Date.now();
+      const expired = reviewTicketStyles.filter(
+        (index) =>
+          !reviewTickets.current[index] ||
+          reviewTickets.current[index].expiresAt <= now,
+      );
+      if (!expired.length) return;
+      expired.forEach((index) => {
+        delete reviewTickets.current[index];
+      });
+      setReviewTicketStyles((previous) =>
+        previous.filter((index) => !expired.includes(index)),
+      );
+      if (expired.includes(pick)) {
+        setGenerationFailed(true);
+        setGenerationFailureCode('review_ticket_invalid');
+        setGenerationRetryable(false);
+        setGenerationNote(
+          '같은 그림을 검사할 수 있는 시간이 지났어요. 원본은 그대로 있어요. 원하면 새 모습 만들기를 선택해 주세요.',
+        );
+      }
+    };
+    const nearestExpiry = Math.min(
+      ...reviewTicketStyles.map(
+        (index) => reviewTickets.current[index]?.expiresAt ?? 0,
+      ),
+    );
+    const timer = window.setTimeout(
+      expire,
+      Math.max(0, nearestExpiry - Date.now()),
+    );
+    window.addEventListener('focus', expire);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener('focus', expire);
+    };
+  }, [reviewTicketStyles, generating, regenerating, pick]);
   const [previousStep, setPreviousStep] = useState<Step>('welcome');
   const [adventureTrail, setAdventureTrail] = useState<AdventureDecision[]>([]);
   const [choiceResult, setChoiceResult] = useState<AdventureDecision | null>(
@@ -1105,6 +1165,7 @@ export default function Home() {
           ]);
           setChatInput('');
           setChatError('');
+          setChatConsent(false);
           setUploadError('');
         } catch {
           setFileError(
@@ -1170,6 +1231,8 @@ export default function Home() {
   };
   const captureCamera = () => {
     if (!video.current?.videoWidth || !video.current.videoHeight) return;
+    const requestId = ++cameraRequest.current;
+    const uploadEpoch = characterInput.current.uploadEpoch;
     const canvas = document.createElement('canvas');
     canvas.width = video.current.videoWidth;
     canvas.height = video.current.videoHeight;
@@ -1178,7 +1241,17 @@ export default function Home() {
     context.drawImage(video.current, 0, 0, canvas.width, canvas.height);
     canvas.toBlob(
       (blob) => {
-        if (!blob) return;
+        // Encoding is asynchronous: a newer picture, camera switch, close,
+        // or consent withdrawal must win over this older captured frame.
+        if (
+          cameraRequest.current !== requestId ||
+          characterInput.current.uploadEpoch !== uploadEpoch
+        )
+          return;
+        if (!blob) {
+          setCameraError('사진을 준비하지 못했어요. 한 번 더 찍어 주세요.');
+          return;
+        }
         load(new File([blob], 'camera-drawing.jpg', { type: 'image/jpeg' }));
         closeCamera();
       },
@@ -1208,16 +1281,21 @@ export default function Home() {
   const generationBusy = generating || regenerating;
   const generationReviewOnly = reviewTicketStyles.includes(pick);
   const generationPhaseIndex =
-    generationElapsedSeconds < 8 ? 0 : generationElapsedSeconds < 135 ? 1 : 2;
-  const generationPhaseLabel = [
-    '예상: 그림과 취향을 안전하게 준비하는 중',
-    '예상: AI가 특징을 살려 캐릭터를 그리는 중',
-    '예상: 투명 배경과 귀여움을 확인하는 중',
-  ][generationPhaseIndex];
+    generationStage === 'preparing'
+      ? 0
+      : generationStage === 'reviewing'
+        ? 2
+        : 1;
+  const generationPhaseLabel = {
+    preparing: '그림과 취향을 안전하게 준비하고 있어요',
+    generating: '원본 특징을 살려 새 친구를 그리고 있어요',
+    reviewing: '투명 배경, 원본의 특징과 귀여움을 검사하고 있어요',
+    refining: '첫 결과를 확인했어요. 부족한 부분을 한 번 더 다듬고 있어요',
+  }[generationStage];
   const visibleGenerationPhaseLabel = generationReviewOnly
     ? '새 이미지 생성 없이, 같은 결과를 확인하는 중'
     : generationConnectionDelayed
-      ? '고화질 렌더링 응답을 기다리는 중'
+      ? '연결 상태를 확인하고 있어요. 결과를 중복 요청하지 않아요'
       : generationPhaseLabel;
   const generationRecovery = characterRecoveryMode({
     code: generationFailureCode,
@@ -1253,6 +1331,18 @@ export default function Home() {
       throw new DOMException('Consent withdrawn', 'AbortError');
     const requestRun = generationRun.current;
     const ticketStore = reviewTickets.current;
+    const receipt = ticketStore[index];
+    if (receipt && receipt.expiresAt <= Date.now()) {
+      delete ticketStore[index];
+      setReviewTicketStyles((previous) =>
+        previous.filter((style) => style !== index),
+      );
+      throw new CharacterRequestError(
+        '같은 그림을 검사할 수 있는 시간이 지났어요. 새 모습 만들기는 직접 선택할 때만 시작해요.',
+        'review_ticket_invalid',
+        false,
+      );
+    }
     const isCurrentRequest = () =>
       characterInput.current.consent &&
       !signal?.aborted &&
@@ -1271,7 +1361,7 @@ export default function Home() {
     if (highQuality) form.append('qualityTier', 'high');
     if (ticketStore[index]) {
       const ticketBytes = Uint8Array.from(
-        atob(ticketStore[index]),
+        atob(ticketStore[index].value),
         (character) => character.charCodeAt(0),
       );
       form.append(
@@ -1317,23 +1407,37 @@ export default function Home() {
     }
     if (!isCurrentRequest()) throw new DOMException('Aborted', 'AbortError');
     try {
-      const response = await fetch('/api/character', {
-        method: 'POST',
-        headers: { Accept: 'application/x-ndjson' },
-        body: form,
-        signal,
-      });
       type CharacterResponse = CharacterErrorPayload & {
         image?: string;
         quality?: CharacterQuality;
       };
-      const data = response.headers
-        .get('content-type')
-        ?.includes('application/x-ndjson')
-        ? await readCharacterStream<CharacterResponse>(response, () => {
-            if (isCurrentRequest()) setGenerationLastActivityAt(Date.now());
-          })
-        : await readJson<CharacterResponse>(response);
+      const { response, data } = await withCharacterDeadline(
+        async (requestSignal) => {
+          const response = await fetch('/api/character', {
+            method: 'POST',
+            headers: { Accept: 'application/x-ndjson' },
+            body: form,
+            signal: requestSignal,
+          });
+          const data = response.headers
+            .get('content-type')
+            ?.includes('application/x-ndjson')
+            ? await readCharacterStream<CharacterResponse>(
+                response,
+                () => {
+                  if (!requestSignal.aborted && isCurrentRequest())
+                    setGenerationLastActivityAt(Date.now());
+                },
+                (stage) => {
+                  if (!requestSignal.aborted && isCurrentRequest())
+                    setGenerationStage(stage);
+                },
+              )
+            : await readJson<CharacterResponse>(response);
+          return { response, data };
+        },
+        signal,
+      );
       if (!isCurrentRequest()) throw new DOMException('Aborted', 'AbortError');
       if (!response.ok || !data?.image) {
         throw new CharacterRequestError(
@@ -1351,9 +1455,18 @@ export default function Home() {
       return { index, image: data.image, quality: data.quality || null };
     } catch (error) {
       if (!isCurrentRequest()) throw new DOMException('Aborted', 'AbortError');
+      if (error instanceof Error && error.name === 'TimeoutError')
+        throw new CharacterRequestError(
+          '연결이 오래 멈춰 이번 기다리기를 끝냈어요. 원본 그림은 그대로 있어요. 원할 때 다시 시도해 주세요.',
+          'generation_timeout',
+          true,
+        );
       if (error instanceof CharacterRequestError) {
         if (error.reviewTicket) {
-          ticketStore[index] = error.reviewTicket;
+          ticketStore[index] = {
+            value: error.reviewTicket,
+            expiresAt: error.reviewTicketExpiresAt!,
+          };
           setReviewTicketStyles((previous) =>
             previous.includes(index) ? previous : [...previous, index],
           );
@@ -1397,6 +1510,7 @@ export default function Home() {
     const requestedStyle = preferredStyle;
     setGenerating(true);
     setGenerationStartedAt(Date.now());
+    setGenerationStage('preparing');
     setGenerationElapsedSeconds(0);
     setGenerationLastActivityAt(Date.now());
     setGenerationConnectionDelayed(false);
@@ -1474,9 +1588,11 @@ export default function Home() {
     if (!ensureCharacterRequestAllowed()) return;
     generationRequest.current?.abort();
     generationRequest.current = new AbortController();
+    const signal = generationRequest.current.signal;
     const runId = ++generationRun.current;
     setRegenerating(true);
     setGenerationStartedAt(Date.now());
+    setGenerationStage('preparing');
     setGenerationElapsedSeconds(0);
     setGenerationLastActivityAt(Date.now());
     setGenerationConnectionDelayed(false);
@@ -1498,14 +1614,12 @@ export default function Home() {
         : `‘${characterStyles[index].name}’ 모습을 ${highQuality ? '더 귀엽고 선명하게' : '다시'} 만들고 있어요.`,
     );
     try {
-      const blob = await fetch(image).then((response) => response.blob());
-      const result = await requestVariant(
-        blob,
-        index,
-        generationRequest.current.signal,
-        highQuality,
+      const blob = await fetch(image, { signal }).then((response) =>
+        response.blob(),
       );
-      if (runId !== generationRun.current) return;
+      if (signal.aborted || runId !== generationRun.current) return;
+      const result = await requestVariant(blob, index, signal, highQuality);
+      if (signal.aborted || runId !== generationRun.current) return;
       setGenerated((previous) => {
         const next = Array.from<string>({ length: characterStyleCount }).map(
           (_, itemIndex) => previous[itemIndex] || '',
@@ -2267,6 +2381,7 @@ export default function Home() {
     generationRun.current += 1;
     chatRequest.current?.abort();
     closeCamera();
+    setChatConsent(false);
     setImage(null);
     setLocalPreview(null);
     setOriginalPaperPreview(null);
@@ -2667,7 +2782,11 @@ export default function Home() {
             hidden
             type="file"
             accept="image/png,image/jpeg,image/webp"
-            onChange={(e) => load(e.target.files?.[0])}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = '';
+              load(file);
+            }}
           />
           <input
             ref={cameraInput}
@@ -2675,7 +2794,11 @@ export default function Home() {
             type="file"
             accept="image/png,image/jpeg,image/webp"
             capture="environment"
-            onChange={(e) => load(e.target.files?.[0])}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = '';
+              load(file);
+            }}
           />
           {cameraOpen ? (
             <div className="camera-live">
@@ -2762,6 +2885,15 @@ export default function Home() {
           {uploadError && (
             <div className="camera-error" role="alert">
               {uploadError}
+              {image && !preparingImage && (
+                <button
+                  type="button"
+                  className="character-change-source"
+                  onClick={() => setUploadError('')}
+                >
+                  지금 보이는 그림으로 계속하기
+                </button>
+              )}
             </div>
           )}
           {image && (
@@ -2924,8 +3056,8 @@ export default function Home() {
           </Button>
           {image && !generationBusy && (
             <small className="generation-expectation">
-              <LoaderCircle /> 고화질 캐릭터는 보통 2–4분, 드물게 조금 더
-              걸려요. 기다리는 동안 내 그림 친구와 먼저 놀 수 있어요.
+              <LoaderCircle /> 만들기와 품질 확인을 차례로 진행해요. 기다리는
+              동안 내 그림 친구와 먼저 놀 수 있어요.
             </small>
           )}
           {generating && (
