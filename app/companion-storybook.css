@@ -97,6 +97,8 @@
 }
 .csb-illustration {
   position: relative;
+  display: grid;
+  grid-template-rows: auto minmax(min-content, 1fr);
   min-height: 490px;
   overflow: hidden;
   isolation: isolate;
@@ -129,21 +131,27 @@
   pointer-events: none;
   object-fit: cover;
 }
-.csb-illustration > .csb-hero {
+.csb-hero-space {
+  position: relative;
+  display: grid;
+  grid-row: 2;
+  min-height: 300px;
+}
+.csb-hero-space > .csb-hero {
   position: absolute;
   width: 72%;
-  height: 81%;
-  bottom: -2%;
+  height: 99%;
+  bottom: 1%;
   left: 14%;
   object-fit: contain;
   z-index: 3;
   filter: drop-shadow(0 12px 9px #1e30243b);
 }
-.csb-page-2 .csb-illustration > .csb-hero {
+.csb-page-2 .csb-hero-space > .csb-hero {
   left: 6%;
   width: 68%;
 }
-.csb-page-3 .csb-illustration > .csb-hero {
+.csb-page-3 .csb-hero-space > .csb-hero {
   width: 65%;
   left: 18%;
 }
@@ -166,11 +174,11 @@
 .csb-world-book .csb-art-wash {
   background: linear-gradient(180deg, #152b463d, transparent 45%, #25433108);
 }
-.csb-world-book.csb-spread .csb-illustration > .csb-hero {
+.csb-world-book.csb-spread .csb-hero-space > .csb-hero {
   left: 17%;
   width: 66%;
   bottom: 1%;
-  height: 76%;
+  height: 99%;
 }
 .csb-world-ocean .csb-paper {
   background: #f4fbf7;
@@ -194,10 +202,10 @@
   background: #f7faee;
 }
 .csb-illustration-title {
-  position: absolute;
-  top: 31px;
-  left: 30px;
-  right: 30px;
+  position: relative;
+  grid-row: 1;
+  min-width: 0;
+  margin: 31px 30px 12px;
   color: #fffbef;
   z-index: 4;
   text-align: center;
@@ -210,6 +218,8 @@
   letter-spacing: 0.08em;
   margin-bottom: 8px;
   font-weight: 600;
+  overflow-wrap: anywhere;
+  word-break: keep-all;
 }
 .csb-illustration-title > strong {
   display: block;
@@ -263,6 +273,7 @@
   font-weight: 800;
   letter-spacing: -0.05em;
   word-break: keep-all;
+  overflow-wrap: anywhere;
 }
 .csb-paper > p {
   font-size: clamp(17px, 1.7vw, 21px);
@@ -326,6 +337,15 @@
   max-width: 180px;
   font-size: 11px;
   line-height: 1.8;
+}
+.csb-hero-space > .csb-portrait-fallback {
+  position: relative;
+  inset: auto;
+  align-self: center;
+  justify-self: center;
+  width: 80%;
+  max-width: 320px;
+  margin-bottom: 12px;
 }
 .csb-navigation {
   display: flex;
@@ -533,13 +553,11 @@
     min-height: 0;
   }
   .csb-illustration {
-    min-height: 0;
-    height: 335px;
+    min-height: 335px;
+    height: auto;
   }
   .csb-illustration-title {
-    top: 21px;
-    left: 24px;
-    right: 24px;
+    margin: 21px 24px 10px;
   }
   .csb-illustration-title > span {
     font-size: 12px;
@@ -548,13 +566,16 @@
   .csb-illustration-title > strong {
     font-size: 23px;
   }
-  .csb-illustration > .csb-hero {
-    height: 84%;
+  .csb-hero-space {
+    min-height: 210px;
+  }
+  .csb-hero-space > .csb-hero {
+    height: 99%;
     width: 68%;
     left: 16%;
-    bottom: -4%;
+    bottom: 1%;
   }
-  .csb-page-2 .csb-illustration > .csb-hero {
+  .csb-page-2 .csb-hero-space > .csb-hero {
     left: 8%;
     width: 64%;
   }
@@ -731,13 +752,16 @@
     border-radius: 4mm;
   }
   .csb-print-page .csb-illustration {
-    height: 151mm;
+    height: auto;
     min-height: 151mm;
     flex: none;
     break-inside: avoid;
   }
   .csb-print-page .csb-illustration-title {
-    top: 12mm;
+    margin-top: 12mm;
+  }
+  .csb-print-page .csb-hero-space {
+    min-height: 100mm;
   }
   .csb-print-page .csb-illustration-title > span {
     font-size: 9pt;

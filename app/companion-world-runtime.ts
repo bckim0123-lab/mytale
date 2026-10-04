@@ -606,6 +606,7 @@ export type WorldOptions = {
   onInteract: (id: string) => void;
   onPet: () => void;
   onStatus: (text: string) => void;
+  onCreatureStatus?: (status: 'loading' | 'ready' | 'error') => void;
 };
 
 /** Temporary lighting resources are not owned by the mounted world. */
@@ -1903,12 +1904,20 @@ export function mountCompanionWorld(host: HTMLElement, options: WorldOptions) {
   let last = performance.now();
   let disposed = false;
   function watchDrawing(rig: ReturnType<typeof createCreature>) {
-    void rig.ready?.then((ready) => {
-      if (!ready && !disposed && creature === rig)
-        options.onStatus(
-          '그림인형을 불러오지 못했어요. 친구의 집에서 다시 열어 주세요.',
-        );
-    });
+    const report = (status: 'loading' | 'ready' | 'error') => {
+      if (!disposed && creature === rig) options.onCreatureStatus?.(status);
+    };
+    if (rig.ready) {
+      report('loading');
+      void rig.ready.then(
+        (ready) => report(ready ? 'ready' : 'error'),
+        () => report('error'),
+      );
+    } else {
+      // Even a synchronous plush must finish mounting before the wrapper can
+      // announce readiness. Replaced/disposed rigs cannot affect a new view.
+      queueMicrotask(() => report('ready'));
+    }
   }
   watchDrawing(creature);
   let visible = true;

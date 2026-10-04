@@ -76,6 +76,9 @@ try {
     await server.ssrLoadModule('/app/storybook-export.ts');
   const { forestKeepsakeSvg, forestKeepsakeMemory, getForestKeepsake } =
     await server.ssrLoadModule('/app/forest-keepsake-art.ts');
+  const { forestHomeEndingArt } = await server.ssrLoadModule(
+    '/app/forest-home-ending-art.ts',
+  );
   const { default: CompanionStorybook } = await server.ssrLoadModule(
     '/app/companion-storybook.tsx',
   );
@@ -299,6 +302,37 @@ try {
     [],
   );
 
+  const homeArtBook = {
+    ...book,
+    title: '<script>untrusted-title</script>',
+    heroName: '" onload="unsafe',
+    choices: { route: 'river', owl: 'listen', ending: 'home' },
+  };
+  for (const page of [-1, 0, 1, 2, 5, 99, NaN, Infinity, 3.5])
+    assert.equal(forestHomeEndingArt(homeArtBook, page), '');
+  for (const page of [3, 4]) {
+    const homeArt = forestHomeEndingArt(homeArtBook, page);
+    assert.equal((homeArt.match(/data-lit-cottage="true"/g) ?? []).length, 2);
+    assert.equal((homeArt.match(/data-lit-window="true"/g) ?? []).length, 2);
+    assert.doesNotMatch(homeArt, /script|onload|untrusted|href|url\(|<animate/);
+    assert.equal(
+      forestHomeEndingArt({ ...homeArtBook, illustrationTheme: 'ocean' }, page),
+      '',
+      'Other worlds never gain forest cottages from a legacy choices snapshot',
+    );
+    assert.equal(
+      forestHomeEndingArt({ ...homeArtBook, choices: undefined }, page),
+      '',
+    );
+    assert.equal(
+      forestHomeEndingArt(
+        { ...homeArtBook, choices: { ending: '<script>' } },
+        page,
+      ),
+      '',
+    );
+  }
+
   for (const route of ['river', 'garden'])
     for (const owl of ['listen', 'invite'])
       for (const ending of ['sky', 'home']) {
@@ -313,6 +347,11 @@ try {
         for (const rendered of [branch, illustrated]) {
           assert.match(rendered, new RegExp(`data-scene-route="${route}"`));
           assert.match(rendered, new RegExp(`data-scene-owl="${owl}"`));
+          assert.equal(
+            (rendered.match(/data-home-ending="lit-village"/g) ?? []).length,
+            ending === 'home' ? 2 : 0,
+            'Only the two home-ending pages retain the lit homes, including with embedded backgrounds',
+          );
           assert.equal(
             (
               rendered.match(
@@ -344,6 +383,7 @@ try {
         const SceneDetails = readerFunction('SceneDetails', {
           React,
           useId: () => 'scene-test',
+          forestHomeEndingArt,
         });
         for (const page of [3, 4]) {
           const details = renderToStaticMarkup(
@@ -352,6 +392,14 @@ try {
           const lanternYs = [
             ...details.matchAll(/transform="translate\(\d+,(\d+)\)"/g),
           ].map((match) => Number(match[1]));
+          assert.equal(
+            (details.match(/data-lit-cottage="true"/g) ?? []).length,
+            ending === 'home' ? 2 : 0,
+          );
+          assert.equal(
+            (details.match(/data-lit-path="true"/g) ?? []).length,
+            ending === 'home' ? 1 : 0,
+          );
           assert.equal(lanternYs.length, page === 3 ? 7 : 11);
           assert.ok(
             lanternYs.every((y) => (ending === 'sky' ? y < 400 : y >= 400)),

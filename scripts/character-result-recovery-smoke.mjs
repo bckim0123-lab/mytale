@@ -50,9 +50,10 @@ function effect(needle, bindings) {
   assert.ok(node, `Actual effect ${needle} exists`);
   return evaluate(`(${node.arguments[0].getText(ast)})`, bindings)();
 }
-function fixture(results = ['approved-2d', '', 'approved-3d']) {
+function fixture(results = ['approved-2d', '', 'approved-3d'], books = []) {
   const state = {
     generated: results,
+    savedStorybooks: books,
     image: 'original-source',
     generationStatuses: ['ready', 'unrequested', 'ready'],
   };
@@ -96,6 +97,7 @@ function fixture(results = ['approved-2d', '', 'approved-3d']) {
   const bindings = {
     ...setters,
     generated: results,
+    savedStorybooks: books,
     image: state.image,
     characterInput: {
       current: {
@@ -138,6 +140,11 @@ function fixture(results = ['approved-2d', '', 'approved-3d']) {
     keepDrawingAsset: () => assert.fail('No automatic storage'),
     requestVariant: () => assert.fail('No automatic generation'),
     fetch: () => assert.fail('No external request'),
+    persistCompanionSave: () => assert.fail('No automatic record storage'),
+    clearDrawingAssets: () => assert.fail('Do not delete kept artwork'),
+    clearCompanionSave: () => assert.fail('Do not delete the durable library'),
+    downloadLocalFile: () => assert.fail('No automatic export'),
+    stopPageSpeech: () => {},
   };
   for (const name of [
     'cancelImagePreparation',
@@ -145,6 +152,7 @@ function fixture(results = ['approved-2d', '', 'approved-3d']) {
     'confirmDrawingReplacement',
     'getCharacterRetryRemainingSeconds',
     'updatePhotoConsent',
+    'openLatestIllustratedBook',
     'load',
   ])
     bindings[name] = (...args) => arrow(name, bindings)(...args);
@@ -188,6 +196,177 @@ for (const practice of [false, true]) {
     /^prepared:/,
     'A first source needs no replacement prompt',
   );
+}
+
+// Local-preview books need the same protection even if no AI image ever passed.
+// Preserve exact snapshots so the existing explicit archive handler can locate
+// the book by its original pages reference, rather than manufacturing a new one.
+const localBooks = [
+  {
+    id: 'older-local-book',
+    title: '바다에서 만난 친구',
+    pages: [{ title: '첫 모험', body: '함께 헤엄쳤어요.' }],
+    image: 'original-ocean-preview',
+    theme: 1,
+    trail: [{ trait: 'kindness' }],
+    imageSource: 'local',
+  },
+  {
+    id: 'latest-local-book',
+    title: '하늘에서 쓴 이야기',
+    pages: [{ title: '두 번째 모험', body: '같이 구름을 건넜어요.' }],
+    image: 'original-cloud-preview',
+    theme: 2,
+    trail: [{ trait: 'courage' }],
+    imageSource: 'local',
+  },
+];
+for (const action of ['cancel', 'view', 'replace']) {
+  const test = fixture([], localBooks);
+  const pendingFriend = { png: 'previous-reviewed-handoff', name: '이전 친구' };
+  test.state.companionArtwork = pendingFriend;
+  test.prepare('new-source.png');
+  assert.equal(
+    test.state.drawingReplacementOpen,
+    true,
+    'A local-only book also requires confirmation',
+  );
+  assert.equal(test.state.savedStorybooks, localBooks);
+  assert.equal(
+    test.state.companionArtwork,
+    pendingFriend,
+    'Preparing a replacement is not accepting it',
+  );
+  if (action === 'cancel') test.bindings.cancelImagePreparation();
+  if (action === 'view') {
+    const staleApply = test.bindings.drawingReplacement.current.apply;
+    test.bindings.openLatestIllustratedBook();
+    staleApply();
+    assert.equal(test.state.step, 'book');
+    assert.equal(test.state.storybook, localBooks[1].pages);
+    assert.equal(test.state.storybookImage, localBooks[1].image);
+    assert.equal(test.state.storybookTheme, localBooks[1].theme);
+    assert.equal(test.state.adventureTrail, localBooks[1].trail);
+    assert.equal(test.state.page, 0);
+    assert.match(test.state.bookArchiveStatus, /책장에 보관하기/);
+  }
+  if (action === 'replace') {
+    test.bindings.confirmDrawingReplacement();
+    assert.equal(test.state.savedStorybooks.length, 0);
+    assert.equal(
+      test.state.companionArtwork,
+      null,
+      'Only accepted replacement clears the old pending handoff',
+    );
+    assert.match(test.state.image, /new-source/);
+  } else {
+    assert.equal(
+      test.state.savedStorybooks,
+      localBooks,
+      `${action} preserves every local book`,
+    );
+    assert.equal(test.state.image, 'original-source');
+    assert.equal(test.state.companionArtwork, pendingFriend);
+  }
+}
+{
+  const test = fixture([], []);
+  const before = structuredClone(test.state);
+  test.bindings.openLatestIllustratedBook();
+  assert.deepEqual(
+    test.state,
+    before,
+    'An empty book list cannot open a made-up book',
+  );
+}
+{
+  const test = fixture([], localBooks);
+  test.prepare('pending-before-reset.png');
+  const staleApply = test.bindings.drawingReplacement.current.apply;
+  test.state.companionArtwork = {
+    png: 'pending-before-reset',
+    name: '이전 친구',
+  };
+  arrow('reset', {
+    ...test.bindings,
+    closeCamera: () => {},
+    resetAdventureGame: () => {},
+    colorChoices: [{ value: 'original' }],
+    focusChoices: ['source'],
+    genderChoices: ['none'],
+    moodChoices: [{ name: 'calm' }],
+    worldChoices: [{ name: 'forest' }],
+  })();
+  assert.equal(test.state.companionArtwork, null);
+  assert.equal(test.state.generated.length, 0);
+  assert.equal(test.state.savedStorybooks.length, 0);
+  assert.equal(test.state.image, null);
+  assert.equal(test.bindings.drawingReplacement.current, null);
+  assert.equal(test.bindings.characterInput.current.consent, false);
+  staleApply();
+  test.bindings.confirmDrawingReplacement();
+  assert.equal(
+    test.state.companionArtwork,
+    null,
+    'Late source work cannot revive a session-cleared friend',
+  );
+  assert.equal(test.state.image, null);
+}
+{
+  const test = fixture();
+  test.prepare('old-candidate.png');
+  const staleApply = test.bindings.drawingReplacement.current.apply;
+  test.prepare('latest-candidate.png');
+  test.bindings.confirmDrawingReplacement();
+  const newHandoff = { png: 'new-reviewed-friend', name: '새 친구' };
+  test.state.companionArtwork = newHandoff;
+  staleApply();
+  assert.equal(
+    test.state.companionArtwork,
+    newHandoff,
+    'An old candidate cannot clear a newer pending handoff',
+  );
+}
+
+// The actual conditional dialog never offers a dead friend action for a
+// book-only session, and offers both destinations when both kinds exist.
+const replacementDialogNode = find(
+  (node) =>
+    ts.isJsxElement(node) &&
+    node.openingElement.tagName.getText(ast) === 'dialog' &&
+    node.getText(ast).includes('drawing-replacement-dialog'),
+)[0];
+assert.ok(replacementDialogNode);
+for (const kinds of ['friend', 'book', 'both']) {
+  const calls = [];
+  const dialog = evaluate(`(${replacementDialogNode.getText(ast)})`, {
+    React: {
+      createElement: (type, props, ...children) => ({ type, props, children }),
+    },
+    drawingReplacementDialog: { current: null },
+    generated: kinds === 'book' ? [] : ['approved'],
+    savedStorybooks: kinds === 'friend' ? [] : localBooks,
+    cancelImagePreparation: () => calls.push('cancel'),
+    openCompletedCharacter: () => calls.push('friend'),
+    openLatestIllustratedBook: () => calls.push('book'),
+    confirmDrawingReplacement: () => calls.push('replace'),
+  });
+  const labels = buttons(dialog).map(textOf);
+  assert.equal(
+    labels.some((label) => label.includes('완성 친구 보러')),
+    kinds !== 'book',
+  );
+  assert.equal(
+    labels.some((label) => label.includes('만든 책 보러')),
+    kinds !== 'friend',
+  );
+  if (kinds !== 'friend') {
+    buttons(dialog)
+      .find((button) => textOf(button).includes('만든 책 보러'))
+      .props.onClick();
+    assert.deepEqual(calls, ['book']);
+    assert.match(textOf(dialog), /책 목록/);
+  }
 }
 for (const failure of ['type', 'size', 'header', 'decode', 'canvas']) {
   const test = fixture();
@@ -473,7 +652,7 @@ assert.match(css, /calc\(100vw - 24px\)/);
 assert.match(css, /flex-wrap: wrap/);
 assert.match(source, /aria-labelledby="drawing-replacement-title"/);
 console.log(
-  'Character result recovery passed: actual companion render and view-only actions, validated replacement confirmation, latest-candidate/consent/navigation/unmount guards, no automatic save/generation, native-dialog focus/Escape and 320px layout contracts.',
+  'Character result recovery passed: actual companion render and view-only actions, friend/local-book replacement protection, exact latest-book recovery, pending-handoff reset/source cleanup, stale-candidate/consent/navigation/unmount guards, no automatic save/generation, native-dialog focus/Escape and 320px layout contracts.',
 );
 
 // Optional, isolated visual fixture. This serializes the very JSX exercised
@@ -527,8 +706,11 @@ if (process.argv.includes('--write-fixture')) {
       createElement: (type, props, ...children) => ({ type, props, children }),
     },
     drawingReplacementDialog: { current: null },
+    generated: ['synthetic-approved-friend'],
+    savedStorybooks: [{ id: 'synthetic-book' }],
     cancelImagePreparation: () => {},
     openCompletedCharacter: () => {},
+    openLatestIllustratedBook: () => {},
     confirmDrawingReplacement: () => {},
   });
   const globals = readFileSync('app/globals.css', 'utf8').replace(

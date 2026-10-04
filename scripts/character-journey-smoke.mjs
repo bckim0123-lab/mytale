@@ -111,6 +111,7 @@ try {
     characterStyleCount: 3,
     characterStyles: [{ name: '동화' }, { name: '스티커' }, { name: '보송' }],
     setRegenerating: set('busy'),
+    setGenerationRequestReviewOnly: set('requestReviewOnly'),
     setGenerationStartedAt: set('started'),
     setGenerationStage: set('stage'),
     setGenerationElapsedSeconds: set('elapsed'),

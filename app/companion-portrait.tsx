@@ -6,7 +6,9 @@ import { useDrawingAsset } from './use-drawing-asset';
 
 export type CompanionPortraitState = {
   src: string | null;
+  loading: boolean;
   unavailable: boolean;
+  unavailableMessage?: string;
 };
 
 /** One short-lived renderer, shared by every page. Its image never enters storage. */
@@ -15,8 +17,12 @@ export function useCompanionPortrait(
 ): CompanionPortraitState {
   const drawing = useDrawingAsset(appearance.drawingAssetId);
   const signature = JSON.stringify(appearance);
-  const [portrait, setPortrait] = useState<CompanionPortraitState>({
+  const [portrait, setPortrait] = useState<
+    CompanionPortraitState & { signature: string }
+  >({
+    signature,
     src: null,
+    loading: true,
     unavailable: false,
   });
 
@@ -25,7 +31,13 @@ export function useCompanionPortrait(
     let canceled = false;
     let dispose: (() => void) | undefined;
     queueMicrotask(() => {
-      if (!canceled) setPortrait({ src: null, unavailable: false });
+      if (!canceled)
+        setPortrait({
+          signature,
+          src: null,
+          loading: true,
+          unavailable: false,
+        });
     });
 
     void (async () => {
@@ -106,9 +118,16 @@ export function useCompanionPortrait(
         const src = renderer.domElement.toDataURL('image/png');
         if (!src.startsWith('data:image/png') || src.length < 500)
           throw new Error('Portrait unavailable');
-        if (!canceled) setPortrait({ src, unavailable: false });
+        if (!canceled)
+          setPortrait({ signature, src, loading: false, unavailable: false });
       } catch {
-        if (!canceled) setPortrait({ src: null, unavailable: true });
+        if (!canceled)
+          setPortrait({
+            signature,
+            src: null,
+            loading: false,
+            unavailable: true,
+          });
       } finally {
         dispose?.();
       }
@@ -119,9 +138,17 @@ export function useCompanionPortrait(
     };
   }, [signature]);
 
-  return appearance.drawingAssetId
-    ? { src: drawing.png ?? null, unavailable: !!drawing.error }
-    : portrait;
+  if (appearance.drawingAssetId)
+    return {
+      src: drawing.png ?? null,
+      loading: drawing.loading,
+      unavailable: !drawing.loading && !!drawing.error,
+      unavailableMessage: drawing.error || undefined,
+    };
+  // An appearance change must never briefly show or export the previous friend.
+  return portrait.signature === signature
+    ? portrait
+    : { src: null, loading: true, unavailable: false };
 }
 
 export function CompanionPortrait({
@@ -148,7 +175,8 @@ export function CompanionPortrait({
       <strong>{name}</strong>
       <small>
         {portrait.unavailable
-          ? '이 기기에서는 친구의 입체 모습을 표시할 수 없어요. 이야기는 그대로 읽을 수 있어요.'
+          ? portrait.unavailableMessage ||
+            '이 기기에서는 친구의 입체 모습을 표시할 수 없어요. 이야기는 그대로 읽을 수 있어요.'
           : '친구가 책 속으로 오는 중…'}
       </small>
     </output>

@@ -665,6 +665,8 @@ export default function Home() {
   >([]);
   const [generating, setGenerating] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
+  const [generationRequestReviewOnly, setGenerationRequestReviewOnly] =
+    useState(false);
   const [generationStartedAt, setGenerationStartedAt] = useState<number | null>(
     null,
   );
@@ -910,7 +912,7 @@ export default function Home() {
       !characterInput.current.consent
     )
       return;
-    if (!generated.some(Boolean)) {
+    if (!generated.some(Boolean) && savedStorybooks.length === 0) {
       apply();
       return;
     }
@@ -1235,6 +1237,9 @@ export default function Home() {
           finishPreparation();
           offerDrawingReplacement(uploadEpoch, () => {
             if (!isLatestUpload() || !characterInput.current.consent) return;
+            // A deferred handoff belongs to the old source. Only explicit
+            // replacement cancels it; already stored friends/books are untouched.
+            setCompanionArtwork(null);
             // Re-encoding keeps uploads light and strips camera metadata before transmission.
             setImage(preparedImage);
             setPracticeDrawing(isPractice);
@@ -1433,7 +1438,11 @@ export default function Home() {
   const activeAdventure = adventureStories[theme] || adventureStories[0];
   const activeScenes = activeAdventure.scenes;
   const generationBusy = generating || regenerating;
-  const generationReviewOnly = reviewTicketStyles.includes(pick);
+  // Selecting an already finished card must not rewrite the in-flight job's
+  // mode. Once idle, recovery describes the explicitly selected result again.
+  const generationReviewOnly = generationBusy
+    ? generationRequestReviewOnly
+    : reviewTicketStyles.includes(pick);
   const generationPhaseIndex =
     generationStage === 'preparing'
       ? 0
@@ -1663,6 +1672,9 @@ export default function Home() {
     const runId = ++generationRun.current;
     const signal = generationRequest.current.signal;
     const requestedStyle = preferredStyle;
+    setGenerationRequestReviewOnly(
+      Boolean(reviewTickets.current[requestedStyle]),
+    );
     setGenerating(true);
     setGenerationStartedAt(Date.now());
     setGenerationStage('preparing');
@@ -1715,7 +1727,6 @@ export default function Home() {
         next[result.index] = 'ready';
         return next;
       });
-      setPick(result.index);
       setArrivalDismissed(false);
       setGenerationNote(
         result.quality?.passed
@@ -1752,6 +1763,7 @@ export default function Home() {
     const signal = generationRequest.current.signal;
     const runId = ++generationRun.current;
     setRegenerating(true);
+    setGenerationRequestReviewOnly(Boolean(reviewTickets.current[index]));
     setGenerationStartedAt(Date.now());
     setGenerationStage('preparing');
     setGenerationElapsedSeconds(0);
@@ -1872,6 +1884,25 @@ export default function Home() {
     setPick(ready);
     setArrivalDismissed(true);
     openGenerationView();
+  };
+  const openLatestIllustratedBook = () => {
+    const latest = savedStorybooks.at(-1);
+    if (!latest) return;
+    cancelImagePreparation();
+    stopPageSpeech();
+    setSpeechNotice('');
+    // Keep the original pages reference: archiveIllustratedBook uses it to
+    // locate this exact book, including its historical hero and source image.
+    setStorybook(latest.pages);
+    setStorybookImage(latest.image);
+    setStorybookTheme(latest.theme);
+    setAdventureTrail(latest.trail);
+    setPage(0);
+    setBookDirection('previous');
+    setBookArchiveStatus(
+      '만든 책을 다시 열었어요. ‘책장에 보관하기’로 간직할 수 있어요. 이미 보관한 책은 그대로 남아요.',
+    );
+    setStep('book');
   };
   const returnToPreviousPlay = () => {
     if (!generationReturnStep) return;
@@ -2562,6 +2593,7 @@ export default function Home() {
             : 'dino';
   const reset = () => {
     characterInput.current.consent = false;
+    setCompanionArtwork(null);
     cancelImagePreparation();
     generationRequest.current?.abort();
     generationRun.current += 1;
@@ -2723,27 +2755,46 @@ export default function Home() {
           cancelImagePreparation();
         }}
       >
-        <h2 id="drawing-replacement-title">완성한 친구를 먼저 챙길까요?</h2>
+        <h2 id="drawing-replacement-title">
+          {generated.some(Boolean)
+            ? savedStorybooks.length
+              ? '완성한 친구와 책을 먼저 챙길까요?'
+              : '완성한 친구를 먼저 챙길까요?'
+            : '만든 책을 먼저 챙길까요?'}
+        </h2>
         <p id="drawing-replacement-description">
-          새 그림을 고르면 이 화면의 완성 결과가 바뀌어요. 아직 보관하지 않은
-          친구는 사라져요. 이미 기기에 보관한 친구는 그대로 남아요.
+          새 그림을 사용하면{' '}
+          {generated.some(Boolean)
+            ? savedStorybooks.length
+              ? '이 화면의 완성 친구와 이번에 만든 책 목록을'
+              : '이 화면의 완성 친구를'
+            : '이번에 만든 책 목록을'}{' '}
+          비워요. 아직 보관하지 않은 작품은 다시 열 수 없어요. 이미 기기에
+          보관한 친구와 책은 그대로 남아요.
         </p>
         <div>
-          <button
-            type="button"
-            onClick={() => {
-              cancelImagePreparation();
-              openCompletedCharacter();
-            }}
-          >
-            완성 친구 보러 가기
-          </button>
+          {generated.some(Boolean) && (
+            <button
+              type="button"
+              onClick={() => {
+                cancelImagePreparation();
+                openCompletedCharacter();
+              }}
+            >
+              완성 친구 보러 가기
+            </button>
+          )}
+          {savedStorybooks.length > 0 && (
+            <button type="button" onClick={openLatestIllustratedBook}>
+              만든 책 보러 가기
+            </button>
+          )}
           <button
             type="button"
             data-replacement-cancel
             onClick={() => cancelImagePreparation()}
           >
-            취소 · 지금 그림 유지
+            취소 · 지금 작품 그대로
           </button>
           <button
             type="button"

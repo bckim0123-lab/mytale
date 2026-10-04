@@ -35,6 +35,7 @@ import {
   getForestKeepsake,
 } from './forest-keepsake-art';
 import './companion-storybook.css';
+import { forestHomeEndingArt } from './forest-home-ending-art';
 
 type StorybookProps = {
   book: CompanionStoryBook;
@@ -247,6 +248,10 @@ function SceneDetails({
           })}
         </g>
       )}
+      <g
+        transform="translate(0 80)"
+        dangerouslySetInnerHTML={{ __html: forestHomeEndingArt(book, page) }}
+      />
       <ellipse
         cx={page === 2 ? 270 : 320}
         cy="553"
@@ -296,7 +301,15 @@ function StoryPage({
         />
         <div className="csb-art-wash" />
         {!theme && <SceneDetails page={page} book={book} />}
-        <CompanionPortrait portrait={portrait} name={name} />
+        <div className="csb-illustration-title">
+          <span>
+            {page === 0 ? '내가 만든 친구가 주인공인 이야기' : book.title}
+          </span>
+          <strong>{page === 0 ? book.title : title}</strong>
+        </div>
+        <div className="csb-hero-space">
+          <CompanionPortrait portrait={portrait} name={name} />
+        </div>
         {keepsakeArt &&
           keepsake && (
             // eslint-disable-next-line next/no-img-element -- Only the trusted enum-based local SVG is embedded; no uploaded SVG is accepted.
@@ -306,12 +319,6 @@ function StoryPage({
               alt={`${keepsake.friend}와 ${keepsake.designLabel}`}
             />
           )}
-        <div className="csb-illustration-title">
-          <span>
-            {page === 0 ? '내가 만든 친구가 주인공인 이야기' : book.title}
-          </span>
-          <strong>{page === 0 ? book.title : title}</strong>
-        </div>
         <span className="csb-art-number" aria-hidden="true">
           {String(page + 1).padStart(2, '0')}
         </span>
@@ -601,13 +608,21 @@ function CompanionStorybookReader({
 
   async function keepBook() {
     // A ref also guards two clicks before React has painted the disabled state.
-    if (exportJob.current) return;
+    if (
+      exportJob.current ||
+      portrait.loading ||
+      (!portrait.src && !portrait.unavailable)
+    )
+      return;
+    const heroImage = portrait.src;
     const job = new AbortController();
     exportJob.current = job;
     const timeout = window.setTimeout(() => job.abort(), 15_000);
     setExporting(true);
     setExportStatus(
-      `친구와 ${book.pages.length}장의 이야기를 한 권에 담고 있어요…`,
+      heroImage
+        ? `친구와 ${book.pages.length}장의 이야기를 한 권에 담고 있어요…`
+        : `친구 그림 없이 ${book.pages.length}장의 이야기를 한 권에 담고 있어요…`,
     );
     try {
       const sceneImages = book.illustrationTheme
@@ -624,7 +639,7 @@ function CompanionStorybookReader({
         : book.pages.map((_, index) => sceneImages[Math.min(index, 4)]);
       const html = exportStorybookHtml(book, {
         name,
-        image: portrait.src || undefined,
+        image: heroImage || undefined,
         illustrations,
       });
       downloadLocalFile(
@@ -633,7 +648,9 @@ function CompanionStorybookReader({
         'text/html;charset=utf-8',
       );
       setExportStatus(
-        '책 파일을 내려받았어요. 인터넷 없이 열어 읽고, 브라우저에서 인쇄하거나 PDF로 저장할 수 있어요.',
+        heroImage
+          ? '책 파일을 내려받았어요. 인터넷 없이 열어 읽고, 브라우저에서 인쇄하거나 PDF로 저장할 수 있어요.'
+          : '친구 그림 없이 책 파일을 내려받았어요. 이야기와 선택은 담겼지만 친구 그림은 빠져 있어요. 그림이 다시 보일 때 저장하면 함께 담을 수 있어요.',
       );
     } catch {
       if (exportJob.current === job)
@@ -660,14 +677,28 @@ function CompanionStorybookReader({
         <div className="csb-tools">
           <button
             type="button"
-            disabled={exporting || (!portrait.src && !portrait.unavailable)}
+            disabled={
+              exporting ||
+              portrait.loading ||
+              (!portrait.src && !portrait.unavailable)
+            }
             onClick={() => void keepBook()}
             aria-label={
-              exporting ? '동화책 파일을 담는 중' : '동화책 파일 저장'
+              exporting
+                ? '동화책 파일을 담는 중'
+                : portrait.unavailable && !portrait.src
+                  ? '친구 그림 없이 동화책 파일 저장'
+                  : '동화책 파일 저장'
             }
           >
             <Download size={17} />
-            <span>{exporting ? '담는 중…' : '파일 저장'}</span>
+            <span>
+              {exporting
+                ? '담는 중…'
+                : portrait.unavailable && !portrait.src
+                  ? '친구 그림 없이 저장'
+                  : '파일 저장'}
+            </span>
           </button>
           <button
             type="button"
@@ -685,15 +716,27 @@ function CompanionStorybookReader({
           </button>
           <button
             type="button"
-            disabled={!portrait.src && !portrait.unavailable}
-            aria-label="책 전체 인쇄"
+            disabled={
+              portrait.loading || (!portrait.src && !portrait.unavailable)
+            }
+            aria-label={
+              portrait.unavailable && !portrait.src
+                ? '친구 그림 없이 책 전체 인쇄'
+                : '책 전체 인쇄'
+            }
             onClick={() => {
+              if (portrait.loading || (!portrait.src && !portrait.unavailable))
+                return;
               stopSpeech();
               window.print();
             }}
           >
             <Printer size={17} />
-            <span>전체 인쇄</span>
+            <span>
+              {portrait.unavailable && !portrait.src
+                ? '친구 그림 없이 인쇄'
+                : '전체 인쇄'}
+            </span>
           </button>
         </div>
         {onClose && (

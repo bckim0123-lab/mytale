@@ -170,6 +170,15 @@ export const CompanionWorld = forwardRef<CompanionWorldHandle, Props>(
               onInteract: (id) => latest.current.onInteract(id),
               onPet: () => latest.current.onPet(),
               onStatus: (text) => latest.current.onStatus(text),
+              onCreatureStatus: (nextStatus) => {
+                if (cancelled || failed) return;
+                if (nextStatus === 'error') {
+                  unavailable();
+                  return;
+                }
+                setStatus(nextStatus);
+                if (nextStatus === 'ready') latest.current.onReady?.();
+              },
             });
           } catch {
             unavailable();
@@ -181,8 +190,6 @@ export const CompanionWorld = forwardRef<CompanionWorldHandle, Props>(
             return;
           }
           api.current = instance;
-          setStatus('ready');
-          latest.current.onReady?.();
         })
         .catch(unavailable);
 
@@ -275,8 +282,13 @@ export const CompanionWorld = forwardRef<CompanionWorldHandle, Props>(
         )}
         {status === 'error' && (
           <div className="cw-world-loading" role="alert">
-            <strong>이 기기에서 3D 화면을 열지 못했어요.</strong>
-            <p>다시 열거나, 아래의 이야기 모드로 모험을 이어갈 수 있어요.</p>
+            <strong>친구의 3D 화면을 열지 못했어요.</strong>
+            <p>
+              저장된 친구와 이야기는 그대로예요.{' '}
+              {props.mode === 'forest'
+                ? '다시 열거나, 아래의 이야기 모드로 모험을 이어갈 수 있어요.'
+                : '3D 화면을 다시 열어 주세요.'}
+            </p>
             <button
               type="button"
               onClick={() => setAttempt((value) => value + 1)}

@@ -1,5 +1,6 @@
 import type { CompanionStoryBook } from './companion-save';
 import { forestKeepsakeMemory, forestKeepsakeSvg } from './forest-keepsake-art';
+import { forestHomeEndingArt } from './forest-home-ending-art';
 
 export type StorybookExportOptions = {
   /** Saved companion portrait only. Never pass an original uploaded photograph. */
@@ -195,6 +196,7 @@ function forestArt(
         }).join('')
       : ''
   }
+  ${forestHomeEndingArt(book, page)}
   </svg>`;
 }
 
