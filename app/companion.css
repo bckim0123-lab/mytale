@@ -623,8 +623,9 @@
   margin: 6px 0 10px;
 }
 .cw-bookshelf > p {
-  font-size: 12px;
-  color: #87927e;
+  font-size: 14px;
+  color: #62765f;
+  line-height: 1.7;
 }
 .cw-empty-book {
   display: flex;
@@ -1391,6 +1392,10 @@
   }
 }
 @media (max-width: 760px) {
+  .cw-home-books .cw-home-stage {
+    position: relative;
+    top: auto;
+  }
   .cw-header {
     height: 66px;
     padding: 0 10px;

@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { CompanionWorld, type CompanionWorldHandle } from './companion-world';
 import CompanionStorybook from './companion-storybook';
+import CompanionBookshelf from './companion-bookshelf';
 import ForestToybox from './forest-toybox';
 import {
   ForestCompanionFace,
@@ -1375,7 +1376,9 @@ export default function CompanionExperience({
           </div>
         )}
         {mode === 'home' ? (
-          <div className="cw-home-layout">
+          <div
+            className={`cw-home-layout${panel === 'books' ? ' cw-home-books' : ''}`}
+          >
             <section className="cw-home-stage" aria-label="내 입체 친구">
               <div className="cw-home-heading">
                 <span className="cw-eyebrow">
@@ -1803,25 +1806,11 @@ export default function CompanionExperience({
                       </span>
                     </div>
                   ) : (
-                    save.storyBooks.map((item) => (
-                      <button
-                        className="cw-book-spine"
-                        key={item.id}
-                        onClick={() => openBook(item)}
-                      >
-                        <span>✦</span>
-                        <div>
-                          <strong>{item.title}</strong>
-                          <small>
-                            {new Date(item.createdAt).toLocaleDateString(
-                              'ko-KR',
-                            )}{' '}
-                            · {item.pages.length}장
-                          </small>
-                        </div>
-                        <ChevronRight size={18} />
-                      </button>
-                    ))
+                    <CompanionBookshelf
+                      books={save.storyBooks}
+                      assets={artLibrary}
+                      onOpen={openBook}
+                    />
                   )}
                 </div>
               )}
